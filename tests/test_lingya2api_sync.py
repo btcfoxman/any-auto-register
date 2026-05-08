@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from core.base_platform import Account
 from core.lingya2api_sync import (
     Lingya2ApiClient,
@@ -27,7 +29,45 @@ def test_build_lingya2api_payload_from_lingya_account():
     assert payload["max_concurrency"] == 3
     assert "v_vusession=session" in payload["cookie"]
     assert "vdevice_guid=device" in payload["cookie"]
+    assert payload["vuserid"] == "vuid"
+    assert payload["vdevice_guid"] == "device"
+    assert payload["main_login"] == "wx"
     assert payload["enabled"] is True
+
+
+def test_build_lingya2api_payload_rebuilds_cookie_from_split_fields():
+    account = Account(
+        platform="lingya_qq",
+        email="acct",
+        password="",
+        user_id="vuid",
+        token="session",
+        extra={
+            "vurefresh": "refresh",
+            "vdevice_guid": "device",
+        },
+    )
+
+    payload = build_lingya2api_payload(account)
+
+    assert payload["vuserid"] == "vuid"
+    assert payload["vdevice_guid"] == "device"
+    assert "vdevice_guid=device" in payload["cookie"]
+    assert "v_vuserid=vuid" in payload["cookie"]
+    assert "v_vusession=session" in payload["cookie"]
+    assert "v_vurefresh=refresh" in payload["cookie"]
+
+
+def test_build_lingya2api_payload_requires_vdevice_guid():
+    account = Account(
+        platform="lingya_qq",
+        email="acct",
+        password="",
+        extra={"cookies": "v_vusession=session; v_vuserid=vuid"},
+    )
+
+    with pytest.raises(ValueError, match="missing vdevice_guid"):
+        build_lingya2api_payload(account)
 
 
 def test_lingya2api_client_upserts_account():
@@ -67,6 +107,10 @@ def test_sync_account_to_lingya2api_posts_and_heartbeats():
     assert result["ok"] is True
     assert result["account"]["id"] == 9
     assert result["heartbeat"]["token_ok"] is True
+    body = post.call_args_list[0].kwargs["json"]
+    assert body["vdevice_guid"] == "device"
+    assert body["vuserid"] == "vuid"
+    assert "vdevice_guid=device" in body["cookie"]
     assert post.call_args_list[0].args[0] == "http://localhost:8000/api/accounts"
     assert post.call_args_list[1].args[0] == "http://localhost:8000/api/accounts/9/heartbeat"
 

@@ -53,6 +53,14 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
+    return ""
+
+
 def _as_bool(value: Any, default: bool = True) -> bool:
     if value in (None, ""):
         return default
@@ -94,15 +102,55 @@ def build_lingya2api_payload(
     if extra_overrides:
         extra.update(extra_overrides)
     cookie_fields = build_lingya_qq_account_fields(extra)
-    cookie_header = _text(cookie_fields.get("cookies")) or format_lingya_qq_cookie_header(cookie_fields)
+
+    vdevice_guid = _first_text(
+        cookie_fields.get("vdevice_guid"),
+        extra.get("vdevice_guid"),
+        extra.get("device_guid"),
+        extra.get("video_guid"),
+    )
+    if not vdevice_guid:
+        raise ValueError(
+            "LingYaQQ account is missing vdevice_guid; relogin or import cookies before syncing to lingya2api"
+        )
+    cookie_fields["vdevice_guid"] = vdevice_guid
+
+    vuserid = _first_text(
+        cookie_fields.get("vuid"),
+        cookie_fields.get("v_vuserid"),
+        cookie_fields.get("vuserid"),
+        cookie_fields.get("vqq_vuserid"),
+        extra.get("vuid"),
+        getattr(account, "user_id", ""),
+    )
+    vusession = _first_text(
+        cookie_fields.get("vusession"),
+        cookie_fields.get("v_vusession"),
+        cookie_fields.get("vqq_vusession"),
+        extra.get("vusession"),
+        getattr(account, "token", ""),
+    )
+    vurefresh = _first_text(cookie_fields.get("vurefresh"), cookie_fields.get("v_vurefresh"), extra.get("vurefresh"))
+    if vuserid:
+        cookie_fields.setdefault("v_vuserid", vuserid)
+        cookie_fields.setdefault("vuserid", vuserid)
+        cookie_fields.setdefault("vqq_vuserid", vuserid)
+    if vusession:
+        cookie_fields.setdefault("v_vusession", vusession)
+        cookie_fields.setdefault("vusession", vusession)
+        cookie_fields.setdefault("vqq_vusession", vusession)
+    if vurefresh:
+        cookie_fields.setdefault("v_vurefresh", vurefresh)
+
+    cookie_header = format_lingya_qq_cookie_header(cookie_fields) or _text(cookie_fields.get("cookies"))
     if not cookie_header:
         raise ValueError("LingYaQQ account has no usable cookie header")
 
     name = (
         _text(extra.get("lingya2api_name"))
         or _text(getattr(account, "email", ""))
-        or _text(cookie_fields.get("vuid"))
-        or _text(cookie_fields.get("vdevice_guid"))
+        or vuserid
+        or vdevice_guid
     )
     if not name:
         raise ValueError("LingYaQQ account has no usable lingya2api account name")
@@ -110,6 +158,10 @@ def build_lingya2api_payload(
     return {
         "name": name[:80],
         "cookie": cookie_header,
+        "vuserid": vuserid,
+        "vdevice_guid": vdevice_guid,
+        "nick": _text(cookie_fields.get("nick") or extra.get("nick")),
+        "main_login": _text(cookie_fields.get("v_main_login") or extra.get("main_login")) or "wx",
         "user_agent": _text(extra.get("user_agent")) or DEFAULT_USER_AGENT,
         "sec_ch_ua": _text(extra.get("sec_ch_ua")),
         "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")),
