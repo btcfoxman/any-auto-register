@@ -3,7 +3,7 @@
 import json
 from http.cookies import SimpleCookie
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 
 LINGYA_QQ_COOKIE_NAMES: tuple[str, ...] = (
@@ -90,6 +90,15 @@ def _decode_cookie_value(value: Any) -> str:
         return unquote(text)
     except Exception:
         return text
+
+
+def encode_cookie_value_for_header(value: Any) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    if all(ord(ch) < 128 for ch in text):
+        return text
+    return quote(text, safe="!#$&'()*+-./:<=>?@[]^_`{|}~")
 
 
 def _push_cookie(result: dict[str, str], name: Any, value: Any) -> None:
@@ -200,7 +209,7 @@ def _first_key(source: dict[str, Any], keys: tuple[str, ...]) -> str:
 def format_lingya_qq_cookie_header(cookies: dict[str, Any]) -> str:
     parts = []
     for name in LINGYA_QQ_COOKIE_NAMES:
-        value = _text(cookies.get(name))
+        value = encode_cookie_value_for_header(cookies.get(name))
         if value:
             parts.append(f"{name}={value}")
     return "; ".join(parts)

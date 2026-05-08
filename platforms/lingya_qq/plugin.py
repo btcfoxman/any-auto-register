@@ -35,7 +35,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on", "æ˜¯"}
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "是"}
 
 
 def _as_float(value: Any, default: float) -> float:
@@ -368,8 +368,8 @@ class LingYaQQPlatform(BasePlatform):
                 "nick": nick,
                 **quota_overview,
                 "chips": [
-                    "æ‰‹æœºå·ç™»å½•",
-                    f"é¢åº¦ {quota_overview.get('quota_balance', '-')}/{quota_overview.get('quota_sum', '-')}",
+                    "手机号登录",
+                    f"额度 {quota_overview.get('quota_balance', '-')}/{quota_overview.get('quota_sum', '-')}",
                 ],
             }
             try:
@@ -457,7 +457,7 @@ class LingYaQQPlatform(BasePlatform):
             if callable(get_message_text):
                 try:
                     old_text = str(get_message_text(activation.activation_id) or "").strip()
-                    if old_text and "å°šæœªæ”¶åˆ°" not in old_text:
+                    if old_text and "尚未收到" not in old_text:
                         baseline_text = old_text
                         self.log("Recorded current old SMS; waiting for a newer SMS message.")
                 except Exception as exc:
@@ -1056,7 +1056,7 @@ class LingYaQQPlatform(BasePlatform):
             **_quota_summary(quota),
             "hello_timestamp": hello.get("timestamp"),
             "chips": [
-                f"é¢åº¦ {quota.get('quota_balance', '-')}/{quota.get('quota_sum', '-')}",
+                f"额度 {quota.get('quota_balance', '-')}/{quota.get('quota_sum', '-')}",
             ],
         }
         return {"summary": summary, "quota": quota, "hello": hello, "profile": profile}

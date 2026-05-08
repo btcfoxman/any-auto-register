@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 import requests
+from platforms.lingya_qq.cookies import encode_cookie_value_for_header
 
 
 LINGYA_ORIGIN = "https://lingya.qq.com"
@@ -96,7 +97,7 @@ class LingYaQQClient:
 
     def set_cookies(self, cookies: dict[str, Any]) -> None:
         for name, value in cookies.items():
-            text = str(value or "").strip()
+            text = encode_cookie_value_for_header(value)
             if not name or not text:
                 continue
             domain = ".qq.com" if str(name).startswith("_qimei_") else ".lingya.qq.com"

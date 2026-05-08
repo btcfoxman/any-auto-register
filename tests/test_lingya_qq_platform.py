@@ -63,6 +63,27 @@ def test_lingya_qq_cookie_header_expands_to_account_fields():
     assert "v_vusession=session-cookie" in fields["cookies"]
 
 
+def test_lingya_qq_cookie_header_percent_encodes_unicode_values():
+    fields = build_lingya_qq_account_fields(
+        {
+            "cookies": "v_vusession=session-cookie; v_vuserid=vuid-cookie; vdevice_guid=device-cookie",
+        },
+        login_response={
+            "vuid": "vuid-cookie",
+            "vusession": "session-cookie",
+            "user_info": {"user_nick": "腾讯网友"},
+        },
+    )
+
+    assert fields["nick"] == "腾讯网友"
+    assert "nick=腾讯网友" not in fields["cookies"]
+    assert "nick=%E8%85%BE%E8%AE%AF%E7%BD%91%E5%8F%8B" in fields["cookies"]
+
+    client = LingYaQQClient(cookies={"vdevice_guid": "device-cookie", "nick": "腾讯网友"})
+
+    assert client.cookie_dict()["nick"] == "%E8%85%BE%E8%AE%AF%E7%BD%91%E5%8F%8B"
+
+
 def test_lingya_qq_client_accepts_zero_ret_login_response(monkeypatch):
     client = LingYaQQClient(vdevice_guid="device1234567890")
     payload = {
