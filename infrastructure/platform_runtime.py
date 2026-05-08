@@ -17,6 +17,7 @@ from domain.actions import (
     PlatformAction,
 )
 from domain.platforms import PlatformCapabilities, PlatformDescriptor
+from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES
 
 
 PERSISTED_ACTION_DATA_KEYS = {
@@ -41,9 +42,33 @@ PERSISTED_ACTION_DATA_KEYS = {
     "orgId",
     "auth_token",
     "authToken",
+    "vusession",
+    "vurefresh",
+    "vuid",
+    "vdevice_guid",
+    "v_main_login",
+    "nick",
+    "avatar",
+    "video_appid",
+    "video_platform",
+    "vversion_platform",
+    "vusession_expire_timestamp",
+    "vusession_expire_in",
+    "cookies",
+    *LINGYA_QQ_COOKIE_NAMES,
 }
 
-STATEFUL_ACTION_IDS = {"get_account_state", "switch_account", "query_state", "switch_desktop"}
+STATEFUL_ACTION_IDS = {
+    "get_account_state",
+    "switch_account",
+    "query_state",
+    "switch_desktop",
+    "relogin_sms",
+    "keepalive_sync",
+    "sync_lingya2api",
+    "daily_sign_in",
+    "publish_work",
+}
 CASHIER_URL_ACTION_IDS = {
     "payment_link",
     "payment_link_browser",
@@ -214,6 +239,37 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
     if data.get("quota_note"):
         overview["quota_note"] = data.get("quota_note")
 
+    if platform == "lingya_qq":
+        for key in (
+            "phone",
+            "local_phone",
+            "area_code",
+            "vuid",
+            "nick",
+            "quota_balance",
+            "quota_sum",
+            "daily_sign_in_status",
+            "daily_sign_in_at",
+            "last_publish_vid",
+            "last_publish_title",
+            "last_publish_status",
+            "last_publish_at",
+            "last_publish_work_status",
+        ):
+            if data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if data.get("phone"):
+            overview["remote_email"] = str(data.get("phone") or "")
+        if data.get("quota_balance") not in (None, "") or data.get("quota_sum") not in (None, ""):
+            overview["chips"].append(f"额度 {data.get('quota_balance', '-')}/{data.get('quota_sum', '-')}")
+        if data.get("session_refreshed"):
+            overview["chips"].append("会话已刷新")
+
+        if data.get("daily_sign_in_status"):
+            overview["chips"].append(f"Sign-in {data.get('daily_sign_in_status')}")
+        if data.get("last_publish_status"):
+            overview["chips"].append(f"Publish {data.get('last_publish_status')}")
+
     overview["chips"] = [chip for chip in overview["chips"] if chip]
     return overview if len(overview) > 2 else None
 
@@ -275,7 +331,7 @@ class PlatformRuntime:
         instance = platform_cls(config=RegisterConfig())
         return instance.get_desktop_state() or {"available": False}
 
-    def execute_action(self, command: ActionExecutionCommand) -> ActionExecutionResult:
+    def execute_action(self, command: ActionExecutionCommand, log_fn=None) -> ActionExecutionResult:
         load_all()
         with Session(engine) as session:
             model = session.get(AccountModel, command.account_id)
@@ -284,6 +340,8 @@ class PlatformRuntime:
 
             platform_cls = get(command.platform)
             instance = platform_cls(config=RegisterConfig())
+            if log_fn:
+                instance.set_logger(log_fn)
             account = build_platform_account(session, model)
             try:
                 result: dict[str, Any] = instance.execute_action(command.action_id, account, command.params)

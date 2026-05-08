@@ -1,4 +1,4 @@
-"""Account CRUD endpoint tests."""
+﻿"""Account CRUD endpoint tests."""
 from __future__ import annotations
 
 import base64
@@ -98,6 +98,37 @@ def test_account_stats(client):
     _create_account(client)
     resp = client.get("/api/accounts/stats")
     assert resp.status_code == 200
+
+
+def test_create_lingya_qq_account_expands_cookie_header(client):
+    resp = _create_account(
+        client,
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        credentials={
+            "cookies": (
+                "v_vusession=session-cookie; v_vurefresh=refresh-cookie; "
+                "v_vuserid=vuid-cookie; vdevice_guid=device-cookie"
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    credentials = {
+        item["key"]: item["value"]
+        for item in data["credentials"]
+        if item.get("scope") == "platform"
+    }
+    assert data["user_id"] == "vuid-cookie"
+    assert data["primary_token"] == "session-cookie"
+    assert credentials["vusession"] == "session-cookie"
+    assert credentials["v_vusession"] == "session-cookie"
+    assert credentials["v_vurefresh"] == "refresh-cookie"
+    assert credentials["v_vuserid"] == "vuid-cookie"
+    assert credentials["vdevice_guid"] == "device-cookie"
+    assert "v_vusession=session-cookie" in credentials["cookies"]
 
 
 def test_export_kiro_go(client):

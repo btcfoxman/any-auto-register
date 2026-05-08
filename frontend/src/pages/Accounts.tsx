@@ -187,8 +187,10 @@ function RegisterModal({
   const [configOptions, setConfigOptions] = useState<ConfigOptionsResponse>({
     mailbox_providers: [],
     captcha_providers: [],
+    sms_providers: [],
     mailbox_settings: [],
     captcha_settings: [],
+    sms_settings: [],
     captcha_policy: {},
     executor_options: [],
     identity_mode_options: [],
@@ -205,6 +207,7 @@ function RegisterModal({
   const [taskId, setTaskId] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState('')
 
   const supportedExecutors: string[] = platformMeta?.supported_executors || []
   const registrationOptions = buildRegistrationOptions(platformMeta)
@@ -240,8 +243,10 @@ function RegisterModal({
         setConfigOptions({
           mailbox_providers: [],
           captcha_providers: [],
+          sms_providers: [],
           mailbox_settings: [],
           captcha_settings: [],
+          sms_settings: [],
           captcha_policy: {},
           executor_options: [],
           identity_mode_options: [],
@@ -314,9 +319,33 @@ function RegisterModal({
   }, [selection.identityProvider, selection.oauthProvider, selection.executorType, supportedExecutors, reusableBrowser])
 
   const defaultMailboxProvider = (configOptions.mailbox_settings || []).find(item => item.is_default) || configOptions.mailbox_settings?.[0] || null
+  const defaultSmsProvider = (configOptions.sms_settings || []).find(item => item.is_default) || configOptions.sms_settings?.[0] || null
+  const defaultSmsDefinition = defaultSmsProvider
+    ? (configOptions.sms_providers || []).find(item => item.value === defaultSmsProvider.provider_key)
+    : null
+  const defaultSmsValues = {
+    ...(defaultSmsProvider?.config || {}),
+    ...(defaultSmsProvider?.auth || {}),
+  }
+  const missingDefaultSmsAuthFields = defaultSmsDefinition
+    ? (defaultSmsDefinition.fields || []).filter((field: any) => {
+        const key = String(field.key || '')
+        const isAuthField = Boolean(field.secret || field.category === 'auth' || /(_api_key|token|secret|password)$/i.test(key))
+        return isAuthField && !String(defaultSmsValues[key] ?? '').trim()
+      })
+    : []
+  const defaultSmsProviderLabel = defaultSmsProvider
+    ? (defaultSmsDefinition?.label || defaultSmsProvider.display_name || defaultSmsProvider.provider_key)
+    : ''
+  const smsProviderError = selection.identityProvider === 'manual_phone' && !defaultSmsProvider?.provider_key
+    ? '未配置默认接码 provider，请先到设置页新增并启用一个接码服务。'
+    : selection.identityProvider === 'manual_phone' && missingDefaultSmsAuthFields.length > 0
+      ? `默认接码服务缺少 ${missingDefaultSmsAuthFields.map((field: any) => field.label || field.key).join('、')}。`
+    : ''
 
   const start = async () => {
     setStarting(true)
+    setStartError('')
     try {
       const cfg = config || {}
       const extra: Record<string, any> = {
@@ -332,6 +361,12 @@ function RegisterModal({
         }
         extra.mail_provider = defaultMailboxProvider.provider_key
       }
+      if (selection.identityProvider === 'manual_phone') {
+        if (!defaultSmsProvider?.provider_key) {
+          throw new Error(smsProviderError || '未配置默认接码 provider')
+        }
+        extra.sms_provider = defaultSmsProvider.provider_key
+      }
       const res = await apiFetch('/tasks/register', {
         method: 'POST',
         body: JSON.stringify({
@@ -343,6 +378,8 @@ function RegisterModal({
         }),
       })
       setTaskId(res.task_id)
+    } catch (error: any) {
+      setStartError(error?.message || '启动注册失败')
     } finally { setStarting(false) }
   }
 
@@ -448,15 +485,24 @@ function RegisterModal({
                 <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-hover)] px-4 py-3 text-xs text-[var(--text-secondary)]">
                   <div>注册身份: <span className="text-[var(--text-primary)]">{selectedRegistration?.label || '-'}</span></div>
                   <div className="mt-1">执行方式: <span className="text-[var(--text-primary)]">{selectedExecutor?.label || '-'}</span></div>
-                  <div className="mt-1">验证策略: <span className="text-[var(--text-primary)]">{getCaptchaStrategyLabel(selection.executorType)}</span></div>
+                  <div className="mt-1">验证策略: <span className="text-[var(--text-primary)]">{getCaptchaStrategyLabel(selection.executorType, configOptions.captcha_policy, configOptions.captcha_providers)}</span></div>
+                  {selection.identityProvider === 'manual_phone' && defaultSmsProviderLabel ? (
+                    <div className="mt-1">接码服务: <span className="text-[var(--text-primary)]">{defaultSmsProviderLabel}</span></div>
+                  ) : null}
+                  {smsProviderError ? (
+                    <div className="mt-2 text-amber-400">{smsProviderError}</div>
+                  ) : null}
                   {selection.identityProvider === 'oauth_browser' && !reusableBrowser && (
                     <div className="mt-2 text-amber-400">后台浏览器自动依赖 Chrome Profile 或 Chrome CDP，未配置时只允许可视浏览器自动。</div>
                   )}
+                  {startError ? (
+                    <div className="mt-2 text-red-400">{startError}</div>
+                  ) : null}
                 </div>
 
                 <Button
                   onClick={start}
-                  disabled={starting || !selection.identityProvider || !selection.executorType}
+                  disabled={starting || !selection.identityProvider || !selection.executorType || Boolean(smsProviderError)}
                   className="w-full"
                 >
                   {starting ? '启动中...' : '开始自动注册'}

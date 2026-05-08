@@ -6,6 +6,7 @@ from core.base_sms import (
     HeroSmsProvider,
     SmsActivation,
     SmsActivateProvider,
+    UOMsgProvider,
     create_sms_provider,
     create_phone_callbacks,
     SMS_ACTIVATE_SERVICES,
@@ -71,9 +72,109 @@ class TestCreateSmsProvider:
         with pytest.raises(RuntimeError, match="HeroSMS 未配置"):
             create_sms_provider("herosms", {})
 
+    def test_uomsg(self):
+        provider = create_sms_provider("uomsg_api", {"uomsg_token": "tok123", "uomsg_keyword": "腾讯"})
+        assert isinstance(provider, UOMsgProvider)
+        assert provider.token == "tok123"
+        assert provider.default_keyword == "腾讯"
+
+    def test_uomsg_missing_token(self):
+        with pytest.raises(RuntimeError, match="UOMsg 未配置"):
+            create_sms_provider("uomsg_api", {})
+
     def test_unknown_provider(self):
         with pytest.raises(RuntimeError, match="未知"):
             create_sms_provider("unknown", {})
+
+
+class TestUOMsgProvider:
+    def test_get_number_get_code_and_release(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            code = (params or {}).get("code")
+            if code == "getPhone":
+                return FakeResponse("16512345678")
+            if code == "getMsg":
+                return FakeResponse("【腾讯科技】验证码123456，用于登录")
+            if code == "release":
+                return FakeResponse("释放成功")
+            raise AssertionError(f"unexpected code: {code}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯", province="广东", card_type="实卡")
+        activation = provider.get_number(service="qq")
+        code = provider.get_code(activation.activation_id, timeout=5)
+
+        assert activation.activation_id == "16512345678"
+        assert activation.phone_number == "16512345678"
+        assert code == "123456"
+        assert provider.cancel(activation.activation_id) is True
+        assert calls[0][1] == {
+            "code": "getPhone",
+            "token": "tok",
+            "keyWord": "腾讯",
+            "province": "广东",
+            "cardType": "实卡",
+        }
+        assert calls[1][1]["code"] == "getMsg"
+        assert calls[1][1]["phone"] == "16512345678"
+        assert calls[1][1]["keyWord"] == "腾讯"
+        assert calls[2][1] == {"code": "release", "token": "tok", "phone": "16512345678"}
+
+    def test_maps_qq_service_to_tencent_keyword(self, monkeypatch):
+        class FakeResponse:
+            text = "16512345678"
+
+            def raise_for_status(self):
+                return None
+
+        seen = {}
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            seen.update(params or {})
+            return FakeResponse()
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = UOMsgProvider("tok")
+        provider.get_number(service="qq")
+
+        assert seen["keyWord"] == "腾讯"
+
+    def test_get_code_after_ignores_old_message(self, monkeypatch):
+        messages = [
+            "【腾讯科技】验证码111111，用于登录",
+            "【腾讯科技】验证码111111，用于登录",
+            "【腾讯科技】验证码222222，用于登录",
+        ]
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            assert (params or {}).get("code") == "getMsg"
+            return FakeResponse(messages.pop(0))
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯")
+
+        assert provider.get_code_after("16512345678", timeout=5, ignore_text="【腾讯科技】验证码111111，用于登录") == "222222"
 
 
 class TestCreatePhoneCallbacks:

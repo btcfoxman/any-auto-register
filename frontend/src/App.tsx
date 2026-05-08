@@ -180,6 +180,7 @@ function Sidebar({
                 { label: '邮箱服务', hash: 'mailbox' },
                 { label: '验证服务', hash: 'captcha' },
                 { label: '接码服务', hash: 'sms' },
+                { label: 'LingYaQQ', hash: 'lingya_qq' },
                 { label: '代理资源', hash: 'proxies' },
                 { label: 'ChatGPT', hash: 'chatgpt' },
                 { label: '高级', hash: 'advanced' },

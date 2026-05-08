@@ -269,6 +269,31 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
     sections: [],
   },
   {
+    id: 'lingya_qq', label: 'LingYaQQ', icon: Shield,
+    sections: [{
+      section: 'Lingya2API',
+      desc: 'Sync LingYaQQ cookies to a lingya2api service for keepalive and video generation.',
+      items: [
+        { key: 'lingya2api_url', label: 'API URL', placeholder: 'http://localhost:8000' },
+        { key: 'lingya2api_api_key', label: 'API Key', secret: true },
+        { key: 'lingya2api_max_concurrency', label: 'Max Concurrency', placeholder: '1' },
+      ],
+    }, {
+      section: 'Post-register automation',
+      desc: 'Daily sign-in and one-work publishing after LingYaQQ phone login. Publish source is a third-party GET API.',
+      items: [
+        { key: 'lingya_qq_auto_daily_sign_in', label: 'Daily Sign-in', placeholder: 'true' },
+        { key: 'lingya_qq_auto_publish_after_register', label: 'Auto Publish', placeholder: 'true' },
+        { key: 'lingya_qq_publish_required', label: 'Publish Required', placeholder: 'false' },
+        { key: 'lingya_qq_publish_source_url', label: 'Source URL', placeholder: 'https://example.com/api/work' },
+        { key: 'lingya_qq_publish_cover_url', label: 'Fallback Cover URL', placeholder: 'https://example.com/cover.jpg' },
+        { key: 'lingya_qq_publish_initial_delay', label: 'Initial Delay Seconds', placeholder: '600' },
+        { key: 'lingya_qq_publish_poll_interval', label: 'Poll Interval Seconds', placeholder: '60' },
+        { key: 'lingya_qq_publish_timeout', label: 'Audit Timeout Seconds', placeholder: '7200' },
+      ],
+    }],
+  },
+  {
     id: 'platform_caps', label: '高级：平台能力', icon: Sliders,
     sections: [],
   },

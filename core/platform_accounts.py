@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -17,6 +17,7 @@ PLATFORM_TOKEN_KEY_PRIORITY: dict[str, list[str]] = {
     "trae": ["legacy_token", "access_token", "accessToken"],
     "blink": ["firebase_refresh_token", "legacy_token", "refresh_token", "access_token", "session_token"],
     "windsurf": ["session_token", "sessionToken", "legacy_token", "auth_token", "authToken"],
+    "lingya_qq": ["vusession", "v_vusession", "vqq_vusession", "legacy_token", "vurefresh", "v_vurefresh"],
 }
 
 

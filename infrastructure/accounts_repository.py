@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import io
@@ -10,6 +10,7 @@ from core.datetime_utils import serialize_datetime
 from core.account_display import build_account_display_summary
 from core.db import AccountModel, engine
 from core.account_graph import (
+    PLATFORM_CREDENTIAL_TYPES,
     compute_account_stats,
     load_account_graphs,
     matches_status_filter,
@@ -48,8 +49,35 @@ def _build_summary_updates(
 
 def _build_credential_updates(
     credentials: dict | None,
+    *,
+    platform: str = "",
+    primary_token: str = "",
 ) -> dict | None:
-    return dict(credentials or {}) or None
+    updates = dict(credentials or {})
+    if platform == "lingya_qq":
+        try:
+            from platforms.lingya_qq.cookies import build_lingya_qq_account_fields
+
+            source = dict(updates)
+            if primary_token and "vusession" not in source:
+                source["vusession"] = primary_token
+            updates.update(build_lingya_qq_account_fields(source))
+        except Exception:
+            pass
+    return updates or None
+
+
+def _derive_user_id_from_credentials(platform: str, user_id: str, credentials: dict | None) -> str:
+    if str(user_id or "").strip():
+        return str(user_id or "").strip()
+    if platform != "lingya_qq":
+        return ""
+    source = dict(credentials or {})
+    for key in ("vuid", "v_vuserid", "vuserid", "vqq_vuserid"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _to_record(model: AccountModel, graph: dict | None = None) -> AccountRecord:
@@ -163,11 +191,16 @@ class AccountsRepository:
 
     def create(self, command: AccountCreateCommand) -> AccountRecord:
         with Session(engine) as session:
+            credential_updates = _build_credential_updates(
+                command.credentials,
+                platform=command.platform,
+                primary_token=command.primary_token,
+            )
             model = AccountModel(
                 platform=command.platform,
                 email=command.email,
                 password=command.password,
-                user_id=command.user_id,
+                user_id=_derive_user_id_from_credentials(command.platform, command.user_id, credential_updates),
             )
             session.add(model)
             session.commit()
@@ -186,7 +219,7 @@ class AccountsRepository:
                     region=command.region or None,
                     trial_end_time=command.trial_end_time or None,
                 ),
-                credential_updates=_build_credential_updates(command.credentials),
+                credential_updates=credential_updates,
                 provider_accounts=command.provider_accounts or None,
                 provider_resources=command.provider_resources or None,
                 replace_provider_accounts=bool(command.provider_accounts),
@@ -202,8 +235,17 @@ class AccountsRepository:
                 return None
             if command.password is not None:
                 model.password = command.password
+            credential_updates = _build_credential_updates(
+                command.credentials,
+                platform=model.platform,
+                primary_token=command.primary_token or "",
+            )
             if command.user_id is not None:
                 model.user_id = command.user_id
+            else:
+                derived_user_id = _derive_user_id_from_credentials(model.platform, "", credential_updates)
+                if derived_user_id:
+                    model.user_id = derived_user_id
             model.updated_at = datetime.now(timezone.utc)
             session.add(model)
             session.commit()
@@ -222,7 +264,7 @@ class AccountsRepository:
                     region=command.region,
                     trial_end_time=command.trial_end_time,
                 ),
-                credential_updates=_build_credential_updates(command.credentials),
+                credential_updates=credential_updates,
                 provider_accounts=command.provider_accounts,
                 provider_resources=command.provider_resources,
                 replace_provider_accounts=command.replace_provider_accounts,
@@ -289,32 +331,27 @@ class AccountsRepository:
                         "provider_accounts",
                         "provider_resources",
                     }
+                    and key not in PLATFORM_CREDENTIAL_TYPES
                     and value not in (None, "", [], {})
                 }
                 if legacy_extra:
                     summary_updates["legacy_extra"] = legacy_extra
                 credential_updates = dict(extra.get("credentials") or {})
-                for key in (
-                    "access_token",
-                    "refresh_token",
-                    "session_token",
-                    "id_token",
-                    "accessToken",
-                    "refreshToken",
-                    "sessionToken",
-                    "idToken",
-                    "cookies",
-                    "cookie",
-                    "api_key",
-                    "wos_session",
-                    "sso",
-                    "sso_rw",
-                ):
+                for key in PLATFORM_CREDENTIAL_TYPES:
                     if key in extra and key not in credential_updates:
                         credential_updates[key] = extra[key]
                 primary_token = extra.get("primary_token")
                 if primary_token in (None, ""):
                     primary_token = extra.get("token")
+                credential_updates = _build_credential_updates(
+                    credential_updates,
+                    platform=platform,
+                    primary_token=str(primary_token or ""),
+                ) or {}
+                derived_user_id = _derive_user_id_from_credentials(platform, "", credential_updates)
+                if derived_user_id and not model.user_id:
+                    model.user_id = derived_user_id
+                    session.add(model)
                 patch_account_graph(
                     session,
                     model,

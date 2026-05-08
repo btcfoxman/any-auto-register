@@ -14,6 +14,44 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _mojibake_bytes(value: str) -> bytes | None:
+    data = bytearray()
+    for char in value:
+        codepoint = ord(char)
+        if codepoint <= 0xFF:
+            data.append(codepoint)
+            continue
+        try:
+            encoded = char.encode("cp1252")
+        except UnicodeEncodeError:
+            return None
+        if len(encoded) != 1:
+            return None
+        data.extend(encoded)
+    return bytes(data)
+
+
+def _repair_mojibake(value: str) -> str:
+    data = _mojibake_bytes(value)
+    if data is None:
+        return value
+    try:
+        repaired = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return value
+    return repaired
+
+
+def _normalize_seed_text(value):
+    if isinstance(value, str):
+        return _repair_mojibake(value)
+    if isinstance(value, list):
+        return [_normalize_seed_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_seed_text(item) for key, item in value.items()}
+    return value
+
+
 _BUILTIN_DEFINITIONS: list[dict] = [
     # ── mailbox ──────────────────────────────────────────────────────
     {
@@ -349,6 +387,35 @@ _BUILTIN_DEFINITIONS: list[dict] = [
             {"key": "register_reuse_phone_to_max", "label": "复用号码至最大", "type": "toggle"},
         ],
     },
+    {
+        "provider_type": "sms",
+        "provider_key": "uomsg_api",
+        "label": "UOMsg",
+        "description": "UOMsg 接码平台，使用 API Token 直接按短信关键词取号和取码，无需项目 ID",
+        "driver_type": "uomsg_api",
+        "default_auth_mode": "token",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [{"value": "token", "label": "API Token"}],
+        "fields": [
+            {"key": "uomsg_token", "label": "API Token", "secret": True, "category": "auth"},
+            {"key": "uomsg_keyword", "label": "短信关键词", "placeholder": "腾讯", "category": "identity", "hint": "取码必须按短信关键词过滤；LingYaQQ 可填“腾讯”或实际短信签名里的关键词。"},
+            {"key": "uomsg_province", "label": "省份（可选）", "placeholder": "广东", "category": "connection"},
+            {
+                "key": "uomsg_card_type",
+                "label": "卡类型",
+                "type": "select",
+                "category": "connection",
+                "options": [
+                    {"value": "全部", "label": "全部"},
+                    {"value": "实卡", "label": "实卡"},
+                    {"value": "虚卡", "label": "虚卡"},
+                ],
+            },
+            {"key": "uomsg_phone", "label": "指定号码（可选）", "placeholder": "130xxxxxxxx", "category": "identity"},
+            {"key": "uomsg_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "3", "category": "connection"},
+        ],
+    },
     # ── proxy ────────────────────────────────────────────────────────
     {
         "provider_type": "proxy",
@@ -399,7 +466,8 @@ class ProviderDefinitionsRepository:
                 existing[key] = row
 
             changed = False
-            for seed in _BUILTIN_DEFINITIONS:
+            for raw_seed in _BUILTIN_DEFINITIONS:
+                seed = _normalize_seed_text(raw_seed)
                 key = f"{seed['provider_type']}::{seed['provider_key']}"
                 item = existing.get(key)
 

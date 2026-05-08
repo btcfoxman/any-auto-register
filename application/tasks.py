@@ -466,6 +466,140 @@ def _auto_push_any2api(task_logger: TaskLogger, account) -> None:
         task_logger.log(f"  [Any2API] 自动推送异常: {exc}", level="warning")
 
 
+def _auto_sync_lingya2api(task_logger: TaskLogger, account) -> None:
+    if getattr(account, "platform", "") != "lingya_qq":
+        return
+    try:
+        from core.lingya2api_sync import sync_account_to_lingya2api
+
+        sync_account_to_lingya2api(account, log_fn=task_logger.log)
+    except Exception as exc:
+        task_logger.log(f"  [Lingya2API] auto sync error: {exc}", level="warning")
+
+
+def _task_config_value(extra: dict[str, Any], key: str, default: Any = "") -> Any:
+    if extra.get(key) not in (None, ""):
+        return extra.get(key)
+    try:
+        from core.config_store import config_store
+
+        return config_store.get(key, default)
+    except Exception:
+        return default
+
+
+def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
+    extra = dict(getattr(account, "extra", {}) or {})
+    overview = dict(extra.get("account_overview") or {})
+    compact_keys = {
+        "daily_sign_in_status",
+        "daily_sign_in_at",
+        "daily_sign_signed",
+        "daily_sign_already_signed",
+        "last_publish_vid",
+        "last_publish_title",
+        "last_publish_status",
+        "last_publish_work_status",
+        "last_publish_at",
+        "last_publish_review_result",
+        "quota_balance",
+        "quota_sum",
+    }
+    for key in compact_keys:
+        if data.get(key) not in (None, ""):
+            extra[key] = data.get(key)
+            overview[key] = data.get(key)
+    quota = {
+        "quota_balance": data.get("quota_balance"),
+        "quota_sum": data.get("quota_sum"),
+    }
+    if quota.get("quota_balance") not in (None, "") or quota.get("quota_sum") not in (None, ""):
+        extra["quota"] = quota
+    chips = list(overview.get("chips") or [])
+    if data.get("daily_sign_in_status"):
+        chips.append(f"Sign-in {data.get('daily_sign_in_status')}")
+    if data.get("last_publish_status"):
+        chips.append(f"Publish {data.get('last_publish_status')}")
+    if quota.get("quota_balance") not in (None, "") or quota.get("quota_sum") not in (None, ""):
+        chips.append(f"Quota {quota.get('quota_balance', '-')}/{quota.get('quota_sum', '-')}")
+    if chips:
+        seen: set[str] = set()
+        overview["chips"] = [chip for chip in chips if chip and not (chip in seen or seen.add(chip))]
+    extra["account_overview"] = overview
+    account.extra = extra
+
+
+def _auto_followup_lingya_qq_rewards(
+    *,
+    platform_name: str,
+    payload: dict[str, Any],
+    platform,
+    account,
+    logger: "TaskLogger",
+) -> None:
+    if platform_name != "lingya_qq" or getattr(account, "platform", "") != "lingya_qq":
+        return
+    if not hasattr(platform, "execute_action"):
+        return
+    extra_cfg = dict(payload.get("extra") or {})
+    publish_source_url = str(_task_config_value(extra_cfg, "lingya_qq_publish_source_url", "") or "").strip()
+    publish_required = _bool_config(_task_config_value(extra_cfg, "lingya_qq_publish_required", False), False)
+
+    if _bool_config(_task_config_value(extra_cfg, "lingya_qq_auto_daily_sign_in", True), True):
+        try:
+            logger.log("  [LingYaQQ] running daily sign-in if available")
+            result = platform.execute_action("daily_sign_in", account, {"_cancel_check": logger.is_cancel_requested})
+            if result.get("ok"):
+                _merge_lingya_followup_data(account, dict(result.get("data") or {}))
+                save_account(account)
+            else:
+                logger.log(f"  [LingYaQQ] daily sign-in skipped/failed: {result.get('error')}", level="warning")
+        except Exception as exc:
+            logger.log(f"  [LingYaQQ] daily sign-in error: {exc}", level="warning")
+
+    try:
+        should_publish = _bool_config(
+            _task_config_value(extra_cfg, "lingya_qq_auto_publish_after_register", bool(publish_source_url)),
+            bool(publish_source_url),
+        )
+        if not should_publish:
+            return
+        if not publish_source_url:
+            message = "LingYaQQ publish source URL is not configured"
+            if publish_required:
+                raise RuntimeError(message)
+            logger.log(f"  [LingYaQQ] publish skipped: {message}", level="warning")
+            return
+
+        logger.log("  [LingYaQQ] publishing one work after login/registration")
+        result = platform.execute_action(
+            "publish_work",
+            account,
+            {
+                "source_url": publish_source_url,
+                "initial_delay": _task_config_value(extra_cfg, "lingya_qq_publish_initial_delay", 600),
+                "poll_interval": _task_config_value(extra_cfg, "lingya_qq_publish_poll_interval", 60),
+                "timeout": _task_config_value(extra_cfg, "lingya_qq_publish_timeout", 7200),
+                "generation_timeout": _task_config_value(extra_cfg, "lingya_qq_publish_generation_timeout", 600),
+                "generation_poll_interval": _task_config_value(extra_cfg, "lingya_qq_publish_generation_poll_interval", 5),
+                "_cancel_check": logger.is_cancel_requested,
+            },
+        )
+        if result.get("ok"):
+            _merge_lingya_followup_data(account, dict(result.get("data") or {}))
+            save_account(account)
+            logger.log("  [LingYaQQ] publish completed and quota refreshed")
+        else:
+            message = str(result.get("error") or "LingYaQQ publish failed")
+            if publish_required:
+                raise RuntimeError(message)
+            logger.log(f"  [LingYaQQ] publish failed: {message}", level="warning")
+    except Exception as exc:
+        if publish_required:
+            raise
+        logger.log(f"  [LingYaQQ] follow-up error: {exc}", level="warning")
+
+
 def _auto_upload_cpa(task_logger: TaskLogger, account) -> None:
     if getattr(account, "platform", "") != "chatgpt":
         return
@@ -697,8 +831,14 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     platform_name = str(payload.get("platform", ""))
     email = payload.get("email") or None
     password = payload.get("password") or None
-    proxy = payload.get("proxy") or None
     extra = dict(payload.get("extra") or {})
+    proxy = str(payload.get("proxy") or "").strip() or None
+    use_proxy_pool = _bool_config(
+        payload.get("use_proxy_pool")
+        or extra.get("use_proxy_pool")
+        or extra.get("use_proxy_mode"),
+        False,
+    )
     sms_provider_key, sms_settings = _resolve_sms_provider_for_task(extra)
     herosms_enabled = sms_provider_key == "herosms" and bool(str(sms_settings.get("herosms_api_key") or "").strip())
     hero_extra_max = max(_int_config(sms_settings.get("register_phone_extra_max"), 3), 0) if herosms_enabled else 0
@@ -750,13 +890,17 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     def _do_one(index: int) -> bool | str:
         if logger.is_cancel_requested():
             return "__cancel_requested__"
-        resolved_proxy = proxy or proxy_pool.get_next()
+        resolved_proxy = proxy or (proxy_pool.get_next() if use_proxy_pool else None)
         platform = _build_platform_instance(platform_name, payload, logger, resolved_proxy=resolved_proxy, shared_mailbox=shared_mailbox)
         try:
             logger.log(f"开始注册第 {index + 1}/{count} 个账号")
             if resolved_proxy:
                 logger.log(f"使用代理: {resolved_proxy}")
             account = platform.register(email=email, password=password)
+            if resolved_proxy:
+                account_extra = dict(account.extra or {})
+                account_extra["proxy_url"] = resolved_proxy
+                account.extra = account_extra
             save_account(account)
             _auto_followup_windsurf_payment(
                 platform_name=platform_name,
@@ -770,8 +914,16 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             logger.record_success()
             logger.log(f"✓ 注册成功: {account.email}")
             _save_task_log(platform_name, account.email, "success")
+            _auto_followup_lingya_qq_rewards(
+                platform_name=platform_name,
+                payload=payload,
+                platform=platform,
+                account=account,
+                logger=logger,
+            )
             _auto_upload_cpa(logger, account)
             _auto_push_any2api(logger, account)
+            _auto_sync_lingya2api(logger, account)
             extra = dict(account.extra or {})
             overview = dict(extra.get("account_overview") or {})
             cashier_url = str(extra.get("cashier_url") or overview.get("cashier_url") or "")
@@ -881,7 +1033,8 @@ def _execute_platform_action_task(payload: dict[str, Any], logger: TaskLogger) -
             "account_id": account_id,
             "action_id": action_id,
             "params": params,
-        })()
+        })(),
+        log_fn=logger.log,
     )
     if not result.ok:
         logger.record_error(result.error)

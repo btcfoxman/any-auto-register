@@ -99,6 +99,9 @@ export function listProviderFieldKeys(providers: ProviderOption[] = []): string[
 }
 
 export function getCaptchaStrategyLabel(executorType: string, policy?: CaptchaPolicy, providers?: ProviderOption[]) {
+  if (executorType === 'manual_assisted') {
+    return '\u4eba\u5de5\u8f85\u52a9\uff1a\u56fe\u5f62\u9a8c\u8bc1\u548c\u53d1\u9001\u77ed\u4fe1\u7531\u4eba\u5de5\u5728\u666e\u901a\u6d4f\u89c8\u5668\u4e2d\u5b8c\u6210'
+  }
   if (executorType === 'headless' || executorType === 'headed') {
     const browserDefault = policy?.browser_mode || ''
     const label = providers?.find(item => item.value === browserDefault)?.label || browserDefault

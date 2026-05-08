@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.base_sms import HERO_SMS_DEFAULT_COUNTRY, HERO_SMS_DEFAULT_SERVICE, HeroSmsProvider, SmsBowerProvider
+from core.base_sms import HERO_SMS_DEFAULT_COUNTRY, HERO_SMS_DEFAULT_SERVICE, HeroSmsProvider, SmsBowerProvider, UOMsgProvider
 from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
 router = APIRouter(prefix="/sms", tags=["sms"])
@@ -210,5 +210,46 @@ def smsbower_prices(body: HeroSmsQueryRequest | None = None):
         service = str(body.service or provider.default_service or HERO_SMS_DEFAULT_SERVICE)
         country = str(body.country or provider.default_country or HERO_SMS_DEFAULT_COUNTRY)
         return {"prices": provider.get_prices(service=service, country=country)}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+# ── UOMsg endpoints ─────────────────────────────────────────────────────────
+
+class UOMsgQueryRequest(BaseModel):
+    token: str = ""
+    keyword: str = ""
+    province: str = ""
+    card_type: str = "全部"
+    phone: str = ""
+    proxy: str = ""
+
+
+def _saved_uomsg_config() -> dict:
+    return ProviderSettingsRepository().resolve_runtime_settings("sms", "uomsg_api", {})
+
+
+def _uomsg_from_payload(payload: UOMsgQueryRequest | None = None) -> UOMsgProvider:
+    payload = payload or UOMsgQueryRequest()
+    saved = _saved_uomsg_config()
+    token = str(payload.token or saved.get("uomsg_token") or saved.get("token") or "").strip()
+    return UOMsgProvider(
+        token=token,
+        default_keyword=str(payload.keyword or saved.get("uomsg_keyword") or saved.get("sms_keyword") or "").strip(),
+        province=str(payload.province or saved.get("uomsg_province") or "").strip(),
+        card_type=str(payload.card_type or saved.get("uomsg_card_type") or "全部").strip() or "全部",
+        phone=str(payload.phone or saved.get("uomsg_phone") or "").strip(),
+        proxy=str(payload.proxy or saved.get("sms_proxy") or saved.get("proxy") or "") or None,
+    )
+
+
+@router.post("/uomsg/balance")
+def uomsg_balance(body: UOMsgQueryRequest | None = None):
+    body = body or UOMsgQueryRequest()
+    provider = _uomsg_from_payload(body)
+    if not provider.token:
+        raise HTTPException(400, "UOMsg API Token 未配置")
+    try:
+        return {"balance": provider.get_balance()}
     except Exception as exc:
         raise HTTPException(502, str(exc))

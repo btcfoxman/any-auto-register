@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -15,6 +15,7 @@ from core.db import (
     ProviderAccountModel,
     ProviderResourceModel,
 )
+from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_CREDENTIAL_TYPES
 
 
 PLATFORM_CREDENTIAL_TYPES: dict[str, str] = {
@@ -50,6 +51,11 @@ PLATFORM_CREDENTIAL_TYPES: dict[str, str] = {
     "wos_session": "token",
     "sso": "cookie",
     "sso_rw": "cookie",
+    "vusession": "token",
+    "vurefresh": "token",
+    "vuid": "identifier",
+    "vdevice_guid": "identifier",
+    **LINGYA_QQ_COOKIE_CREDENTIAL_TYPES,
 }
 
 PRIMARY_TOKEN_WRITE_KEYS: dict[str, str] = {
@@ -59,6 +65,7 @@ PRIMARY_TOKEN_WRITE_KEYS: dict[str, str] = {
     "trae": "legacy_token",
     "blink": "firebase_refresh_token",
     "openblocklabs": "wos_session",
+    "lingya_qq": "vusession",
 }
 
 NON_LEGACY_EXTRA_KEYS = {
@@ -104,7 +111,7 @@ def _dedupe_chips(*groups: list[Any]) -> list[str]:
     for group in groups:
         for item in group or []:
             chip = _text(item)
-            if not chip or chip == "本地未切换" or chip in seen:
+            if not chip or chip == "æœ¬åœ°æœªåˆ‡æ¢" or chip in seen:
                 continue
             seen.add(chip)
             result.append(chip)
@@ -271,8 +278,8 @@ def _normalize_overview_summary(
     display_status = _derive_display_status(lifecycle_status, validity_status, plan_state)
 
     payload["chips"] = _dedupe_chips(payload.get("chips") or [])
-    if bool(payload.get("local_matches_target")) and "当前" not in payload["chips"]:
-        payload["chips"].append("当前")
+    if bool(payload.get("local_matches_target")) and "å½“å‰" not in payload["chips"]:
+        payload["chips"].append("å½“å‰")
 
     payload.update(
         {
