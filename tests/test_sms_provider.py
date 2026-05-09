@@ -176,6 +176,57 @@ class TestUOMsgProvider:
 
         assert provider.get_code_after("16512345678", timeout=5, ignore_text="【腾讯科技】验证码111111，用于登录") == "222222"
 
+    def test_get_code_after_continues_after_request_timeout(self, monkeypatch):
+        responses = [
+            sms_module.requests.exceptions.ReadTimeout("read timeout"),
+            "[尚未收到]",
+            "【腾讯科技】验证码333333，用于登录",
+        ]
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return FakeResponse(item)
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯")
+
+        assert provider.get_code_after("16512345678", timeout=5) == "333333"
+
+    def test_get_code_after_waits_for_new_message_after_unparsable_sms(self, monkeypatch):
+        messages = [
+            "【腾讯科技】登录提醒，请勿转发",
+            "【腾讯科技】登录提醒，请勿转发",
+            "【腾讯科技】验证码444444，用于登录",
+        ]
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            return FakeResponse(messages.pop(0))
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯")
+
+        assert provider.get_code_after("16512345678", timeout=5) == "444444"
+
 
 class TestCreatePhoneCallbacks:
     def test_returns_tuple(self):

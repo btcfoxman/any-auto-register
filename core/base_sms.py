@@ -1158,7 +1158,12 @@ class UOMsgProvider(BaseSmsProvider):
         ignored = str(ignore_text or "").strip()
         deadline = time.time() + timeout
         while time.time() < deadline:
-            text = self._request("getMsg", phone=phone, keyWord=keyword)
+            try:
+                text = self._request("getMsg", phone=phone, keyWord=keyword)
+            except requests.RequestException as exc:
+                logger.warning("UOMsg getMsg transient request error for %s: %s", phone, exc)
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
             if "[尚未收到]" in text or "尚未收到" in text:
                 time.sleep(self.poll_interval)
                 continue
@@ -1168,7 +1173,9 @@ class UOMsgProvider(BaseSmsProvider):
             code = _extract_uomsg_code(text)
             if code:
                 return code
-            raise RuntimeError(f"UOMsg 已收到短信但无法提取验证码: {text[:200]}")
+            logger.warning("UOMsg received an unparsable SMS for %s; waiting for a newer SMS: %s", phone, text[:200])
+            ignored = text.strip()
+            time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
         return ""
 
     def cancel(self, activation_id: str) -> bool:
