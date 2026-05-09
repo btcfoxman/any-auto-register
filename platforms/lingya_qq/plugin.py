@@ -325,6 +325,12 @@ class LingYaQQPlatform(BasePlatform):
             if not phone:
                 raise RuntimeError("SMS provider did not return a usable phone number")
             self.log(f"Phone number rented: {phone}")
+            manual_proxy = str((self.config.proxy if self.config else "") or "").strip()
+            if manual_proxy:
+                self.log(f"LingYaQQ manual browser proxy: {manual_proxy}")
+                self.log("Open Chrome/Edge with the same proxy before sending the SMS on lingya.qq.com.")
+            else:
+                self.log("LingYaQQ proxy mode is off for this task; use a direct browser connection for manual SMS sending.")
             self.log("Open https://lingya.qq.com in normal Chrome/Edge, enter this phone number, complete the graphic CAPTCHA, then send SMS.")
             self.log(f"Waiting for SMS verification code, timeout {timeout} seconds.")
 

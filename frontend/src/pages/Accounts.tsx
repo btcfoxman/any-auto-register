@@ -199,6 +199,8 @@ function RegisterModal({
   const [configLoading, setConfigLoading] = useState(true)
   const [regCount, setRegCount] = useState(1)
   const [concurrency, setConcurrency] = useState(1)
+  const [proxy, setProxy] = useState('')
+  const [useProxyPool, setUseProxyPool] = useState(false)
   const [selection, setSelection] = useState({
     identityProvider: '',
     oauthProvider: '',
@@ -222,6 +224,8 @@ function RegisterModal({
     option.identityProvider === selection.identityProvider && option.oauthProvider === selection.oauthProvider,
   )
   const selectedExecutor = executorOptions.find(option => option.value === selection.executorType)
+  const proxyText = proxy.trim()
+  const proxySummary = proxyText || (useProxyPool ? '代理池轮询' : '直连')
 
   useEffect(() => {
     let active = true
@@ -373,7 +377,8 @@ function RegisterModal({
           platform, count: regCount, concurrency,
           executor_type: selection.executorType,
           captcha_solver: 'auto',
-          proxy: null,
+          proxy: proxyText || null,
+          use_proxy_pool: useProxyPool,
           extra,
         }),
       })
@@ -482,9 +487,35 @@ function RegisterModal({
                   </div>
                 </div>
 
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-pane)]/45 px-4 py-3">
+                  <label className="text-xs text-[var(--text-muted)] block mb-1">代理</label>
+                  <input
+                    type="text"
+                    value={proxy}
+                    onChange={e => setProxy(e.target.value)}
+                    placeholder="http://user:pass@host:port"
+                    className="control-surface control-surface-compact"
+                  />
+                  <label className="mt-3 flex items-start gap-2 text-xs text-[var(--text-secondary)]">
+                    <input
+                      type="checkbox"
+                      checked={useProxyPool}
+                      onChange={e => setUseProxyPool(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>使用代理池；未填写上方代理且勾选时才会从代理池轮询，不勾选时默认直连。</span>
+                  </label>
+                  {selection.identityProvider === 'manual_phone' ? (
+                    <div className="mt-2 text-xs text-amber-300">
+                      LingYaQQ 手动打开浏览器发短信时，也需要让该浏览器使用任务日志里的同一个代理。
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-hover)] px-4 py-3 text-xs text-[var(--text-secondary)]">
                   <div>注册身份: <span className="text-[var(--text-primary)]">{selectedRegistration?.label || '-'}</span></div>
                   <div className="mt-1">执行方式: <span className="text-[var(--text-primary)]">{selectedExecutor?.label || '-'}</span></div>
+                  <div className="mt-1">代理: <span className="text-[var(--text-primary)] break-all">{proxySummary}</span></div>
                   <div className="mt-1">验证策略: <span className="text-[var(--text-primary)]">{getCaptchaStrategyLabel(selection.executorType, configOptions.captcha_policy, configOptions.captcha_providers)}</span></div>
                   {selection.identityProvider === 'manual_phone' && defaultSmsProviderLabel ? (
                     <div className="mt-1">接码服务: <span className="text-[var(--text-primary)]">{defaultSmsProviderLabel}</span></div>
