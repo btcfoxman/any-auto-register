@@ -14,6 +14,7 @@ from platforms.lingya_qq.cookies import (
     extract_lingya_qq_cookies,
 )
 from platforms.lingya_qq.core import (
+    DEFAULT_VIDEO_UPLOAD_SERVICE_ID,
     LingYaQQClient,
     VIDEO_APPID,
     VVERSION_PLATFORM,
@@ -314,6 +315,7 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "source_url", "label": "Third-party GET source URL", "type": "text"},
                     {"key": "source_timeout", "label": "Source request timeout seconds", "type": "number"},
                     {"key": "source_retries", "label": "Source request retries", "type": "number"},
+                    {"key": "upload_service_id", "label": "Video upload serviceId", "type": "text"},
                     {"key": "initial_delay", "label": "Audit initial delay seconds", "type": "number"},
                     {"key": "poll_interval", "label": "Audit poll interval seconds", "type": "number"},
                     {"key": "timeout", "label": "Audit timeout seconds", "type": "number"},
@@ -848,6 +850,13 @@ class LingYaQQPlatform(BasePlatform):
             _first_value(params.get("source_retries"), self._runtime_value(source, params, "lingya_qq_publish_source_retries", 3)),
             3,
         )
+        upload_service_id = str(
+            _first_value(
+                params.get("upload_service_id"),
+                self._runtime_value(source, params, "lingya_qq_video_upload_service_id", DEFAULT_VIDEO_UPLOAD_SERVICE_ID),
+            )
+            or DEFAULT_VIDEO_UPLOAD_SERVICE_ID
+        ).strip() or DEFAULT_VIDEO_UPLOAD_SERVICE_ID
         generation_timeout = _as_int(
             _first_value(params.get("generation_timeout"), self._runtime_value(source, params, "lingya_qq_publish_generation_timeout", 600)),
             600,
@@ -885,6 +894,7 @@ class LingYaQQPlatform(BasePlatform):
             "lingya_qq_publish_timeout": publish_timeout,
             "lingya_qq_publish_generation_timeout": generation_timeout,
             "lingya_qq_publish_generation_poll_interval": generation_poll_interval,
+            "lingya_qq_video_upload_service_id": upload_service_id,
         }
         if defaults.get("cover_url"):
             publish_defaults["lingya_qq_publish_cover_url"] = defaults["cover_url"]
@@ -913,6 +923,7 @@ class LingYaQQPlatform(BasePlatform):
             asset.video_bytes,
             filename=asset.video_filename,
             vuid=vuid,
+            service_id=upload_service_id,
         )
         vid = str(video_info.get("vid") or "").strip()
         if not vid:

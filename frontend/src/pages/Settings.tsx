@@ -288,6 +288,7 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'lingya_qq_publish_source_url', label: 'Source URL', placeholder: 'https://example.com/api/work' },
         { key: 'lingya_qq_publish_source_timeout', label: 'Source Timeout Seconds', placeholder: '60' },
         { key: 'lingya_qq_publish_source_retries', label: 'Source Retries', placeholder: '3' },
+        { key: 'lingya_qq_video_upload_service_id', label: 'Video Upload Service ID', placeholder: '1000226_20250923195211_7dda2b6b' },
         { key: 'lingya_qq_publish_cover_url', label: 'Fallback Cover URL', placeholder: 'https://example.com/cover.jpg' },
         { key: 'lingya_qq_publish_initial_delay', label: 'Initial Delay Seconds', placeholder: '600' },
         { key: 'lingya_qq_publish_poll_interval', label: 'Poll Interval Seconds', placeholder: '60' },

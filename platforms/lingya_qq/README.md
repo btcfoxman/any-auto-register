@@ -59,6 +59,9 @@ Useful extra fields:
 - `lingya_qq_publish_cover_url`: fallback cover URL for raw video sources
 - `lingya_qq_publish_source_timeout`: defaults to `60`
 - `lingya_qq_publish_source_retries`: defaults to `3`
+- `lingya_qq_video_upload_service_id`: defaults to
+  `1000226_20250923195211_7dda2b6b`, the configured video SDK serviceId
+  observed in the upload HAR
 - `lingya_qq_publish_initial_delay`: defaults to `600`
 - `lingya_qq_publish_poll_interval`: defaults to `60`
 - `lingya_qq_publish_timeout`: defaults to `7200`

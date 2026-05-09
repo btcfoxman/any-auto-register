@@ -163,6 +163,7 @@ const ACTION_PARAM_DEFAULT_KEYS: Record<string, Record<string, string>> = {
     source_url: 'lingya_qq_publish_source_url',
     source_timeout: 'lingya_qq_publish_source_timeout',
     source_retries: 'lingya_qq_publish_source_retries',
+    upload_service_id: 'lingya_qq_video_upload_service_id',
     initial_delay: 'lingya_qq_publish_initial_delay',
     poll_interval: 'lingya_qq_publish_poll_interval',
     timeout: 'lingya_qq_publish_timeout',

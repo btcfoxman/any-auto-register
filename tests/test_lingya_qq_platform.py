@@ -5,7 +5,7 @@ from core.base_sms import SmsActivation
 from core.registry import get, load_all
 from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS, _build_account_overview
 from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES, build_lingya_qq_account_fields
-from platforms.lingya_qq.core import LingYaQQClient
+from platforms.lingya_qq.core import DEFAULT_VIDEO_UPLOAD_SERVICE_ID, LingYaQQClient
 from platforms.lingya_qq.plugin import LingYaQQPlatform, _resolve_sms_runtime
 from platforms.lingya_qq.publish import LingYaQQPublishAsset
 
@@ -33,7 +33,7 @@ def test_lingya_qq_exposes_relogin_sms_action():
     assert any(item["id"] == "publish_work" for item in actions)
     publish_action = next(item for item in actions if item["id"] == "publish_work")
     publish_param_keys = {item["key"] for item in publish_action["params"]}
-    assert {"source_url", "source_timeout", "source_retries", "initial_delay", "poll_interval", "timeout"} <= publish_param_keys
+    assert {"source_url", "source_timeout", "source_retries", "upload_service_id", "initial_delay", "poll_interval", "timeout"} <= publish_param_keys
     assert "relogin_sms" in STATEFUL_ACTION_IDS
     assert "keepalive_sync" in STATEFUL_ACTION_IDS
     assert "sync_lingya2api" in STATEFUL_ACTION_IDS
@@ -582,6 +582,61 @@ def test_lingya_qq_sign_in_endpoints_match_observed_flow():
     assert "Content-Type" not in calls[1][1]["headers"]
 
 
+def test_lingya_qq_video_upload_uses_observed_service_id_and_sdk_headers(monkeypatch):
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    client = LingYaQQClient(vdevice_guid="device")
+    monkeypatch.setattr(client, "get_video_upload_params", lambda seq=None: {"seq": "seq-1", "svr_token": "svr-token"})
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/v2/video/prepare"):
+            return Response(
+                {
+                    "code": 0,
+                    "fileId": "file.mp4",
+                    "ukey": "ukey",
+                    "vid": "vid123",
+                    "videoId": "video123",
+                    "reRoute": {"modid": 65011201, "cmdid": 65536},
+                }
+            )
+        if "/v2/upload/uploadpart" in url:
+            return Response({"code": 0, "partSha": "part-sha"})
+        if url.endswith("/v2/upload/finishupload"):
+            return Response({"code": 0, "msg": "ok"})
+        if url.endswith("/v2/video/notifyencode"):
+            return Response({"code": 0, "videoId": "video123"})
+        raise AssertionError(url)
+
+    client.session.post = fake_post
+
+    result = client.upload_video_bytes(b"video-bytes", filename="video.mp4", vuid="2437301834", chunk_size=1024 * 1024)
+
+    assert result["service_id"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID
+    prepare_url, prepare_kwargs = calls[0]
+    assert prepare_url.endswith("/v2/video/prepare")
+    assert prepare_kwargs["json"]["serviceId"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID
+    assert prepare_kwargs["headers"]["serviceId"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID
+    assert prepare_kwargs["headers"]["seq"] == "seq-1"
+    assert prepare_kwargs["headers"]["upload-uin"] == "2437301834"
+
+    upload_headers = calls[1][1]["headers"]
+    assert upload_headers["serviceId"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID
+    assert upload_headers["upload-sid"] == "65011201:65536"
+    assert upload_headers["upload-uin"] == "2437301834"
+
+
 def test_lingya_qq_publish_work_flow(monkeypatch):
     events = []
     fetch_calls = []
@@ -596,8 +651,8 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             events.append(("cover", filename, content_type, image_bytes))
             return "https://filecdn.lumio.qq.com/image/cover.jpg"
 
-        def upload_video_bytes(self, video_bytes, *, filename="video.mp4", vuid, seq=None, chunk_size=1024 * 1024):
-            events.append(("video", filename, vuid, video_bytes))
+        def upload_video_bytes(self, video_bytes, *, filename="video.mp4", vuid, seq=None, service_id=None, chunk_size=1024 * 1024):
+            events.append(("video", filename, vuid, video_bytes, service_id))
             return {"vid": "vid123", "file_name": filename}
 
         def get_work_generation_status(self, vid: str):
@@ -691,11 +746,14 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert data["lingya_qq_publish_source_url"] == "https://example.com/work"
     assert data["lingya_qq_publish_source_timeout"] == 12
     assert data["lingya_qq_publish_source_retries"] == 4
+    assert data["lingya_qq_video_upload_service_id"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID
     assert saved_defaults[0]["lingya_qq_publish_source_timeout"] == 12
+    assert saved_defaults[0]["lingya_qq_video_upload_service_id"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID
     assert fetch_calls[0][1]["proxy"] is None
     assert fetch_calls[0][1]["timeout"] == 12
     assert fetch_calls[0][1]["retries"] == 4
     assert ("client_proxy", "http://account-proxy.example:8080") in events
+    assert ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID) in events
     assert ("upload_work", 2, "vid123", "publish title") in events
     assert ("upload_work", 1, "vid123", "publish title") in events
 
@@ -711,6 +769,7 @@ def test_lingya_qq_publish_defaults_are_kept_in_account_overview():
             "lingya_qq_publish_source_retries": 4,
             "lingya_qq_publish_initial_delay": 30,
             "lingya_qq_publish_timeout": 7200,
+            "lingya_qq_video_upload_service_id": DEFAULT_VIDEO_UPLOAD_SERVICE_ID,
         },
     )
 
@@ -718,3 +777,4 @@ def test_lingya_qq_publish_defaults_are_kept_in_account_overview():
     assert legacy_extra["lingya_qq_publish_source_url"] == "https://example.com/work"
     assert legacy_extra["lingya_qq_publish_source_timeout"] == 12
     assert legacy_extra["lingya_qq_publish_source_retries"] == 4
+    assert legacy_extra["lingya_qq_video_upload_service_id"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID

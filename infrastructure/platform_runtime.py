@@ -270,6 +270,7 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
                 "lingya_qq_publish_timeout",
                 "lingya_qq_publish_generation_timeout",
                 "lingya_qq_publish_generation_poll_interval",
+                "lingya_qq_video_upload_service_id",
             )
             if data.get(key) not in (None, "")
         }

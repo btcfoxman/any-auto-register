@@ -519,6 +519,7 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
         "lingya_qq_publish_timeout",
         "lingya_qq_publish_generation_timeout",
         "lingya_qq_publish_generation_poll_interval",
+        "lingya_qq_video_upload_service_id",
     }
     publish_config = {
         key: data.get(key)

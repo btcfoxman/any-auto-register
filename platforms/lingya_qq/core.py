@@ -5,7 +5,6 @@ import re
 import string
 import time
 import uuid
-from datetime import datetime
 from typing import Any
 
 import requests
@@ -23,6 +22,7 @@ VIDEO_APPID = "3000116"
 VVERSION_PLATFORM = "2"
 PHONE_LOGIN_FROM = "spp_hlw_phone_login"
 PUBLISH_BIZ_ID = "1000226"
+DEFAULT_VIDEO_UPLOAD_SERVICE_ID = f"{PUBLISH_BIZ_ID}_20250923195211_7dda2b6b"
 VIDEO_UPLOAD_CHUNK_SIZE = 1024 * 1024
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -128,10 +128,29 @@ class LingYaQQClient:
             headers["Content-Type"] = "application/json"
         return headers
 
-    def _video_upload_headers(self, svr_token: str, *, json_content: bool = True) -> dict[str, str]:
+    def _video_upload_headers(
+        self,
+        svr_token: str,
+        *,
+        json_content: bool = True,
+        biz_id: str | None = None,
+        service_id: str | None = None,
+        seq: str | None = None,
+        upload_uin: str | None = None,
+        upload_sid: str | None = None,
+    ) -> dict[str, str]:
         headers = self._headers(json_content=json_content)
         headers["Accept"] = "application/json, text/plain, */*"
         headers["svr-token"] = str(svr_token or "")
+        headers["bizId"] = str(biz_id or PUBLISH_BIZ_ID)
+        if service_id:
+            headers["serviceId"] = str(service_id)
+        if seq:
+            headers["seq"] = str(seq)
+        if upload_uin:
+            headers["upload-uin"] = str(upload_uin)
+        if upload_sid:
+            headers["upload-sid"] = str(upload_sid)
         if not json_content:
             headers["Content-Type"] = "application/octet-stream"
         return headers
@@ -277,11 +296,29 @@ class LingYaQQClient:
             raise RuntimeError(f"LingYaQQ image upload did not return url: {data}")
         return url
 
-    def _post_video_json(self, host: str, path: str, payload: dict[str, Any], svr_token: str) -> dict[str, Any]:
+    def _post_video_json(
+        self,
+        host: str,
+        path: str,
+        payload: dict[str, Any],
+        svr_token: str,
+        *,
+        service_id: str | None = None,
+        seq: str | None = None,
+        upload_uin: str | None = None,
+        upload_sid: str | None = None,
+    ) -> dict[str, Any]:
         response = self.session.post(
             f"{host}{path}",
             json=payload,
-            headers=self._video_upload_headers(svr_token, json_content=True),
+            headers=self._video_upload_headers(
+                svr_token,
+                json_content=True,
+                service_id=service_id,
+                seq=seq,
+                upload_uin=upload_uin,
+                upload_sid=upload_sid,
+            ),
             timeout=max(self.timeout, 120),
         )
         response.raise_for_status()
@@ -296,6 +333,7 @@ class LingYaQQClient:
         filename: str = "video.mp4",
         vuid: str,
         seq: str | None = None,
+        service_id: str | None = None,
         chunk_size: int = VIDEO_UPLOAD_CHUNK_SIZE,
     ) -> dict[str, Any]:
         if not video_bytes:
@@ -305,7 +343,8 @@ class LingYaQQClient:
         chunk_size = max(int(chunk_size or VIDEO_UPLOAD_CHUNK_SIZE), 256 * 1024)
         upload_params = self.get_video_upload_params(seq=seq)
         svr_token = str(upload_params.get("svr_token") or "").strip()
-        service_id = f"{PUBLISH_BIZ_ID}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        upload_seq = str(upload_params.get("seq") or seq or "").strip()
+        service_id = str(service_id or DEFAULT_VIDEO_UPLOAD_SERVICE_ID).strip() or DEFAULT_VIDEO_UPLOAD_SERVICE_ID
         prepare_payload = {
             "bizId": PUBLISH_BIZ_ID,
             "serviceId": service_id,
@@ -318,14 +357,26 @@ class LingYaQQClient:
             "/v2/video/prepare",
             prepare_payload,
             svr_token,
+            service_id=service_id,
+            seq=upload_seq,
+            upload_uin=str(vuid),
         )
         prepare_data = prepare.get("data") if isinstance(prepare.get("data"), dict) else {}
+        if not prepare_data:
+            prepare_data = prepare
         file_id = str(prepare_data.get("fileId") or prepare_data.get("file_id") or "").strip()
         ukey = str(prepare_data.get("ukey") or prepare_data.get("uKey") or "").strip()
         vid = str(prepare_data.get("vid") or "").strip()
         video_id = str(prepare_data.get("videoId") or prepare_data.get("video_id") or "").strip()
         if not file_id or not ukey or not vid or not video_id:
             raise RuntimeError(f"LingYaQQ video prepare response is incomplete: {prepare}")
+        reroute = prepare_data.get("reRoute") if isinstance(prepare_data.get("reRoute"), dict) else {}
+        upload_sid = ""
+        if reroute:
+            modid = str(reroute.get("modid") or "").strip()
+            cmdid = str(reroute.get("cmdid") or "").strip()
+            if modid and cmdid:
+                upload_sid = f"{modid}:{cmdid}"
 
         finish_parts: list[dict[str, Any]] = []
         for index, offset in enumerate(range(0, len(video_bytes), chunk_size), start=1):
@@ -335,7 +386,14 @@ class LingYaQQClient:
                 f"{host}/v2/upload/uploadpart",
                 params={"filename": file_id, "ukey": ukey, "partnum": index},
                 data=chunk,
-                headers=self._video_upload_headers(svr_token, json_content=False),
+                headers=self._video_upload_headers(
+                    svr_token,
+                    json_content=False,
+                    service_id=service_id,
+                    seq=upload_seq,
+                    upload_uin=str(vuid),
+                    upload_sid=upload_sid,
+                ),
                 timeout=max(self.timeout, 180),
             )
             response.raise_for_status()
@@ -362,6 +420,10 @@ class LingYaQQClient:
                 "finishParts": finish_parts,
             },
             svr_token,
+            service_id=service_id,
+            seq=upload_seq,
+            upload_uin=str(vuid),
+            upload_sid=upload_sid,
         )
         notify = self._post_video_json(
             VIDEO_TRANSPOND_HOSTS[0],
@@ -375,6 +437,10 @@ class LingYaQQClient:
                 "fileId": file_id,
             },
             svr_token,
+            service_id=service_id,
+            seq=upload_seq,
+            upload_uin=str(vuid),
+            upload_sid=upload_sid,
         )
         return {
             "seq": upload_params.get("seq"),
