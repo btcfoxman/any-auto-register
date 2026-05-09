@@ -57,6 +57,7 @@ Useful extra fields:
   failure fails the registration task
 - `lingya_qq_publish_source_url`: third-party GET API returning work material
 - `lingya_qq_publish_cover_url`: fallback cover URL for raw video sources
+- `lingya_qq_publish_source_retries`: defaults to `3`
 - `lingya_qq_publish_initial_delay`: defaults to `600`
 - `lingya_qq_publish_poll_interval`: defaults to `60`
 - `lingya_qq_publish_timeout`: defaults to `7200`

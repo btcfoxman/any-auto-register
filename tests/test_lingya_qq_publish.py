@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import base64
+
+import requests
+
+from platforms.lingya_qq.publish import fetch_lingya_qq_publish_asset
+
+
+class FakeResponse:
+    def __init__(self, payload=None, *, content=b"", content_type="application/json", status_code=200):
+        self._payload = payload
+        self.content = content
+        self.status_code = status_code
+        self.headers = {"content-type": content_type}
+        self.text = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else str(content)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+    def json(self):
+        return self._payload
+
+
+def _b64(value: bytes) -> str:
+    return base64.b64encode(value).decode("ascii")
+
+
+def test_publish_asset_retries_when_source_connection_is_aborted(monkeypatch):
+    calls = []
+
+    def fake_get(url, timeout=5, proxies=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.ConnectionError("Remote end closed connection without response")
+        return FakeResponse(
+            {
+                "title": "retry ok",
+                "video_base64": _b64(b"video"),
+                "cover_base64": _b64(b"cover"),
+            }
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+    monkeypatch.setattr("platforms.lingya_qq.publish.time.sleep", lambda seconds: None)
+
+    asset = fetch_lingya_qq_publish_asset("https://source.example/work", retries=3)
+
+    assert asset.title == "retry ok"
+    assert asset.video_bytes == b"video"
+    assert asset.cover_bytes == b"cover"
+    assert calls == ["https://source.example/work", "https://source.example/work"]
+
+
+def test_publish_asset_retries_media_download_after_5xx(monkeypatch):
+    calls = []
+
+    def fake_get(url, timeout=5, proxies=None):
+        calls.append(url)
+        if url.endswith("/work"):
+            return FakeResponse(
+                {
+                    "title": "media retry",
+                    "video_url": "https://source.example/video.mp4",
+                    "cover_base64": _b64(b"cover"),
+                }
+            )
+        if url.endswith("/video.mp4") and calls.count(url) == 1:
+            return FakeResponse(content=b"temporary", content_type="text/plain", status_code=503)
+        return FakeResponse(content=b"video", content_type="video/mp4")
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+    monkeypatch.setattr("platforms.lingya_qq.publish.time.sleep", lambda seconds: None)
+
+    asset = fetch_lingya_qq_publish_asset("https://source.example/work", retries=3)
+
+    assert asset.video_bytes == b"video"
+    assert calls.count("https://source.example/video.mp4") == 2

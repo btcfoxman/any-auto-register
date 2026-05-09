@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
 import requests
+
+
+logger = logging.getLogger(__name__)
 
 
 VIDEO_URL_KEYS = (
@@ -156,9 +161,44 @@ def _filename_from_url(url: str, default_name: str, content_type: str = "") -> s
     return name
 
 
-def _download_bytes(url: str, *, timeout: int, proxy: str | None) -> tuple[bytes, str, str]:
-    response = requests.get(url, timeout=max(timeout, 5), proxies=_proxy_map(proxy))
-    response.raise_for_status()
+def _should_retry_response_error(exc: requests.HTTPError) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    return status_code >= 500 or status_code in {408, 425, 429}
+
+
+def _get_with_retries(
+    url: str,
+    *,
+    timeout: int,
+    proxy: str | None,
+    retries: int = 3,
+    retry_delay: float = 2.0,
+) -> requests.Response:
+    attempts = max(int(retries or 1), 1)
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.get(url, timeout=max(timeout, 5), proxies=_proxy_map(proxy))
+            response.raise_for_status()
+            return response
+        except requests.HTTPError as exc:
+            last_exc = exc
+            if attempt >= attempts or not _should_retry_response_error(exc):
+                raise
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+        logger.warning("LingYaQQ publish source request failed, retrying %s/%s: %s", attempt, attempts, last_exc)
+        time.sleep(max(float(retry_delay or 0), 0))
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"LingYaQQ publish source request failed: {url}")
+
+
+def _download_bytes(url: str, *, timeout: int, proxy: str | None, retries: int = 3) -> tuple[bytes, str, str]:
+    response = _get_with_retries(url, timeout=timeout, proxy=proxy, retries=retries)
     content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip()
     filename = _filename_from_url(url, "download.bin", content_type)
     return response.content, filename, content_type
@@ -175,11 +215,11 @@ def fetch_lingya_qq_publish_asset(
     *,
     timeout: int = 60,
     proxy: str | None = None,
+    retries: int = 3,
     defaults: dict[str, Any] | None = None,
 ) -> LingYaQQPublishAsset:
     defaults = defaults or {}
-    response = requests.get(source_url, timeout=max(timeout, 5), proxies=_proxy_map(proxy))
-    response.raise_for_status()
+    response = _get_with_retries(source_url, timeout=timeout, proxy=proxy, retries=retries)
     content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
 
     payload: Any = None
@@ -204,7 +244,7 @@ def fetch_lingya_qq_publish_asset(
         cover_url = str(defaults.get("cover_url") or defaults.get("coverUrl") or "").strip()
         if not cover_url:
             raise RuntimeError("LingYaQQ publish raw video source requires lingya_qq_publish_cover_url")
-        cover_bytes, cover_filename, cover_type = _download_bytes(cover_url, timeout=timeout, proxy=proxy)
+        cover_bytes, cover_filename, cover_type = _download_bytes(cover_url, timeout=timeout, proxy=proxy, retries=retries)
         filename = _filename_from_url(source_url, "video.mp4", content_type)
         return LingYaQQPublishAsset(
             title=_title_from_payload({}, defaults),
@@ -227,7 +267,7 @@ def fetch_lingya_qq_publish_asset(
         video_url = _pick_media_url(payload, VIDEO_URL_KEYS, VIDEO_LIST_KEYS)
         if not video_url:
             raise RuntimeError("LingYaQQ publish source did not provide video_url/video_base64")
-        video_bytes, downloaded_name, video_content_type = _download_bytes(video_url, timeout=timeout, proxy=proxy)
+        video_bytes, downloaded_name, video_content_type = _download_bytes(video_url, timeout=timeout, proxy=proxy, retries=retries)
         video_filename = video_filename or downloaded_name
     if not video_filename:
         video_filename = "video.mp4"
@@ -242,7 +282,7 @@ def fetch_lingya_qq_publish_asset(
         ).strip()
         if not cover_url:
             raise RuntimeError("LingYaQQ publish source did not provide cover_url/cover_base64")
-        cover_bytes, downloaded_cover_name, cover_content_type = _download_bytes(cover_url, timeout=timeout, proxy=proxy)
+        cover_bytes, downloaded_cover_name, cover_content_type = _download_bytes(cover_url, timeout=timeout, proxy=proxy, retries=retries)
         cover_filename = cover_filename or downloaded_cover_name
     if not cover_filename:
         cover_filename = "cover.jpg"

@@ -826,6 +826,10 @@ class LingYaQQPlatform(BasePlatform):
             _first_value(params.get("source_timeout"), self._runtime_value(source, params, "lingya_qq_publish_source_timeout", 60)),
             60,
         )
+        source_retries = _as_int(
+            _first_value(params.get("source_retries"), self._runtime_value(source, params, "lingya_qq_publish_source_retries", 3)),
+            3,
+        )
         generation_timeout = _as_int(
             _first_value(params.get("generation_timeout"), self._runtime_value(source, params, "lingya_qq_publish_generation_timeout", 600)),
             600,
@@ -861,6 +865,7 @@ class LingYaQQPlatform(BasePlatform):
             source_url,
             timeout=source_timeout,
             proxy=proxy_url,
+            retries=source_retries,
             defaults=defaults,
         )
         vuid = str(source.get("vuid") or cookie_fields.get("vuid") or account.user_id or "").strip()
