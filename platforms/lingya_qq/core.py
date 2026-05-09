@@ -136,14 +136,23 @@ class LingYaQQClient:
             headers["Content-Type"] = "application/octet-stream"
         return headers
 
-    def _post_pbaccess(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self.session.post(
-            f"{PBACCESS_BASE}{path}",
-            params=self._pbaccess_params(),
-            json=payload or {},
-            headers=self._headers(),
-            timeout=self.timeout,
-        )
+    def _post_pbaccess(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        json_content: bool = True,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "params": self._pbaccess_params(),
+            "headers": self._headers(json_content=json_content),
+            "timeout": self.timeout,
+        }
+        if json_content:
+            kwargs["json"] = payload or {}
+        elif payload is not None:
+            kwargs["data"] = payload
+        response = self.session.post(f"{PBACCESS_BASE}{path}", **kwargs)
         response.raise_for_status()
         return response.json()
 
@@ -206,14 +215,14 @@ class LingYaQQClient:
 
     def get_credits_panel(self, is_first_register: bool = False) -> dict[str, Any]:
         return self._post_pbaccess(
-            "/trpc.workstation.backend.TaskAdapter/GetCreditsPanel",
+            "/trpc.caotai.task_adapter.TaskAdapter/GetCreditsPanel",
             {"is_first_register": bool(is_first_register)},
         )
 
     def credits_panel_sign_in(self) -> dict[str, Any]:
         return self._post_pbaccess(
-            "/trpc.workstation.backend.TaskAdapter/CreditsPanelSignIn",
-            {},
+            "/trpc.caotai.task_adapter.TaskAdapter/CreditsPanelSignIn",
+            json_content=False,
         )
 
     def check_credits_first_register(self) -> dict[str, Any]:

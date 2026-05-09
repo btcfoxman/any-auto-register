@@ -602,7 +602,29 @@ class LingYaQQPlatform(BasePlatform):
         params = params or {}
         source, cookie_fields, client = self._client_from_account(account)
         force = _as_bool(params.get("force"), False)
-        panel = client.get_credits_panel(False)
+        try:
+            panel = client.get_credits_panel(False)
+        except Exception as exc:
+            self.log(f"LingYaQQ credits panel unavailable; daily sign-in skipped: {exc}")
+            quota: dict[str, Any] = {}
+            try:
+                quota = client.get_user_quota()
+            except Exception as quota_exc:
+                self.log(f"LingYaQQ quota refresh skipped after credits panel error: {quota_exc}")
+            quota_overview = _quota_summary(quota)
+            return {
+                "ok": True,
+                "data": {
+                    **cookie_fields,
+                    "message": "LingYaQQ daily sign-in skipped because the credits panel is unavailable",
+                    "daily_sign_in_status": "panel_unavailable",
+                    "daily_sign_in_at": int(time.time()),
+                    "daily_sign_signed": False,
+                    "daily_sign_already_signed": False,
+                    "daily_sign_error": str(exc),
+                    **quota_overview,
+                },
+            }
         need_sign, already_signed, _ = self._daily_sign_state(panel, force=force)
         sign_response: dict[str, Any] = {}
         signed = False

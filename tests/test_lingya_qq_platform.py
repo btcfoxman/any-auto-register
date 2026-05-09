@@ -514,6 +514,71 @@ def test_lingya_qq_daily_sign_in_claims_when_unused(monkeypatch):
     assert ("sign",) in events
 
 
+def test_lingya_qq_daily_sign_in_skips_when_panel_unavailable(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid
+
+        def get_credits_panel(self, is_first_register=False):
+            events.append(("panel", is_first_register))
+            raise RuntimeError("500 Server Error: Internal Server Error")
+
+        def credits_panel_sign_in(self):
+            events.append(("sign",))
+            return {"ret": 0, "data": {"isSignInSuccess": True}}
+
+        def get_user_quota(self):
+            events.append(("quota",))
+            return {"quota_balance": "20", "quota_sum": "300"}
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid",
+        extra={"cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device"},
+    )
+
+    result = platform.execute_action("daily_sign_in", account, {})
+
+    assert result["ok"] is True
+    assert result["data"]["daily_sign_in_status"] == "panel_unavailable"
+    assert result["data"]["daily_sign_error"]
+    assert result["data"]["quota_balance"] == "20"
+    assert ("sign",) not in events
+
+
+def test_lingya_qq_sign_in_endpoints_match_observed_flow():
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ret": 0, "data": {}}
+
+    client = LingYaQQClient(vdevice_guid="device")
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    client.session.post = fake_post
+    client.get_credits_panel(False)
+    client.credits_panel_sign_in()
+
+    assert calls[0][0].endswith("/trpc.caotai.task_adapter.TaskAdapter/GetCreditsPanel")
+    assert calls[0][1]["json"] == {"is_first_register": False}
+    assert calls[1][0].endswith("/trpc.caotai.task_adapter.TaskAdapter/CreditsPanelSignIn")
+    assert "json" not in calls[1][1]
+    assert "Content-Type" not in calls[1][1]["headers"]
+
+
 def test_lingya_qq_publish_work_flow(monkeypatch):
     events = []
 
