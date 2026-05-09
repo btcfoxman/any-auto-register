@@ -851,7 +851,6 @@ class LingYaQQPlatform(BasePlatform):
             7200,
         )
         cancel_check = params.get("_cancel_check") if callable(params.get("_cancel_check")) else None
-        proxy_url = str(source.get("proxy_url") or source.get("proxy") or (self.config.proxy if self.config else "") or "").strip() or None
         defaults = {
             "cover_url": self._runtime_value(source, params, "lingya_qq_publish_cover_url", ""),
             "title": self._runtime_value(source, params, "lingya_qq_publish_title", ""),
@@ -860,11 +859,11 @@ class LingYaQQPlatform(BasePlatform):
             "cover_ratio": self._runtime_value(source, params, "lingya_qq_publish_cover_ratio", 0.75),
         }
 
-        self.log("LingYaQQ publish: fetching work asset from source URL")
+        self.log("LingYaQQ publish: fetching work asset from source URL by direct connection")
         asset = fetch_lingya_qq_publish_asset(
             source_url,
             timeout=source_timeout,
-            proxy=proxy_url,
+            proxy=None,
             retries=source_retries,
             defaults=defaults,
         )

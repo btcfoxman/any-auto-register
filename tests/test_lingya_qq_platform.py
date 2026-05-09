@@ -581,10 +581,12 @@ def test_lingya_qq_sign_in_endpoints_match_observed_flow():
 
 def test_lingya_qq_publish_work_flow(monkeypatch):
     events = []
+    fetch_calls = []
 
     class FakeClient:
         def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
             self.vdevice_guid = vdevice_guid
+            events.append(("client_proxy", proxy))
 
         def upload_image_bytes(self, image_bytes, *, filename="cover.jpg", content_type=None):
             events.append(("cover", filename, content_type, image_bytes))
@@ -627,9 +629,9 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             return {"quota_balance": "300", "quota_sum": "300"}
 
     monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
-    monkeypatch.setattr(
-        "platforms.lingya_qq.plugin.fetch_lingya_qq_publish_asset",
-        lambda *args, **kwargs: LingYaQQPublishAsset(
+    def fake_fetch_asset(*args, **kwargs):
+        fetch_calls.append((args, kwargs))
+        return LingYaQQPublishAsset(
             title="publish title",
             description="",
             video_bytes=b"video-bytes",
@@ -640,12 +642,14 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             cover_content_type="image/jpeg",
             duration=16,
             cover_ratio=0.75,
-        ),
-    )
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.fetch_lingya_qq_publish_asset", fake_fetch_asset)
 
     platform = LingYaQQPlatform(
         config=RegisterConfig(
             executor_type="manual_assisted",
+            proxy="http://config-proxy.example:8080",
             extra={"lingya_qq_publish_source_url": "https://example.com/work"},
         )
     )
@@ -654,7 +658,10 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
         email="+8613800138000",
         password="",
         user_id="vuid",
-        extra={"cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device"},
+        extra={
+            "cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device",
+            "proxy_url": "http://account-proxy.example:8080",
+        },
     )
 
     result = platform.execute_action(
@@ -674,5 +681,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert data["last_publish_vid"] == "vid123"
     assert data["last_publish_status"] == "released"
     assert data["quota_balance"] == "300"
+    assert fetch_calls[0][1]["proxy"] is None
+    assert ("client_proxy", "http://account-proxy.example:8080") in events
     assert ("upload_work", 2, "vid123", "publish title") in events
     assert ("upload_work", 1, "vid123", "publish title") in events

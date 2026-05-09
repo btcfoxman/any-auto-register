@@ -62,6 +62,10 @@ Useful extra fields:
 - `lingya_qq_publish_poll_interval`: defaults to `60`
 - `lingya_qq_publish_timeout`: defaults to `7200`
 
+The third-party publish source URL is fetched by direct connection. Account
+proxy settings are still used for Lingya account requests and uploads, but they
+are not applied to the external material source.
+
 The publish source may return JSON such as:
 
 ```json
