@@ -258,6 +258,25 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
         ):
             if data.get(key) not in (None, ""):
                 overview[key] = data.get(key)
+        publish_config = {
+            key: data.get(key)
+            for key in (
+                "lingya_qq_publish_source_url",
+                "lingya_qq_publish_source_timeout",
+                "lingya_qq_publish_source_retries",
+                "lingya_qq_publish_cover_url",
+                "lingya_qq_publish_initial_delay",
+                "lingya_qq_publish_poll_interval",
+                "lingya_qq_publish_timeout",
+                "lingya_qq_publish_generation_timeout",
+                "lingya_qq_publish_generation_poll_interval",
+            )
+            if data.get(key) not in (None, "")
+        }
+        if publish_config:
+            legacy_extra = dict(overview.get("legacy_extra") or {})
+            legacy_extra.update(publish_config)
+            overview["legacy_extra"] = legacy_extra
         if data.get("phone"):
             overview["remote_email"] = str(data.get("phone") or "")
         if data.get("quota_balance") not in (None, "") or data.get("quota_sum") not in (None, ""):

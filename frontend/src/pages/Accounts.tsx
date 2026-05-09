@@ -157,16 +157,77 @@ async function loadPlatformActions(platform: string, options?: { force?: boolean
   return pending
 }
 
+const ACTION_PARAM_STORAGE_PREFIX = 'any-auto-register:action-params'
+const ACTION_PARAM_DEFAULT_KEYS: Record<string, Record<string, string>> = {
+  publish_work: {
+    source_url: 'lingya_qq_publish_source_url',
+    source_timeout: 'lingya_qq_publish_source_timeout',
+    source_retries: 'lingya_qq_publish_source_retries',
+    initial_delay: 'lingya_qq_publish_initial_delay',
+    poll_interval: 'lingya_qq_publish_poll_interval',
+    timeout: 'lingya_qq_publish_timeout',
+    generation_timeout: 'lingya_qq_publish_generation_timeout',
+    generation_poll_interval: 'lingya_qq_publish_generation_poll_interval',
+  },
+}
+
+function actionParamStorageKey(platform: string, actionId: string) {
+  return `${ACTION_PARAM_STORAGE_PREFIX}:${platform || 'unknown'}:${actionId || 'unknown'}`
+}
+
+function readRememberedActionParams(platform: string, actionId: string): Record<string, string> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(actionParamStorageKey(platform, actionId))
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function rememberActionParams(platform: string, actionId: string, params: Record<string, any>) {
+  if (typeof window === 'undefined') return
+  const payload = Object.fromEntries(
+    Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== ''),
+  )
+  if (Object.keys(payload).length === 0) return
+  try {
+    window.localStorage.setItem(actionParamStorageKey(platform, actionId), JSON.stringify(payload))
+  } catch {
+    // ignore local storage failures
+  }
+}
+
+function accountActionParamDefault(actionId: string, paramKey: string, acc: any) {
+  const mappedKey = ACTION_PARAM_DEFAULT_KEYS[actionId]?.[paramKey]
+  if (!mappedKey) return ''
+  const overview = getAccountOverview(acc)
+  const legacyExtra = overview?.legacy_extra && typeof overview.legacy_extra === 'object' ? overview.legacy_extra : {}
+  const candidates = [
+    legacyExtra[mappedKey],
+    overview?.[mappedKey],
+    acc?.[mappedKey],
+  ]
+  const value = candidates.find(item => item !== undefined && item !== null && String(item).trim() !== '')
+  return value === undefined ? '' : String(value)
+}
+
 function buildActionParamDraft(action: any, acc: any) {
   const params = Array.isArray(action?.params) ? action.params : []
   const emailPrefix = String(acc?.email || '').split('@')[0] || 'Development'
+  const remembered = readRememberedActionParams(acc?.platform || '', action?.id || '')
   const draft: Record<string, string> = {}
   params.forEach((param: any) => {
+    const key = param?.key || ''
     if (action?.id === 'create_api_key' && param?.key === 'name') {
       draft[param.key] = `${emailPrefix}Development`
       return
     }
-    draft[param?.key || ''] = ''
+    const rememberedValue = remembered[key]
+    draft[key] = rememberedValue !== undefined && rememberedValue !== null && String(rememberedValue).trim() !== ''
+      ? String(rememberedValue)
+      : accountActionParamDefault(action?.id || '', key, acc)
   })
   return draft
 }
@@ -1219,6 +1280,7 @@ function ActionMenu({
           onSubmit={(params) => {
             const action = pendingAction.action
             setPendingAction(null)
+            rememberActionParams(acc.platform, action.id, params)
             runAction(action, params)
           }}
         />

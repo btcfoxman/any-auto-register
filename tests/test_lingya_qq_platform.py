@@ -3,7 +3,7 @@
 from core.base_platform import Account, RegisterConfig
 from core.base_sms import SmsActivation
 from core.registry import get, load_all
-from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS
+from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS, _build_account_overview
 from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES, build_lingya_qq_account_fields
 from platforms.lingya_qq.core import LingYaQQClient
 from platforms.lingya_qq.plugin import LingYaQQPlatform, _resolve_sms_runtime
@@ -31,6 +31,9 @@ def test_lingya_qq_exposes_relogin_sms_action():
     assert any(item["id"] == "sync_lingya2api" for item in actions)
     assert any(item["id"] == "daily_sign_in" for item in actions)
     assert any(item["id"] == "publish_work" for item in actions)
+    publish_action = next(item for item in actions if item["id"] == "publish_work")
+    publish_param_keys = {item["key"] for item in publish_action["params"]}
+    assert {"source_url", "source_timeout", "source_retries", "initial_delay", "poll_interval", "timeout"} <= publish_param_keys
     assert "relogin_sms" in STATEFUL_ACTION_IDS
     assert "keepalive_sync" in STATEFUL_ACTION_IDS
     assert "sync_lingya2api" in STATEFUL_ACTION_IDS
@@ -582,6 +585,7 @@ def test_lingya_qq_sign_in_endpoints_match_observed_flow():
 def test_lingya_qq_publish_work_flow(monkeypatch):
     events = []
     fetch_calls = []
+    saved_defaults = []
 
     class FakeClient:
         def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
@@ -645,6 +649,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
         )
 
     monkeypatch.setattr("platforms.lingya_qq.plugin.fetch_lingya_qq_publish_asset", fake_fetch_asset)
+    monkeypatch.setattr("platforms.lingya_qq.plugin._set_global_config_values", lambda values: saved_defaults.append(dict(values)))
 
     platform = LingYaQQPlatform(
         config=RegisterConfig(
@@ -669,6 +674,8 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
         account,
         {
             "initial_delay": "0",
+            "source_timeout": "12",
+            "source_retries": "4",
             "poll_interval": "0",
             "timeout": "1",
             "generation_timeout": "1",
@@ -681,7 +688,33 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert data["last_publish_vid"] == "vid123"
     assert data["last_publish_status"] == "released"
     assert data["quota_balance"] == "300"
+    assert data["lingya_qq_publish_source_url"] == "https://example.com/work"
+    assert data["lingya_qq_publish_source_timeout"] == 12
+    assert data["lingya_qq_publish_source_retries"] == 4
+    assert saved_defaults[0]["lingya_qq_publish_source_timeout"] == 12
     assert fetch_calls[0][1]["proxy"] is None
+    assert fetch_calls[0][1]["timeout"] == 12
+    assert fetch_calls[0][1]["retries"] == 4
     assert ("client_proxy", "http://account-proxy.example:8080") in events
     assert ("upload_work", 2, "vid123", "publish title") in events
     assert ("upload_work", 1, "vid123", "publish title") in events
+
+
+def test_lingya_qq_publish_defaults_are_kept_in_account_overview():
+    overview = _build_account_overview(
+        "lingya_qq",
+        {
+            "valid": True,
+            "last_publish_status": "released",
+            "lingya_qq_publish_source_url": "https://example.com/work",
+            "lingya_qq_publish_source_timeout": 12,
+            "lingya_qq_publish_source_retries": 4,
+            "lingya_qq_publish_initial_delay": 30,
+            "lingya_qq_publish_timeout": 7200,
+        },
+    )
+
+    legacy_extra = overview["legacy_extra"]
+    assert legacy_extra["lingya_qq_publish_source_url"] == "https://example.com/work"
+    assert legacy_extra["lingya_qq_publish_source_timeout"] == 12
+    assert legacy_extra["lingya_qq_publish_source_retries"] == 4

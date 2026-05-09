@@ -54,6 +54,22 @@ def _global_config_value(key: str, default: Any = "") -> Any:
         return default
 
 
+def _set_global_config_values(values: dict[str, Any]) -> None:
+    payload = {
+        key: str(value)
+        for key, value in values.items()
+        if key and value not in (None, "")
+    }
+    if not payload:
+        return
+    try:
+        from core.config_store import config_store
+
+        config_store.set_many(payload)
+    except Exception:
+        return
+
+
 def _first_value(*values: Any, default: Any = "") -> Any:
     for value in values:
         if value not in (None, ""):
@@ -296,6 +312,8 @@ class LingYaQQPlatform(BasePlatform):
                 "sync": False,
                 "params": [
                     {"key": "source_url", "label": "Third-party GET source URL", "type": "text"},
+                    {"key": "source_timeout", "label": "Source request timeout seconds", "type": "number"},
+                    {"key": "source_retries", "label": "Source request retries", "type": "number"},
                     {"key": "initial_delay", "label": "Audit initial delay seconds", "type": "number"},
                     {"key": "poll_interval", "label": "Audit poll interval seconds", "type": "number"},
                     {"key": "timeout", "label": "Audit timeout seconds", "type": "number"},
@@ -858,6 +876,19 @@ class LingYaQQPlatform(BasePlatform):
             "duration": self._runtime_value(source, params, "lingya_qq_publish_duration", 10),
             "cover_ratio": self._runtime_value(source, params, "lingya_qq_publish_cover_ratio", 0.75),
         }
+        publish_defaults = {
+            "lingya_qq_publish_source_url": source_url,
+            "lingya_qq_publish_source_timeout": source_timeout,
+            "lingya_qq_publish_source_retries": source_retries,
+            "lingya_qq_publish_initial_delay": initial_delay,
+            "lingya_qq_publish_poll_interval": poll_interval,
+            "lingya_qq_publish_timeout": publish_timeout,
+            "lingya_qq_publish_generation_timeout": generation_timeout,
+            "lingya_qq_publish_generation_poll_interval": generation_poll_interval,
+        }
+        if defaults.get("cover_url"):
+            publish_defaults["lingya_qq_publish_cover_url"] = defaults["cover_url"]
+        _set_global_config_values(publish_defaults)
 
         self.log("LingYaQQ publish: fetching work asset from source URL by direct connection")
         asset = fetch_lingya_qq_publish_asset(
@@ -969,6 +1000,7 @@ class LingYaQQPlatform(BasePlatform):
                 "last_publish_at": int(time.time()),
                 "last_publish_review_result": review_result,
                 "last_publish_generation_statuses": self._work_generation_statuses(generation),
+                **publish_defaults,
                 **quota_overview,
             },
         }

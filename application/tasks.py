@@ -509,6 +509,27 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
         if data.get(key) not in (None, ""):
             extra[key] = data.get(key)
             overview[key] = data.get(key)
+    publish_config_keys = {
+        "lingya_qq_publish_source_url",
+        "lingya_qq_publish_source_timeout",
+        "lingya_qq_publish_source_retries",
+        "lingya_qq_publish_cover_url",
+        "lingya_qq_publish_initial_delay",
+        "lingya_qq_publish_poll_interval",
+        "lingya_qq_publish_timeout",
+        "lingya_qq_publish_generation_timeout",
+        "lingya_qq_publish_generation_poll_interval",
+    }
+    publish_config = {
+        key: data.get(key)
+        for key in publish_config_keys
+        if data.get(key) not in (None, "")
+    }
+    if publish_config:
+        legacy_extra = dict(overview.get("legacy_extra") or {})
+        legacy_extra.update(publish_config)
+        overview["legacy_extra"] = legacy_extra
+        extra.update(publish_config)
     quota = {
         "quota_balance": data.get("quota_balance"),
         "quota_sum": data.get("quota_sum"),
