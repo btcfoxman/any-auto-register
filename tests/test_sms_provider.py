@@ -84,9 +84,19 @@ class TestCreateSmsProvider:
             create_sms_provider("uomsg_api", {})
 
     def test_haozhuma(self):
-        provider = create_sms_provider("haozhuma_api", {"haozhuma_token": "tok123", "haozhuma_sid": "1000"})
+        provider = create_sms_provider(
+            "haozhuma_api",
+            {
+                "haozhuma_user": "user1",
+                "haozhuma_password": "pass1",
+                "haozhuma_cached_token": "cached-token",
+                "haozhuma_sid": "1000",
+            },
+        )
         assert isinstance(provider, HaoZhuMaProvider)
-        assert provider.token == "tok123"
+        assert provider.user == "user1"
+        assert provider.password == "pass1"
+        assert provider.token == "cached-token"
         assert provider.sid == "1000"
 
     def test_haozhuma_missing_auth(self):
@@ -257,6 +267,8 @@ class TestHaoZhuMaProvider:
         def fake_get(url, params=None, timeout=20, proxies=None):
             calls.append((url, dict(params or {}), timeout, proxies))
             api = (params or {}).get("api")
+            if api == "login":
+                return FakeResponse({"code": "0", "msg": "success", "token": "tok123"})
             if api == "getPhone":
                 return FakeResponse({"code": "0", "sid": "1000", "phone": "16512345678", "country_code": "cn"})
             if api == "getMessage":
@@ -269,18 +281,117 @@ class TestHaoZhuMaProvider:
 
         monkeypatch.setattr("core.base_sms.requests.get", fake_get)
 
-        provider = HaoZhuMaProvider("tok", sid="1000", province="44", poll_interval=1)
+        stored_tokens = []
+        provider = HaoZhuMaProvider(
+            user="user1",
+            password="pass1",
+            sid="1000",
+            province="44",
+            poll_interval=1,
+            token_store=stored_tokens.append,
+        )
         activation = provider.get_number(service="qq")
         assert activation.activation_id == "16512345678"
         assert activation.metadata["sid"] == "1000"
         assert provider.get_code(activation.activation_id, timeout=5) == "654321"
         assert provider.report_success(activation.activation_id) is True
-        assert calls[0][1] == {"api": "getPhone", "token": "tok", "sid": "1000", "Province": "44"}
-        assert calls[1][1] == {"api": "getMessage", "token": "tok", "sid": "1000", "phone": "16512345678"}
-        assert calls[2][1] == {"api": "cancelRecv", "token": "tok", "sid": "1000", "phone": "16512345678"}
-        assert calls[3][1] == {"api": "addBlacklist", "token": "tok", "sid": "1000", "phone": "16512345678"}
+        assert calls[0][1] == {"api": "login", "user": "user1", "pass": "pass1"}
+        assert calls[1][1] == {"api": "getPhone", "token": "tok123", "sid": "1000", "Province": "44"}
+        assert calls[2][1] == {"api": "getMessage", "token": "tok123", "sid": "1000", "phone": "16512345678"}
+        assert calls[3][1] == {"api": "cancelRecv", "token": "tok123", "sid": "1000", "phone": "16512345678"}
+        assert calls[4][1] == {"api": "addBlacklist", "token": "tok123", "sid": "1000", "phone": "16512345678"}
+        assert len([call for call in calls if call[1]["api"] == "login"]) == 1
+        assert stored_tokens == ["tok123"]
         provider.cancel(activation.activation_id)
         assert len([call for call in calls if call[1]["api"] == "cancelRecv"]) == 1
+
+    def test_cached_token_is_refreshed_once_when_rejected(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            api = (params or {}).get("api")
+            if api == "getSummary" and (params or {}).get("token") == "stale-token":
+                return FakeResponse({"code": "-1", "msg": "token invalid"})
+            if api == "login":
+                return FakeResponse({"code": "0", "msg": "success", "token": "fresh-token"})
+            if api == "getSummary":
+                return FakeResponse({"code": "0", "money": "36.00", "num": 50})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        stored_tokens = []
+
+        provider = HaoZhuMaProvider(
+            user="user1",
+            password="pass1",
+            token="stale-token",
+            sid="1000",
+            token_store=stored_tokens.append,
+        )
+
+        assert provider.get_balance() == 36.0
+        assert [call["api"] for call in calls] == ["getSummary", "login", "getSummary"]
+        assert calls[0]["token"] == "stale-token"
+        assert calls[2]["token"] == "fresh-token"
+        assert stored_tokens == ["fresh-token"]
+
+    def test_factory_persists_login_token_to_provider_setting(self, monkeypatch):
+        from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            api = (params or {}).get("api")
+            if api == "login":
+                return FakeResponse({"code": "0", "msg": "success", "token": "persisted-token"})
+            if api == "getSummary":
+                return FakeResponse({"code": "0", "money": "36.00", "num": 50})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        repo = ProviderSettingsRepository()
+        repo.save(
+            setting_id=None,
+            provider_type="sms",
+            provider_key="haozhuma_api",
+            display_name="HaoZhuMa",
+            auth_mode="password",
+            enabled=True,
+            is_default=True,
+            config={"haozhuma_sid": "1000"},
+            auth={"haozhuma_user": "user1", "haozhuma_password": "pass1"},
+            metadata={},
+        )
+        settings = repo.resolve_runtime_settings("sms", "haozhuma_api", {})
+
+        provider = create_sms_provider("haozhuma_api", settings)
+        assert provider.get_balance() == 36.0
+
+        saved = repo.get_by_key("sms", "haozhuma_api")
+        assert saved is not None
+        assert saved.get_auth()["haozhuma_cached_token"] == "persisted-token"
 
     def test_timeout_releases_and_blacklists(self, monkeypatch):
         calls = []
@@ -306,7 +417,7 @@ class TestHaoZhuMaProvider:
         monkeypatch.setattr("core.base_sms.requests.get", fake_get)
         monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
 
-        provider = HaoZhuMaProvider("tok", sid="1000", poll_interval=1)
+        provider = HaoZhuMaProvider(user="user1", password="pass1", token="tok123", sid="1000", poll_interval=1)
         provider._activation_sids["16512345678"] = "1000"
 
         assert provider.get_code("16512345678", timeout=0) == ""

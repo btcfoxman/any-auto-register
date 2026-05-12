@@ -29,7 +29,9 @@ def test_config_options_include_haozhuma_provider(client):
     providers = data["sms_providers"]
     haozhuma = next(item for item in providers if item["value"] == "haozhuma_api")
     assert haozhuma["label"] == "HaoZhuMa"
-    assert any(field["key"] == "haozhuma_token" for field in haozhuma["fields"])
+    assert not any(field["key"] == "haozhuma_token" for field in haozhuma["fields"])
+    assert any(field["key"] == "haozhuma_user" for field in haozhuma["fields"])
+    assert any(field["key"] == "haozhuma_password" for field in haozhuma["fields"])
     assert any(field["key"] == "haozhuma_sid" for field in haozhuma["fields"])
 
 
@@ -65,10 +67,13 @@ def test_uomsg_balance_endpoint_requires_token(client):
     assert "UOMsg API Token" in resp.json()["detail"]
 
 
-def test_haozhuma_balance_endpoint_accepts_inline_token(client, monkeypatch):
+def test_haozhuma_balance_endpoint_accepts_inline_credentials(client, monkeypatch):
     monkeypatch.setattr("core.base_sms.HaoZhuMaProvider.get_balance", lambda self: 18.5)
 
-    resp = client.post("/api/sms/haozhuma/balance", json={"token": "tok123", "sid": "1000"})
+    resp = client.post(
+        "/api/sms/haozhuma/balance",
+        json={"user": "user1", "password": "pass1", "sid": "1000"},
+    )
 
     assert resp.status_code == 200
     assert resp.json() == {"balance": 18.5}
@@ -78,4 +83,4 @@ def test_haozhuma_balance_endpoint_requires_auth(client):
     resp = client.post("/api/sms/haozhuma/balance", json={})
 
     assert resp.status_code == 400
-    assert "HaoZhuMa API Token" in resp.json()["detail"]
+    assert "HaoZhuMa API 账号密码" in resp.json()["detail"]

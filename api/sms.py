@@ -265,7 +265,6 @@ def uomsg_balance(body: UOMsgQueryRequest | None = None):
 # ── HaoZhuMa endpoints ──────────────────────────────────────────────────────
 
 class HaoZhuMaQueryRequest(BaseModel):
-    token: str = ""
     user: str = ""
     password: str = ""
     sid: str = ""
@@ -279,13 +278,21 @@ def _saved_haozhuma_config() -> dict:
 def _haozhuma_from_payload(payload: HaoZhuMaQueryRequest | None = None) -> HaoZhuMaProvider:
     payload = payload or HaoZhuMaQueryRequest()
     saved = _saved_haozhuma_config()
+    inline_auth = bool(str(payload.user or "").strip() or str(payload.password or "").strip())
+
+    def _store_token(token: str) -> None:
+        if inline_auth:
+            return
+        ProviderSettingsRepository().update_auth_values("sms", "haozhuma_api", {"haozhuma_cached_token": token})
+
     return HaoZhuMaProvider(
-        token=str(payload.token or saved.get("haozhuma_token") or saved.get("token") or "").strip(),
+        token=str(saved.get("haozhuma_cached_token") or "").strip(),
         user=str(payload.user or saved.get("haozhuma_user") or saved.get("haozhuma_username") or "").strip(),
         password=str(payload.password or saved.get("haozhuma_password") or "").strip(),
         sid=str(payload.sid or saved.get("haozhuma_sid") or saved.get("sms_service") or "").strip(),
         proxy=str(payload.proxy or saved.get("sms_proxy") or saved.get("proxy") or "") or None,
         base_url=str(saved.get("haozhuma_base_url") or "").strip(),
+        token_store=_store_token,
     )
 
 
@@ -293,8 +300,8 @@ def _haozhuma_from_payload(payload: HaoZhuMaQueryRequest | None = None) -> HaoZh
 def haozhuma_balance(body: HaoZhuMaQueryRequest | None = None):
     body = body or HaoZhuMaQueryRequest()
     provider = _haozhuma_from_payload(body)
-    if not provider.token and not (provider.user and provider.password):
-        raise HTTPException(400, "HaoZhuMa API Token 或账号密码未配置")
+    if not provider.user or not provider.password:
+        raise HTTPException(400, "HaoZhuMa API 账号密码未配置")
     try:
         return {"balance": provider.get_balance()}
     except Exception as exc:

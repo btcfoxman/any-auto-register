@@ -36,6 +36,26 @@ class ProviderSettingsRepository:
                 .where(ProviderSettingModel.provider_key == provider_key)
             ).first()
 
+    def update_auth_values(self, provider_type: str, provider_key: str, updates: dict) -> bool:
+        clean_updates = {str(key): value for key, value in dict(updates or {}).items() if value not in (None, "")}
+        if not clean_updates:
+            return False
+        with Session(engine) as session:
+            item = session.exec(
+                select(ProviderSettingModel)
+                .where(ProviderSettingModel.provider_type == provider_type)
+                .where(ProviderSettingModel.provider_key == provider_key)
+            ).first()
+            if not item:
+                return False
+            auth = item.get_auth()
+            auth.update(clean_updates)
+            item.set_auth(auth)
+            item.updated_at = _utcnow()
+            session.add(item)
+            session.commit()
+            return True
+
     def resolve_runtime_settings(self, provider_type: str, provider_key: str, overrides: dict | None = None) -> dict:
         definition = self.definitions.get_by_key(provider_type, provider_key)
         item = self.get_by_key(provider_type, provider_key)

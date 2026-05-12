@@ -1224,10 +1224,10 @@ class HaoZhuMaProvider(BaseSmsProvider):
 
     def __init__(
         self,
-        token: str = "",
         *,
         user: str = "",
         password: str = "",
+        token: str = "",
         sid: str = "",
         phone: str = "",
         isp: str = "",
@@ -1240,6 +1240,7 @@ class HaoZhuMaProvider(BaseSmsProvider):
         poll_interval: int = 15,
         proxy: str | None = None,
         base_url: str = "",
+        token_store: Callable[[str], None] | None = None,
     ):
         self.token = str(token or "").strip()
         self.user = str(user or "").strip()
@@ -1256,25 +1257,36 @@ class HaoZhuMaProvider(BaseSmsProvider):
         self.poll_interval = max(1, _safe_int(poll_interval, 15))
         self.base_url = str(base_url or self.BASE_URL).strip() or self.BASE_URL
         self.proxies = {"http": proxy, "https": proxy} if proxy else None
+        self._token_store = token_store
         self._activation_sids: dict[str, str] = {}
         self._closed_activations: set[str] = set()
 
-    def _request(self, api: str, *, needs_token: bool = True, **params) -> dict:
-        payload = {"api": api}
-        if needs_token:
-            payload["token"] = self._token()
-        for key, value in params.items():
-            if value not in (None, ""):
-                payload[key] = value
+    def _send_request(self, payload: dict[str, str]) -> dict:
         resp = requests.get(self.base_url, params=payload, timeout=20, proxies=self.proxies)
         resp.raise_for_status()
         try:
             data = resp.json()
         except ValueError as exc:
-            raise RuntimeError(f"HaoZhuMa {api} returned invalid JSON: {resp.text[:200]}") from exc
+            raise RuntimeError(f"HaoZhuMa {payload.get('api')} returned invalid JSON: {resp.text[:200]}") from exc
         if not isinstance(data, dict):
-            raise RuntimeError(f"HaoZhuMa {api} returned unexpected response: {data!r}")
+            raise RuntimeError(f"HaoZhuMa {payload.get('api')} returned unexpected response: {data!r}")
+        return data
+
+    def _request(self, api: str, *, needs_token: bool = True, **params) -> dict:
+        payload = {"api": api}
+        used_cached_token = bool(self.token)
+        if needs_token:
+            payload["token"] = self._token()
+        for key, value in params.items():
+            if value not in (None, ""):
+                payload[key] = value
+        data = self._send_request(payload)
         code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"} and needs_token and used_cached_token and self.user and self.password:
+            self.token = ""
+            payload["token"] = self._token()
+            data = self._send_request(payload)
+            code = str(data.get("code", "")).strip()
         if code not in {"0", "200"}:
             raise RuntimeError(f"HaoZhuMa {api} failed: {data.get('msg') or data}")
         return data
@@ -1283,11 +1295,16 @@ class HaoZhuMaProvider(BaseSmsProvider):
         if self.token:
             return self.token
         if not self.user or not self.password:
-            raise RuntimeError("HaoZhuMa 未配置 API Token 或账号密码")
+            raise RuntimeError("HaoZhuMa 未配置 API 账号密码")
         data = self._request("login", needs_token=False, user=self.user, **{"pass": self.password})
         self.token = str(data.get("token") or "").strip()
         if not self.token:
             raise RuntimeError(f"HaoZhuMa login did not return token: {data}")
+        if self._token_store:
+            try:
+                self._token_store(self.token)
+            except Exception as exc:
+                logger.warning("HaoZhuMa cached token store failed: %s", exc)
         return self.token
 
     def _sid(self, service: str = "") -> str:
@@ -1412,6 +1429,28 @@ def is_herosms_phone_cache_alive(config: dict | None = None) -> tuple[bool, dict
     return bool(info.get("alive")), info
 
 
+def _haozhuma_token_store(provider_key: str) -> Callable[[str], None]:
+    keys = [provider_key]
+    if provider_key != "haozhuma_api":
+        keys.append("haozhuma_api")
+
+    def _store(token: str) -> None:
+        cached_token = str(token or "").strip()
+        if not cached_token:
+            return
+        try:
+            from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+            repo = ProviderSettingsRepository()
+            for key in keys:
+                if repo.update_auth_values("sms", key, {"haozhuma_cached_token": cached_token}):
+                    return
+        except Exception as exc:
+            logger.warning("HaoZhuMa cached token persistence failed: %s", exc)
+
+    return _store
+
+
 # ---------------------------------------------------------------------------
 # Factory and browser callback adapter
 # ---------------------------------------------------------------------------
@@ -1468,15 +1507,14 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             base_url=str(config.get("uomsg_base_url") or "").strip(),
         )
     if provider_key in ("haozhuma", "haozhuma_api"):
-        token = str(config.get("haozhuma_token") or config.get("token") or "").strip()
         user = str(config.get("haozhuma_user") or config.get("haozhuma_username") or "").strip()
         password = str(config.get("haozhuma_password") or "").strip()
-        if not token and not (user and password):
-            raise RuntimeError("HaoZhuMa 未配置 API Token 或账号密码")
+        if not user or not password:
+            raise RuntimeError("HaoZhuMa 未配置 API 账号密码")
         return HaoZhuMaProvider(
-            token=token,
             user=user,
             password=password,
+            token=str(config.get("haozhuma_cached_token") or "").strip(),
             sid=str(config.get("haozhuma_sid") or config.get("sms_service") or "").strip(),
             phone=str(config.get("haozhuma_phone") or "").strip(),
             isp=str(config.get("haozhuma_isp") or "").strip(),
@@ -1489,6 +1527,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             poll_interval=_safe_int(config.get("haozhuma_poll_interval"), 15),
             proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
             base_url=str(config.get("haozhuma_base_url") or "").strip(),
+            token_store=_haozhuma_token_store(provider_key),
         )
     raise RuntimeError(f"未知的接码服务: {provider_key}")
 

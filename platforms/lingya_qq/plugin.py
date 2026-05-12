@@ -96,7 +96,7 @@ def _resolve_sms_runtime(extra: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             provider_key = "herosms_api"
         elif extra.get("smsbower_api_key"):
             provider_key = "smsbower_api"
-        elif extra.get("haozhuma_token") or (extra.get("haozhuma_user") and extra.get("haozhuma_password")):
+        elif extra.get("haozhuma_user") and extra.get("haozhuma_password"):
             provider_key = "haozhuma_api"
     if not provider_key:
         raise RuntimeError("LingYaQQ requires an SMS provider. Configure a default SMS provider in Settings, or pass sms_provider and its API key in task parameters.")
