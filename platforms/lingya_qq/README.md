@@ -43,7 +43,7 @@ same fields so protocol login and browser-cookie import share one storage shape.
 Useful extra fields:
 
 - `lingya_qq_area_code`: defaults to `+86`
-- `lingya_qq_sms_timeout`: defaults to `600`
+- `lingya_qq_sms_timeout`: defaults to `300`
 - `lingya_qq_sms_service`: overrides SMS provider service code
 - `lingya_qq_http_timeout`: defaults to `20`
 - `lingya_qq_auto_send_sms`: experimental, defaults to disabled

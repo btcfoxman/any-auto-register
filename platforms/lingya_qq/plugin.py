@@ -337,7 +337,7 @@ class LingYaQQPlatform(BasePlatform):
         service = _resolve_sms_service(sms_settings, extra)
         country = _resolve_sms_country(sms_settings, extra)
         area_code = normalize_area_code(extra.get("lingya_qq_area_code") or extra.get("phone_area_code") or "+86")
-        timeout = _as_int(extra.get("lingya_qq_sms_timeout") or extra.get("sms_code_timeout"), 600)
+        timeout = _as_int(extra.get("lingya_qq_sms_timeout") or extra.get("sms_code_timeout"), 300)
 
         provider = create_sms_provider(provider_key, sms_settings)
         activation = None
@@ -475,7 +475,7 @@ class LingYaQQPlatform(BasePlatform):
 
         service = _resolve_sms_service(sms_settings, sms_extra)
         country = _resolve_sms_country(sms_settings, sms_extra)
-        timeout = _as_int(params.get("sms_timeout") or params.get("lingya_qq_sms_timeout") or 600, 600)
+        timeout = _as_int(params.get("sms_timeout") or params.get("lingya_qq_sms_timeout") or 300, 300)
         provider = create_sms_provider(provider_key, sms_settings)
         activation = None
         completed = False

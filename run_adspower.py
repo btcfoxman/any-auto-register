@@ -50,10 +50,10 @@ HEADERS = {"Content-Type": "application/json"}
 # 如果你的 AdsPower 环境编号刚好就是 3、4、5、6，也可以先这样用；
 # 否则请把 id 改成真实 profile_id / user_id。
 ENV_MAPPING: Dict[str, Dict[str, Any]] = {
-
-    "4": {"id": "kya11bb", "port": 20009},
-    "5": {"id": "kyydguy", "port": 20020},
-    "6": {"id": "k10ryn4a", "port": 20022},
+    # "3": {"id": "3", "port": 20009},
+    "4": {"id": "kya11bb", "port": 20005},
+    "5": {"id": "kyydguy", "port": 20013},
+    "6": {"id": "k10ryn4a", "port": 20014},
 }
 
 PROXY_SOFT = "other"
