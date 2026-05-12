@@ -10,11 +10,36 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
+_SMS_ACTIVE_NUMBER_LOCK = threading.Lock()
+_SMS_ACTIVE_NUMBERS: set[str] = set()
+
+
+def _sms_active_key(provider: str, phone: str) -> str:
+    return f"{provider}:{str(phone or '').strip()}"
+
+
+def _reserve_sms_number(provider: str, phone: str) -> bool:
+    key = _sms_active_key(provider, phone)
+    if key == f"{provider}:":
+        return False
+    with _SMS_ACTIVE_NUMBER_LOCK:
+        if key in _SMS_ACTIVE_NUMBERS:
+            return False
+        _SMS_ACTIVE_NUMBERS.add(key)
+        return True
+
+
+def _release_sms_number(provider: str, phone: str) -> None:
+    key = _sms_active_key(provider, phone)
+    if key == f"{provider}:":
+        return
+    with _SMS_ACTIVE_NUMBER_LOCK:
+        _SMS_ACTIVE_NUMBERS.discard(key)
 
 
 @dataclass
@@ -1060,6 +1085,7 @@ class UOMsgProvider(BaseSmsProvider):
     """UOMsg provider (api.uomsg.com)."""
 
     BASE_URL = UOMSG_DEFAULT_BASE_URL
+    PROVIDER_KEY = "uomsg"
 
     def __init__(
         self,
@@ -1115,15 +1141,23 @@ class UOMsgProvider(BaseSmsProvider):
         keyword = self._keyword_for(service)
         if not keyword:
             raise RuntimeError("UOMsg 需要配置短信关键词(uomsg_keyword)，否则无法按关键词读取短信")
-        phone = self._request(
-            "getPhone",
-            keyWord=keyword,
-            phone=self.phone,
-            province=country or self.province,
-            cardType=self.card_type,
-        ).strip()
+        phone = ""
+        for attempt in range(2):
+            phone = self._request(
+                "getPhone",
+                keyWord=keyword,
+                phone=self.phone,
+                province=country or self.province,
+                cardType=self.card_type,
+            ).strip()
+            if not phone:
+                raise RuntimeError("UOMsg getPhone 未返回手机号")
+            if _reserve_sms_number(self.PROVIDER_KEY, phone):
+                break
+            logger.warning("UOMsg getPhone returned duplicate active phone %s; retrying once", phone)
+            phone = ""
         if not phone:
-            raise RuntimeError("UOMsg getPhone 未返回手机号")
+            raise RuntimeError("UOMsg getPhone 连续返回已占用手机号，已放弃本次取号")
         self._activation_keywords[phone] = keyword
         return SmsActivation(
             activation_id=phone,
@@ -1182,8 +1216,12 @@ class UOMsgProvider(BaseSmsProvider):
         phone = str(activation_id or "").strip()
         if not phone:
             return False
-        self._request("release", phone=phone)
-        return True
+        try:
+            self._request("release", phone=phone)
+            return True
+        finally:
+            _release_sms_number(self.PROVIDER_KEY, phone)
+            self._activation_keywords.pop(phone, None)
 
     def report_success(self, activation_id: str) -> bool:
         return self.cancel(activation_id)
@@ -1192,8 +1230,12 @@ class UOMsgProvider(BaseSmsProvider):
         phone = str(activation_id or "").strip()
         if not phone:
             return False
-        self._request("block", phone=phone)
-        return True
+        try:
+            self._request("block", phone=phone)
+            return True
+        finally:
+            _release_sms_number(self.PROVIDER_KEY, phone)
+            self._activation_keywords.pop(phone, None)
 
     def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
         try:
@@ -1221,6 +1263,7 @@ class HaoZhuMaProvider(BaseSmsProvider):
     """HaoZhuMa provider (api.haozhuyun.com)."""
 
     BASE_URL = HAOZHUMA_DEFAULT_BASE_URL
+    PROVIDER_KEY = "haozhuma"
 
     def __init__(
         self,
@@ -1237,6 +1280,8 @@ class HaoZhuMaProvider(BaseSmsProvider):
         exclude: str = "",
         uid: str = "",
         author: str = "",
+        batch_size: int = 1,
+        batch_param: str = "num",
         poll_interval: int = 15,
         proxy: str | None = None,
         base_url: str = "",
@@ -1254,6 +1299,8 @@ class HaoZhuMaProvider(BaseSmsProvider):
         self.exclude = str(exclude or "").strip()
         self.uid = str(uid or "").strip()
         self.author = str(author or "").strip()
+        self.batch_size = max(1, _safe_int(batch_size, 1))
+        self.batch_param = str(batch_param or "num").strip() or "num"
         self.poll_interval = max(1, _safe_int(poll_interval, 15))
         self.base_url = str(base_url or self.BASE_URL).strip() or self.BASE_URL
         self.proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -1323,21 +1370,34 @@ class HaoZhuMaProvider(BaseSmsProvider):
 
     def get_number(self, *, service: str, country: str = "") -> SmsActivation:
         sid = self._sid(service)
-        data = self._request(
-            "getPhone",
-            sid=sid,
-            phone=self.phone,
-            isp=self.isp,
-            Province=country or self.province,
-            ascription=self.ascription,
-            paragraph=self.paragraph,
-            exclude=self.exclude,
-            uid=self.uid,
-            author=self.author,
-        )
-        phone = str(data.get("phone") or "").strip()
+        data: dict[str, Any] = {}
+        phone = ""
+        for attempt in range(2):
+            extra_params = {}
+            if self.batch_size > 1 and not self.phone:
+                extra_params[self.batch_param] = str(self.batch_size)
+            data = self._request(
+                "getPhone",
+                sid=sid,
+                phone=self.phone,
+                isp=self.isp,
+                Province=country or self.province,
+                ascription=self.ascription,
+                paragraph=self.paragraph,
+                exclude=self.exclude,
+                uid=self.uid,
+                author=self.author,
+                **extra_params,
+            )
+            for candidate in self._phone_candidates(data):
+                if _reserve_sms_number(self.PROVIDER_KEY, candidate):
+                    phone = candidate
+                    break
+                logger.warning("HaoZhuMa getPhone returned duplicate active phone %s; trying another candidate", candidate)
+            if phone:
+                break
         if not phone:
-            raise RuntimeError(f"HaoZhuMa getPhone 未返回手机号: {data}")
+            raise RuntimeError(f"HaoZhuMa getPhone 未返回可用手机号: {data}")
         self._activation_sids[phone] = str(data.get("sid") or sid).strip() or sid
         return SmsActivation(
             activation_id=phone,
@@ -1345,6 +1405,38 @@ class HaoZhuMaProvider(BaseSmsProvider):
             country=country or self.province or str(data.get("country_code") or ""),
             metadata={"sid": self._activation_sids[phone], "provider": "haozhuma", "raw": data},
         )
+
+    def _phone_candidates(self, data: dict[str, Any]) -> list[str]:
+        raw_values = [
+            data.get("phone"),
+            data.get("phones"),
+            data.get("phone_list"),
+            data.get("data"),
+            data.get("list"),
+        ]
+        candidates: list[str] = []
+
+        def add(value: Any) -> None:
+            if value in (None, ""):
+                return
+            if isinstance(value, dict):
+                add(value.get("phone") or value.get("mobile") or value.get("number"))
+                return
+            if isinstance(value, list):
+                for item in value:
+                    add(item)
+                return
+            text = str(value).strip()
+            if not text:
+                return
+            for part in re.split(r"[\s,|;]+", text):
+                phone = part.strip()
+                if phone and phone not in candidates:
+                    candidates.append(phone)
+
+        for value in raw_values:
+            add(value)
+        return candidates
 
     def get_code(self, activation_id: str, *, timeout: int = 120) -> str:
         phone = str(activation_id or "").strip()
@@ -1398,6 +1490,8 @@ class HaoZhuMaProvider(BaseSmsProvider):
             ok = False
             logger.warning("HaoZhuMa addBlacklist failed for %s: %s", phone, exc)
         self._closed_activations.add(phone)
+        _release_sms_number(self.PROVIDER_KEY, phone)
+        self._activation_sids.pop(phone, None)
         return ok
 
     def cancel(self, activation_id: str) -> bool:
@@ -1524,6 +1618,8 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             exclude=str(config.get("haozhuma_exclude") or "").strip(),
             uid=str(config.get("haozhuma_uid") or "").strip(),
             author=str(config.get("haozhuma_author") or "").strip(),
+            batch_size=_safe_int(config.get("haozhuma_batch_size"), 5),
+            batch_param=str(config.get("haozhuma_batch_param") or "num").strip(),
             poll_interval=_safe_int(config.get("haozhuma_poll_interval"), 15),
             proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
             base_url=str(config.get("haozhuma_base_url") or "").strip(),

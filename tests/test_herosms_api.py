@@ -33,6 +33,7 @@ def test_config_options_include_haozhuma_provider(client):
     assert any(field["key"] == "haozhuma_user" for field in haozhuma["fields"])
     assert any(field["key"] == "haozhuma_password" for field in haozhuma["fields"])
     assert any(field["key"] == "haozhuma_sid" for field in haozhuma["fields"])
+    assert any(field["key"] == "haozhuma_batch_size" for field in haozhuma["fields"])
 
 
 def test_herosms_balance_endpoint_accepts_inline_api_key(client, monkeypatch):

@@ -437,6 +437,8 @@ _BUILTIN_DEFINITIONS: list[dict] = [
             {"key": "haozhuma_ascription", "label": "号码类型（可选）", "placeholder": "1虚拟 / 2实卡", "category": "connection"},
             {"key": "haozhuma_phone", "label": "指定号码（可选）", "placeholder": "130xxxxxxxx", "category": "identity"},
             {"key": "haozhuma_uid", "label": "对接码 UID（可选）", "category": "connection"},
+            {"key": "haozhuma_batch_size", "label": "批量取号数量", "placeholder": "5", "category": "connection"},
+            {"key": "haozhuma_batch_param", "label": "批量参数名", "placeholder": "num", "category": "connection"},
             {"key": "haozhuma_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "15", "category": "connection"},
         ],
     },

@@ -39,6 +39,13 @@ def _safe_float(value, default: float) -> float:
         return default
 
 
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _provider_from_payload(payload: HeroSmsQueryRequest | None = None) -> HeroSmsProvider:
     payload = payload or HeroSmsQueryRequest()
     saved = _saved_herosms_config()
@@ -292,6 +299,8 @@ def _haozhuma_from_payload(payload: HaoZhuMaQueryRequest | None = None) -> HaoZh
         sid=str(payload.sid or saved.get("haozhuma_sid") or saved.get("sms_service") or "").strip(),
         proxy=str(payload.proxy or saved.get("sms_proxy") or saved.get("proxy") or "") or None,
         base_url=str(saved.get("haozhuma_base_url") or "").strip(),
+        batch_size=_safe_int(saved.get("haozhuma_batch_size"), 5),
+        batch_param=str(saved.get("haozhuma_batch_param") or "num").strip(),
         token_store=_store_token,
     )
 

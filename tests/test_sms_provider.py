@@ -168,9 +168,44 @@ class TestUOMsgProvider:
         monkeypatch.setattr("core.base_sms.requests.get", fake_get)
 
         provider = UOMsgProvider("tok")
-        provider.get_number(service="qq")
+        activation = provider.get_number(service="qq")
+        sms_module._release_sms_number("uomsg", activation.activation_id)
 
         assert seen["keyWord"] == "腾讯"
+
+    def test_duplicate_active_number_is_retried_once(self, monkeypatch):
+        responses = ["16511111111", "16511111111", "16522222222"]
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            code = (params or {}).get("code")
+            if code == "getPhone":
+                return FakeResponse(responses.pop(0))
+            if code == "release":
+                return FakeResponse("release ok")
+            raise AssertionError(f"unexpected code: {code}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider_a = UOMsgProvider("tok", default_keyword="qq")
+        provider_b = UOMsgProvider("tok", default_keyword="qq")
+        activation_a = provider_a.get_number(service="qq")
+        activation_b = provider_b.get_number(service="qq")
+
+        assert activation_a.phone_number == "16511111111"
+        assert activation_b.phone_number == "16522222222"
+        assert [call["code"] for call in calls[:3]] == ["getPhone", "getPhone", "getPhone"]
+
+        provider_a.cancel(activation_a.activation_id)
+        provider_b.cancel(activation_b.activation_id)
 
     def test_get_code_after_ignores_old_message(self, monkeypatch):
         messages = [
@@ -304,6 +339,47 @@ class TestHaoZhuMaProvider:
         assert stored_tokens == ["tok123"]
         provider.cancel(activation.activation_id)
         assert len([call for call in calls if call[1]["api"] == "cancelRecv"]) == 1
+
+    def test_get_number_uses_batch_param_and_skips_active_candidate(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            api = (params or {}).get("api")
+            if api == "getPhone" and len([call for call in calls if call["api"] == "getPhone"]) == 1:
+                return FakeResponse({"code": "0", "sid": "1000", "phone": "16511111111"})
+            if api == "getPhone":
+                return FakeResponse({"code": "0", "sid": "1000", "phone": ["16511111111", "16522222222"]})
+            if api in {"cancelRecv", "addBlacklist"}:
+                return FakeResponse({"code": "0", "msg": "ok"})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider_a = HaoZhuMaProvider(token="tok123", sid="1000", batch_size=5)
+        provider_b = HaoZhuMaProvider(token="tok123", sid="1000", batch_size=5)
+        activation_a = provider_a.get_number(service="qq")
+        activation_b = provider_b.get_number(service="qq")
+
+        assert activation_a.phone_number == "16511111111"
+        assert activation_b.phone_number == "16522222222"
+        get_phone_calls = [call for call in calls if call["api"] == "getPhone"]
+        assert get_phone_calls[0]["num"] == "5"
+        assert get_phone_calls[1]["num"] == "5"
+
+        provider_a.cancel(activation_a.activation_id)
+        provider_b.cancel(activation_b.activation_id)
 
     def test_cached_token_is_refreshed_once_when_rejected(self, monkeypatch):
         calls = []
