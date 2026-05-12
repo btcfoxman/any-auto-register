@@ -674,29 +674,38 @@ class LingYaQQPlatform(BasePlatform):
                 self.log(f"{provider_label} release failed; LingYaQQ relogin is still usable: {exc}")
             completed = True
             account_label = f"{area_code}{next_phone}"
+            data = {
+                **cookie_fields,
+                "message": "LingYaQQ relogin succeeded",
+                "session_refreshed": True,
+                "valid": True,
+                "phone": account_label,
+                "local_phone": next_phone,
+                "area_code": area_code,
+                "sms_provider": provider_key,
+                "phone_provider": provider_key,
+                "sms_activation_id": activation.activation_id,
+                "vuid": vuid,
+                "vusession": vusession,
+                "vurefresh": vurefresh,
+                "vusession_expire_timestamp": str(login_response.get("vusession_expire_timestamp") or ""),
+                "vusession_expire_in": int(login_response.get("vusession_expire_in") or 0),
+                "vdevice_guid": client.vdevice_guid,
+                "nick": nick,
+                "avatar": str(profile.get("avatar") or ((login_response.get("user_info") or {}).get("user_head")) or ""),
+                **quota_overview,
+            }
+            sync_result = sync_account_to_lingya2api(
+                _account_with_extra(account, {**account_source, **data}),
+                log_fn=self.log,
+                heartbeat=False,
+            )
+            data["lingya2api_synced"] = bool(sync_result)
+            if sync_result:
+                data["lingya2api"] = sync_result
             return {
                 "ok": True,
-                "data": {
-                    **cookie_fields,
-                    "message": "LingYaQQ relogin succeeded",
-                    "session_refreshed": True,
-                    "valid": True,
-                    "phone": account_label,
-                    "local_phone": next_phone,
-                    "area_code": area_code,
-                    "sms_provider": provider_key,
-                    "phone_provider": provider_key,
-                    "sms_activation_id": activation.activation_id,
-                    "vuid": vuid,
-                    "vusession": vusession,
-                    "vurefresh": vurefresh,
-                    "vusession_expire_timestamp": str(login_response.get("vusession_expire_timestamp") or ""),
-                    "vusession_expire_in": int(login_response.get("vusession_expire_in") or 0),
-                    "vdevice_guid": client.vdevice_guid,
-                    "nick": nick,
-                    "avatar": str(profile.get("avatar") or ((login_response.get("user_info") or {}).get("user_head")) or ""),
-                    **quota_overview,
-                },
+                "data": data,
             }
         finally:
             if activation and not completed:
