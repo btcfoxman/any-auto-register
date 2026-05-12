@@ -8,6 +8,7 @@ from core.base_platform import Account
 from core.lingya2api_sync import (
     Lingya2ApiClient,
     build_lingya2api_payload,
+    get_lingya2api_account_snapshot,
     sync_account_to_lingya2api,
 )
 
@@ -101,6 +102,20 @@ def test_lingya2api_client_upserts_account():
     assert post.call_args.kwargs["headers"]["x-api-key"] == "key"
 
 
+def test_lingya2api_client_lists_accounts():
+    resp = Mock()
+    resp.raise_for_status = Mock()
+    resp.json.return_value = [{"id": 1, "name": "acct", "status": "active"}]
+
+    with patch("core.lingya2api_sync.requests.get", return_value=resp) as get:
+        client = Lingya2ApiClient("http://localhost:8000/", "key")
+        result = client.list_accounts()
+
+    assert result[0]["status"] == "active"
+    assert get.call_args.args[0] == "http://localhost:8000/api/accounts"
+    assert get.call_args.kwargs["headers"]["x-api-key"] == "key"
+
+
 def test_sync_account_to_lingya2api_posts_and_heartbeats():
     account = Account(
         platform="lingya_qq",
@@ -138,3 +153,25 @@ def test_sync_account_to_lingya2api_skips_when_unconfigured():
         account = Account(platform="lingya_qq", email="acct", password="", extra={})
 
         assert sync_account_to_lingya2api(account) is False
+
+
+def test_get_lingya2api_account_snapshot_matches_by_identity():
+    account = Account(
+        platform="lingya_qq",
+        email="local-name",
+        password="",
+        extra={"cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device"},
+    )
+    resp = Mock()
+    resp.raise_for_status = Mock()
+    resp.json.return_value = [
+        {"id": 1, "name": "other", "vuserid": "other-vuid", "status": "error"},
+        {"id": 2, "name": "remote", "vuserid": "vuid", "status": "active", "last_balance": "9"},
+    ]
+
+    with patch("core.lingya2api_sync._get_lingya2api_config", return_value=("http://localhost:8000", "key", 1)):
+        with patch("core.lingya2api_sync.requests.get", return_value=resp):
+            snapshot = get_lingya2api_account_snapshot(account)
+
+    assert snapshot["id"] == 2
+    assert snapshot["status"] == "active"

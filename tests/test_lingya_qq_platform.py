@@ -243,6 +243,36 @@ def test_lingya_qq_check_valid(monkeypatch):
     assert platform.get_last_check_overview()["quota_sum"] == "2"
 
 
+def test_lingya_qq_check_valid_recovers_from_lingya2api_active_snapshot(monkeypatch):
+    class FailingPlatform(LingYaQQPlatform):
+        def _load_state(self, account):
+            raise RuntimeError("local cookie expired")
+
+    monkeypatch.setattr(
+        "platforms.lingya_qq.plugin.get_lingya2api_account_snapshot",
+        lambda account, log_fn=None: {
+            "status": "active",
+            "last_balance": "7",
+            "last_quota_sum": "10",
+            "last_heartbeat_at": "2026-05-13T00:00:00Z",
+        },
+    )
+    platform = FailingPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid",
+        extra={"cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device"},
+    )
+
+    assert platform.check_valid(account) is True
+    overview = platform.get_last_check_overview()
+    assert overview["valid"] is True
+    assert overview["lingya2api_status"] == "active"
+    assert overview["quota_balance"] == "7"
+
+
 def test_lingya_qq_relogin_sms_action(monkeypatch):
     events = []
 

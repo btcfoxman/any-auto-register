@@ -52,7 +52,7 @@ def _create_account(email: str, *, lifecycle_status: str = "registered", valid: 
         return int(model.id or 0)
 
 
-def test_check_all_task_skips_expired_and_invalid_accounts(monkeypatch):
+def test_lingya_check_all_task_rechecks_invalid_accounts_to_recover(monkeypatch):
     active_id = _create_account("active@example.com", valid=True)
     invalid_id = _create_account("invalid@example.com", valid=False)
     expired_id = _create_account("expired@example.com", lifecycle_status="expired", valid=True)
@@ -67,8 +67,33 @@ def test_check_all_task_skips_expired_and_invalid_accounts(monkeypatch):
     logger = _FakeLogger()
     _execute_account_check_all_task({"platform": "lingya_qq", "limit": 10}, logger)
 
+    assert set(checked_ids) == {active_id, invalid_id}
+    assert expired_id not in checked_ids
+    assert logger.result == {"valid": 2, "invalid": 0, "error": 0, "skipped": 1}
+    assert logger.status == TASK_STATUS_SUCCEEDED
+
+
+def test_non_lingya_check_all_task_skips_invalid_accounts(monkeypatch):
+    active_id = _create_account("active-chatgpt@example.com", valid=True)
+    invalid_id = _create_account("invalid-chatgpt@example.com", valid=False)
+    checked_ids = []
+
+    with Session(engine) as session:
+        for account_id in (active_id, invalid_id):
+            model = session.get(AccountModel, account_id)
+            model.platform = "chatgpt"
+            session.add(model)
+        session.commit()
+
+    def fake_run_single_account_check(account_id, logger):
+        checked_ids.append(account_id)
+        return True, {"valid": True}
+
+    monkeypatch.setattr("application.tasks._run_single_account_check", fake_run_single_account_check)
+
+    logger = _FakeLogger()
+    _execute_account_check_all_task({"platform": "chatgpt", "limit": 10}, logger)
+
     assert checked_ids == [active_id]
     assert invalid_id not in checked_ids
-    assert expired_id not in checked_ids
-    assert logger.result == {"valid": 1, "invalid": 0, "error": 0, "skipped": 2}
-    assert logger.status == TASK_STATUS_SUCCEEDED
+    assert logger.result == {"valid": 1, "invalid": 0, "error": 0, "skipped": 1}

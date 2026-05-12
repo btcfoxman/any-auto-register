@@ -1153,7 +1153,7 @@ def _execute_account_check_all_task(payload: dict[str, Any], logger: TaskLogger)
 
     targets = [
         model for model in accounts
-        if _is_active_account_check_target(graphs.get(int(model.id or 0), {}))
+        if _is_active_account_check_target(graphs.get(int(model.id or 0), {}), platform=model.platform)
     ]
     skipped = len(accounts) - len(targets)
     total = len(targets)
@@ -1185,9 +1185,11 @@ def _execute_account_check_all_task(payload: dict[str, Any], logger: TaskLogger)
     logger.finish(TASK_STATUS_SUCCEEDED)
 
 
-def _is_active_account_check_target(graph: dict[str, Any]) -> bool:
+def _is_active_account_check_target(graph: dict[str, Any], *, platform: str = "") -> bool:
     overview = graph.get("overview") or {}
     lifecycle = str(graph.get("lifecycle_status") or overview.get("lifecycle_status") or "registered")
+    if platform == "lingya_qq":
+        return lifecycle != "expired"
     if lifecycle not in ACTIVE_ACCOUNT_CHECK_LIFECYCLE_STATUSES:
         return False
     validity = str(graph.get("validity_status") or overview.get("validity_status") or "").lower()

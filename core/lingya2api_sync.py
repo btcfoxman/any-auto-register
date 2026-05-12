@@ -39,8 +39,21 @@ class Lingya2ApiClient:
         data = response.json()
         return data if isinstance(data, dict) else {"data": data}
 
+    def _get(self, path: str) -> Any:
+        response = requests.get(
+            f"{self.base_url}{path}",
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def upsert_account(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._post("/api/accounts", payload)
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        data = self._get("/api/accounts")
+        return data if isinstance(data, list) else []
 
     def heartbeat(self, account_id: int) -> dict[str, Any]:
         return self._post(f"/api/accounts/{int(account_id)}/heartbeat")
@@ -210,3 +223,28 @@ def sync_account_to_lingya2api(
     except Exception as exc:
         log(f"  [Lingya2API] sync failed: {exc}")
         return False
+
+
+def get_lingya2api_account_snapshot(account: Any, *, log_fn=None) -> dict[str, Any] | None:
+    log = log_fn or logger.info
+    base_url, api_key, max_concurrency = _get_lingya2api_config()
+    if not base_url:
+        return None
+    try:
+        payload = build_lingya2api_payload(account, max_concurrency=max_concurrency)
+        expected_name = _text(payload.get("name"))
+        expected_vuserid = _text(payload.get("vuserid"))
+        expected_device = _text(payload.get("vdevice_guid"))
+        client = Lingya2ApiClient(base_url, api_key)
+        for item in client.list_accounts():
+            if not isinstance(item, dict):
+                continue
+            if expected_name and _text(item.get("name")) == expected_name:
+                return item
+            if expected_vuserid and _text(item.get("vuserid")) == expected_vuserid:
+                return item
+            if expected_device and _text(item.get("vdevice_guid")) == expected_device:
+                return item
+    except Exception as exc:
+        log(f"  [Lingya2API] account snapshot failed: {exc}")
+    return None

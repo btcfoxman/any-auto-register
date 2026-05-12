@@ -5,7 +5,7 @@ from typing import Any
 
 from core.base_platform import Account, AccountStatus, BasePlatform, RegisterConfig
 from core.base_sms import create_sms_provider
-from core.lingya2api_sync import sync_account_to_lingya2api
+from core.lingya2api_sync import get_lingya2api_account_snapshot, sync_account_to_lingya2api
 from core.registry import register
 from infrastructure.provider_definitions_repository import ProviderDefinitionsRepository
 from infrastructure.provider_settings_repository import ProviderSettingsRepository
@@ -1253,8 +1253,24 @@ class LingYaQQPlatform(BasePlatform):
     def check_valid(self, account: Account) -> bool:
         try:
             state = self._load_state(account)
-        except Exception:
-            self._last_check_overview = {"valid": False}
+        except Exception as exc:
+            remote = get_lingya2api_account_snapshot(account, log_fn=self.log)
+            if remote and str(remote.get("status") or "").strip().lower() == "active":
+                self._last_check_overview = {
+                    "valid": True,
+                    "lingya2api_status": "active",
+                    "lingya2api_last_heartbeat_at": remote.get("last_heartbeat_at") or "",
+                    "quota_balance": remote.get("last_balance") or "",
+                    "quota_sum": remote.get("last_quota_sum") or "",
+                    "check_warning": f"本地检测失败，已按 lingya2api 有效状态恢复: {exc}",
+                    "chips": ["lingya2api 有效"],
+                }
+                if remote.get("last_balance") not in (None, "") or remote.get("last_quota_sum") not in (None, ""):
+                    self._last_check_overview["chips"].append(
+                        f"额度 {remote.get('last_balance', '-')}/{remote.get('last_quota_sum', '-')}"
+                    )
+                return True
+            self._last_check_overview = {"valid": False, "check_error": str(exc)}
             return False
         self._last_check_overview = dict(state.get("summary") or {})
         return bool(self._last_check_overview.get("valid"))
