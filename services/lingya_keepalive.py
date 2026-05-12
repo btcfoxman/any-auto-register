@@ -62,11 +62,13 @@ class LingYaKeepaliveWorker:
                 86400,
                 DEFAULT_BALANCE_INTERVAL_SECONDS,
             )
-            if now - self._last_heartbeat >= heartbeat_interval:
-                self._run_for_accounts(refresh_quota=False)
+            heartbeat_due = now - self._last_heartbeat >= heartbeat_interval
+            balance_due = now - self._last_balance >= balance_interval
+            if heartbeat_due or balance_due:
+                self._run_for_accounts(refresh_quota=balance_due)
+            if heartbeat_due:
                 self._last_heartbeat = now
-            if now - self._last_balance >= balance_interval:
-                self._run_for_accounts(refresh_quota=True)
+            if balance_due:
                 self._last_balance = now
             self._sleep(5)
 
@@ -115,7 +117,9 @@ class LingYaKeepaliveWorker:
                     action_id="keepalive_sync",
                     params={"refresh_quota": "true" if refresh_quota else "false"},
                 )
-                runtime.execute_action(command, log_fn=lambda message: print(f"[LingYaKeepalive] {message}"))
+                result = runtime.execute_action(command, log_fn=lambda message: print(f"[LingYaKeepalive] {message}"))
+                if not getattr(result, "ok", False):
+                    print(f"[LingYaKeepalive] account {account_id} failed: {getattr(result, 'error', '')}")
             except Exception as exc:
                 print(f"[LingYaKeepalive] account {account_id} failed: {exc}")
             finally:

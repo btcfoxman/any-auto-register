@@ -446,7 +446,7 @@ def test_lingya_qq_keepalive_refreshes_and_syncs(monkeypatch):
     assert ("hello",) in events
     assert ("refresh", "wx") in events
     assert events.index(("refresh", "wx")) < events.index(("hello",))
-    assert any(event[0] == "sync" and event[1] is True and event[2] == "session-new" for event in events)
+    assert any(event[0] == "sync" and event[1] is False and event[2] == "session-new" for event in events)
 
 
 def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkeypatch):
@@ -525,7 +525,7 @@ def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkey
     assert result["data"]["hello_token_ok"] is True
     assert result["data"]["v_vusession"] == "session-new"
     assert events[:3] == [("hello", 1), ("refresh", "wx"), ("hello", 2)]
-    assert any(event == ("sync", True, "session-new") for event in events)
+    assert any(event == ("sync", False, "session-new") for event in events)
 
 
 def test_lingya_qq_daily_sign_in_skips_when_already_signed(monkeypatch):

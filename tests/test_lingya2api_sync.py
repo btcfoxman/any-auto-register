@@ -33,6 +33,23 @@ def test_build_lingya2api_payload_from_lingya_account():
     assert payload["vdevice_guid"] == "device"
     assert payload["main_login"] == "wx"
     assert payload["enabled"] is True
+    assert payload["enable_auto_maintenance"] is False
+
+
+def test_build_lingya2api_payload_can_explicitly_enable_remote_auto_maintenance():
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        extra={
+            "cookies": "v_vusession=session; v_vurefresh=refresh; v_vuserid=vuid; vdevice_guid=device",
+            "lingya2api_enable_auto_maintenance": "true",
+        },
+    )
+
+    payload = build_lingya2api_payload(account)
+
+    assert payload["enable_auto_maintenance"] is True
 
 
 def test_build_lingya2api_payload_rebuilds_cookie_from_split_fields():
@@ -110,6 +127,7 @@ def test_sync_account_to_lingya2api_posts_and_heartbeats():
     body = post.call_args_list[0].kwargs["json"]
     assert body["vdevice_guid"] == "device"
     assert body["vuserid"] == "vuid"
+    assert body["enable_auto_maintenance"] is False
     assert "vdevice_guid=device" in body["cookie"]
     assert post.call_args_list[0].args[0] == "http://localhost:8000/api/accounts"
     assert post.call_args_list[1].args[0] == "http://localhost:8000/api/accounts/9/heartbeat"

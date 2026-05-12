@@ -1213,7 +1213,7 @@ class LingYaQQPlatform(BasePlatform):
         sync_result = sync_account_to_lingya2api(
             _account_with_extra(account, sync_extra),
             log_fn=self.log,
-            heartbeat=True,
+            heartbeat=False,
         )
         data["lingya2api_synced"] = bool(sync_result)
         if sync_result:
@@ -1221,39 +1221,22 @@ class LingYaQQPlatform(BasePlatform):
         return {"ok": True, "data": data}
 
     def _load_state(self, account: Account) -> dict[str, Any]:
-        extra = _account_value_source(account)
-        cookie_fields = build_lingya_qq_account_fields(
-            extra,
-            vdevice_guid=str(extra.get("vdevice_guid") or "").strip() or None,
-            video_appid=VIDEO_APPID,
-            video_platform=VVERSION_PLATFORM,
-        )
-        vuid = str(cookie_fields.get("vuid") or extra.get("vuid") or account.user_id or "").strip()
-        vdevice_guid = str(cookie_fields.get("vdevice_guid") or extra.get("vdevice_guid") or "").strip()
-        if not vdevice_guid:
-            raise RuntimeError("Account is missing vdevice_guid; cannot check LingYaQQ state")
-        account_cookies = extract_lingya_qq_cookies(cookie_fields or extra)
-        client = self._client(
-            vdevice_guid=vdevice_guid,
-            cookies=account_cookies,
-            proxy=str(extra.get("proxy_url") or extra.get("proxy") or "").strip() or None,
-        )
-        quota = client.get_user_quota()
-        hello = client.hello()
-        profile = client.get_user_profile(vuid) if vuid else {}
-        profile_user = _extract_user_profile(profile)
+        result = self._handle_keepalive_sync(account, {"refresh_quota": "true"})
+        if not result.get("ok"):
+            raise RuntimeError(str(result.get("error") or "LingYaQQ keepalive check failed"))
+        data = dict(result.get("data") or {})
         summary = {
-            "valid": bool(quota) and ("quota_balance" in quota or "quota_sum" in quota),
-            "vuid": vuid,
-            "phone": extra.get("phone") or account.email,
-            "nick": profile_user.get("nickname") or extra.get("nick", ""),
-            **_quota_summary(quota),
-            "hello_timestamp": hello.get("timestamp"),
+            "valid": bool(data.get("heartbeat_ok")) and bool(data.get("hello_token_ok")),
+            "vuid": data.get("vuid") or account.user_id,
+            "phone": data.get("phone") or account.email,
+            "nick": data.get("nick", ""),
+            **_quota_summary(data),
+            "hello_timestamp": data.get("hello_timestamp"),
             "chips": [
-                f"额度 {quota.get('quota_balance', '-')}/{quota.get('quota_sum', '-')}",
+                f"额度 {data.get('quota_balance', '-')}/{data.get('quota_sum', '-')}",
             ],
         }
-        return {"summary": summary, "quota": quota, "hello": hello, "profile": profile}
+        return {"summary": summary, "quota": data, "hello": data, "profile": {}}
 
     def check_valid(self, account: Account) -> bool:
         try:

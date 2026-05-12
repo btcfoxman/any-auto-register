@@ -167,6 +167,7 @@ def build_lingya2api_payload(
         "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")),
         "proxy_url": _text(extra.get("proxy_url") or extra.get("proxy") or extra.get("proxyUrl")),
         "enabled": _as_bool(extra.get("lingya2api_enabled"), True),
+        "enable_auto_maintenance": _as_bool(extra.get("lingya2api_enable_auto_maintenance"), False),
         "max_concurrency": _clamp_concurrency(extra.get("lingya2api_max_concurrency"), max_concurrency),
     }
 
