@@ -217,6 +217,33 @@ def _account_value_source(account: Account) -> dict[str, Any]:
     return source
 
 
+def _sms_provider_from_account_source(source: dict[str, Any]) -> str:
+    for key in ("sms_provider", "phone_provider", "lingya_qq_sms_provider"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            return value
+    resources = source.get("provider_resources")
+    if isinstance(resources, list):
+        for item in resources:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("provider_type") or "").strip() != "sms":
+                continue
+            provider = str(item.get("provider_name") or "").strip()
+            if provider:
+                return provider
+    return ""
+
+
+def _sms_provider_label(provider_key: str) -> str:
+    normalized = str(provider_key or "").strip().lower()
+    if normalized in {"haozhuma", "haozhuma_api"}:
+        return "HaoZhuMa"
+    if normalized in {"uomsg", "uomsg_api"}:
+        return "UOMsg"
+    return provider_key or "SMS provider"
+
+
 def _timestamp(value: Any) -> int | None:
     try:
         result = int(float(value))
@@ -305,9 +332,12 @@ class LingYaQQPlatform(BasePlatform):
                 "label": "LingYaQQ relogin by SMS",
                 "sync": False,
                 "params": [
+                    {"key": "sms_provider", "label": "SMS provider (optional)", "type": "text"},
                     {"key": "sms_timeout", "label": "SMS timeout seconds", "type": "number"},
                     {"key": "uomsg_keyword", "label": "SMS keyword (optional)", "type": "text"},
-                    {"key": "uomsg_province", "label": "Province (optional)", "type": "text"},
+                    {"key": "uomsg_province", "label": "UOMsg province (optional)", "type": "text"},
+                    {"key": "haozhuma_province", "label": "HaoZhuMa province (optional)", "type": "text"},
+                    {"key": "haozhuma_sid", "label": "HaoZhuMa project ID (optional)", "type": "text"},
                 ],
             }
         )
@@ -424,6 +454,8 @@ class LingYaQQPlatform(BasePlatform):
                 "valid": True,
                 "remote_email": account_label,
                 "phone": account_label,
+                "sms_provider": provider_key,
+                "sms_activation_id": activation.activation_id,
                 "vuid": vuid,
                 "nick": nick,
                 **quota_overview,
@@ -449,6 +481,9 @@ class LingYaQQPlatform(BasePlatform):
                     "phone": account_label,
                     "area_code": area_code,
                     "local_phone": phone,
+                    "sms_provider": provider_key,
+                    "phone_provider": provider_key,
+                    "sms_activation_id": activation.activation_id,
                     "vuid": vuid,
                     "vusession": vusession,
                     "vurefresh": vurefresh,
@@ -461,6 +496,22 @@ class LingYaQQPlatform(BasePlatform):
                     "avatar": str(profile.get("avatar") or ((login_response.get("user_info") or {}).get("user_head")) or ""),
                     "quota": quota_overview,
                     "account_overview": overview,
+                    "provider_resources": [
+                        {
+                            "provider_type": "sms",
+                            "provider_name": provider_key,
+                            "resource_type": "phone",
+                            "resource_identifier": str(activation.activation_id or phone),
+                            "handle": phone,
+                            "display_name": account_label,
+                            "metadata": {
+                                "activation_id": activation.activation_id,
+                                "phone": phone,
+                                "area_code": area_code,
+                                **(activation.metadata or {}),
+                            },
+                        }
+                    ],
                 },
             )
         finally:
@@ -488,17 +539,26 @@ class LingYaQQPlatform(BasePlatform):
         if not phone:
             return {"ok": False, "error": "Account has no phone number available for SMS relogin"}
 
-        sms_extra = dict(params or {})
-        sms_extra["sms_provider"] = str(params.get("sms_provider") or "uomsg_api").strip()
+        sms_extra = {**account_source, **dict(params or {})}
+        sms_provider = str(params.get("sms_provider") or "").strip() or _sms_provider_from_account_source(account_source)
+        if sms_provider:
+            sms_extra["sms_provider"] = sms_provider
         if params.get("uomsg_keyword"):
             sms_extra["uomsg_keyword"] = params.get("uomsg_keyword")
         if params.get("uomsg_province"):
             sms_extra["uomsg_province"] = params.get("uomsg_province")
+        if params.get("haozhuma_province"):
+            sms_extra["haozhuma_province"] = params.get("haozhuma_province")
+        if params.get("haozhuma_sid"):
+            sms_extra["haozhuma_sid"] = params.get("haozhuma_sid")
 
         provider_key, sms_settings = _resolve_sms_runtime(sms_extra)
-        if provider_key not in {"uomsg", "uomsg_api"}:
-            return {"ok": False, "error": "SMS relogin currently supports only UOMsg. Configure UOMsg as the SMS provider first."}
-        sms_settings["uomsg_phone"] = phone
+        if provider_key in {"uomsg", "uomsg_api"}:
+            sms_settings["uomsg_phone"] = phone
+        elif provider_key in {"haozhuma", "haozhuma_api"}:
+            sms_settings["haozhuma_phone"] = phone
+        else:
+            return {"ok": False, "error": "SMS relogin currently supports only UOMsg and HaoZhuMa for existing phone numbers."}
         if self.config and self.config.proxy and not str(sms_settings.get("sms_proxy") or sms_settings.get("proxy") or "").strip():
             sms_settings["sms_proxy"] = self.config.proxy
 
@@ -509,7 +569,8 @@ class LingYaQQPlatform(BasePlatform):
         activation = None
         completed = False
         try:
-            self.log(f"Using UOMsg for SMS relogin on existing phone: {area_code}{phone}")
+            provider_label = _sms_provider_label(provider_key)
+            self.log(f"Using {provider_label} for SMS relogin on existing phone: {area_code}{phone}")
             activation = provider.get_number(service=service, country=country)
             next_phone = normalize_lingya_phone(str(activation.phone_number or phone), area_code) or phone
             baseline_text = ""
@@ -562,7 +623,7 @@ class LingYaQQPlatform(BasePlatform):
             try:
                 provider.report_success(activation.activation_id)
             except Exception as exc:
-                self.log(f"UOMsg release failed; LingYaQQ relogin is still usable: {exc}")
+                self.log(f"{provider_label} release failed; LingYaQQ relogin is still usable: {exc}")
             completed = True
             account_label = f"{area_code}{next_phone}"
             return {
@@ -575,6 +636,9 @@ class LingYaQQPlatform(BasePlatform):
                     "phone": account_label,
                     "local_phone": next_phone,
                     "area_code": area_code,
+                    "sms_provider": provider_key,
+                    "phone_provider": provider_key,
+                    "sms_activation_id": activation.activation_id,
                     "vuid": vuid,
                     "vusession": vusession,
                     "vurefresh": vurefresh,

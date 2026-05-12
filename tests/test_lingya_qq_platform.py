@@ -195,6 +195,14 @@ def test_lingya_qq_manual_phone_register(monkeypatch):
     assert account.extra["v_vurefresh"] == "refresh-token"
     assert account.extra["v_vuserid"] == "1234567890"
     assert account.extra["vqq_vusession"] == "session-token"
+    assert account.extra["sms_provider"] == "sms_activate_api"
+    assert account.extra["phone_provider"] == "sms_activate_api"
+    assert account.extra["sms_activation_id"] == "act_1"
+    assert account.extra["account_overview"]["sms_provider"] == "sms_activate_api"
+    sms_resource = account.extra["provider_resources"][0]
+    assert sms_resource["provider_type"] == "sms"
+    assert sms_resource["provider_name"] == "sms_activate_api"
+    assert sms_resource["resource_identifier"] == "act_1"
     assert "v_vusession=session-token" in account.extra["cookies"]
     assert ("get_number", "qq", "") in events
     assert ("get_code", "act_1", 12) in events
@@ -389,6 +397,100 @@ def test_lingya_qq_relogin_sms_action(monkeypatch):
     assert ("report_success", "13800138000") in events
     assert not any(event[0] == "cancel" for event in events)
     assert any("old SMS" in item for item in logs)
+
+
+def test_lingya_qq_relogin_sms_reuses_account_sms_provider(monkeypatch):
+    events = []
+    resolved_extras = []
+    provider_configs = []
+
+    class FakeSmsProvider:
+        def get_number(self, *, service: str, country: str = ""):
+            events.append(("get_number", service, country))
+            return SmsActivation(
+                activation_id="13800138000",
+                phone_number="13800138000",
+                metadata={"sid": "1000", "provider": "haozhuma"},
+            )
+
+        def get_code(self, activation_id: str, *, timeout: int = 120):
+            events.append(("get_code", activation_id, timeout))
+            return "654321"
+
+        def report_success(self, activation_id: str):
+            events.append(("report_success", activation_id))
+            return True
+
+        def cancel(self, activation_id: str):
+            events.append(("cancel", activation_id))
+            return True
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid or "device-old"
+
+        def login_with_phone_code(self, *, phone: str, code: str, area_code: str = "+86"):
+            events.append(("login", phone, code, area_code))
+            return {
+                "ret": 0,
+                "data": {
+                    "error_code": 0,
+                    "rsp": {
+                        "login_response": {
+                            "vuid": "vuid-new",
+                            "vusession": "session-new",
+                            "vurefresh": "refresh-new",
+                        }
+                    },
+                },
+            }
+
+        def get_user_profile(self, vuid: str):
+            return {"ret": 0, "data": {"user_item": {"profile_info": {"user_info": {"vuid": vuid}}}}}
+
+        def get_user_quota(self):
+            return {"quota_balance": "4", "quota_sum": "6"}
+
+    def fake_resolve_sms_runtime(extra):
+        resolved_extras.append(dict(extra))
+        return "haozhuma_api", {"haozhuma_sid": extra.get("haozhuma_sid"), "haozhuma_phone": extra.get("haozhuma_phone")}
+
+    def fake_create_sms_provider(key, cfg):
+        provider_configs.append((key, dict(cfg)))
+        return FakeSmsProvider()
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.create_sms_provider", fake_create_sms_provider)
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr("platforms.lingya_qq.plugin._resolve_sms_runtime", fake_resolve_sms_runtime)
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    logs = []
+    platform.set_logger(logs.append)
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid-old",
+        extra={
+            "cookies": "v_vusession=session-old; v_vuserid=vuid-old; vdevice_guid=device-old",
+            "local_phone": "13800138000",
+            "area_code": "+86",
+            "sms_provider": "haozhuma_api",
+            "haozhuma_sid": "1000",
+        },
+    )
+
+    result = platform.execute_action("relogin_sms", account, {"sms_timeout": "10"})
+
+    assert result["ok"] is True
+    assert result["data"]["sms_provider"] == "haozhuma_api"
+    assert resolved_extras[-1]["sms_provider"] == "haozhuma_api"
+    assert provider_configs[-1][0] == "haozhuma_api"
+    assert provider_configs[-1][1]["haozhuma_phone"] == "13800138000"
+    assert ("get_number", "1000", "") in events
+    assert ("get_code", "13800138000", 10) in events
+    assert any("Using HaoZhuMa" in item for item in logs)
+    assert not any("Using UOMsg" in item for item in logs)
 
 
 def test_lingya_qq_keepalive_refreshes_and_syncs(monkeypatch):
