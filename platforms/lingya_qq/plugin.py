@@ -107,15 +107,57 @@ def _first_value(*values: Any, default: Any = "") -> Any:
     return default
 
 
+def _normalize_sms_provider_key(value: Any) -> str:
+    text = str(value or "").strip()
+    normalized = text.lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "uomsg": "uomsg_api",
+        "uomsg_api": "uomsg_api",
+        "haozhuma": "haozhuma_api",
+        "haozhuma_api": "haozhuma_api",
+        "haozhuyun": "haozhuma_api",
+        "hao_zhu_ma": "haozhuma_api",
+        "hao_zhu_yun": "haozhuma_api",
+        "好猪码": "haozhuma_api",
+        "smsactivate": "sms_activate_api",
+        "sms_activate": "sms_activate_api",
+        "sms_activate_api": "sms_activate_api",
+        "herosms": "herosms_api",
+        "herosms_api": "herosms_api",
+        "smsbower": "smsbower_api",
+        "smsbower_api": "smsbower_api",
+    }
+    return aliases.get(normalized, text)
+
+
+def _sms_provider_from_provider_fields(source: dict[str, Any]) -> str:
+    if any(source.get(key) not in (None, "") for key in (
+        "haozhuma_sid",
+        "haozhuma_user",
+        "haozhuma_username",
+        "haozhuma_password",
+        "haozhuma_cached_token",
+        "haozhuma_phone",
+    )):
+        return "haozhuma_api"
+    if any(source.get(key) not in (None, "") for key in (
+        "uomsg_token",
+        "uomsg_keyword",
+        "uomsg_phone",
+    )):
+        return "uomsg_api"
+    return ""
+
+
 def _resolve_sms_runtime(extra: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     settings_repo = ProviderSettingsRepository()
     definitions_repo = ProviderDefinitionsRepository()
-    provider_key = str(
+    provider_key = _normalize_sms_provider_key(
         extra.get("sms_provider")
         or extra.get("phone_provider")
         or settings_repo.get_default_provider_key("sms")
         or ""
-    ).strip()
+    )
     if not provider_key:
         if extra.get("uomsg_token") or extra.get("token"):
             provider_key = "uomsg_api"
@@ -127,6 +169,7 @@ def _resolve_sms_runtime(extra: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             provider_key = "smsbower_api"
         elif extra.get("haozhuma_user") and extra.get("haozhuma_password"):
             provider_key = "haozhuma_api"
+    provider_key = _normalize_sms_provider_key(provider_key)
     if not provider_key:
         raise RuntimeError("LingYaQQ requires an SMS provider. Configure a default SMS provider in Settings, or pass sms_provider and its API key in task parameters.")
     definition = definitions_repo.get_by_key("sms", provider_key)
@@ -219,7 +262,7 @@ def _account_value_source(account: Account) -> dict[str, Any]:
 
 def _sms_provider_from_account_source(source: dict[str, Any]) -> str:
     for key in ("sms_provider", "phone_provider", "lingya_qq_sms_provider"):
-        value = str(source.get(key) or "").strip()
+        value = _normalize_sms_provider_key(source.get(key))
         if value:
             return value
     resources = source.get("provider_resources")
@@ -229,17 +272,17 @@ def _sms_provider_from_account_source(source: dict[str, Any]) -> str:
                 continue
             if str(item.get("provider_type") or "").strip() != "sms":
                 continue
-            provider = str(item.get("provider_name") or "").strip()
+            provider = _normalize_sms_provider_key(item.get("provider_name"))
             if provider:
                 return provider
-    return ""
+    return _sms_provider_from_provider_fields(source)
 
 
 def _sms_provider_label(provider_key: str) -> str:
-    normalized = str(provider_key or "").strip().lower()
-    if normalized in {"haozhuma", "haozhuma_api"}:
+    normalized = _normalize_sms_provider_key(provider_key)
+    if normalized == "haozhuma_api":
         return "HaoZhuMa"
-    if normalized in {"uomsg", "uomsg_api"}:
+    if normalized == "uomsg_api":
         return "UOMsg"
     return provider_key or "SMS provider"
 
@@ -540,7 +583,11 @@ class LingYaQQPlatform(BasePlatform):
             return {"ok": False, "error": "Account has no phone number available for SMS relogin"}
 
         sms_extra = {**account_source, **dict(params or {})}
-        sms_provider = str(params.get("sms_provider") or "").strip() or _sms_provider_from_account_source(account_source)
+        sms_provider = (
+            _normalize_sms_provider_key(params.get("sms_provider"))
+            or _sms_provider_from_account_source(account_source)
+            or _sms_provider_from_provider_fields(sms_extra)
+        )
         if sms_provider:
             sms_extra["sms_provider"] = sms_provider
         if params.get("uomsg_keyword"):
@@ -553,12 +600,13 @@ class LingYaQQPlatform(BasePlatform):
             sms_extra["haozhuma_sid"] = params.get("haozhuma_sid")
 
         provider_key, sms_settings = _resolve_sms_runtime(sms_extra)
-        if provider_key in {"uomsg", "uomsg_api"}:
+        provider_key = _normalize_sms_provider_key(provider_key)
+        if provider_key == "uomsg_api":
             sms_settings["uomsg_phone"] = phone
-        elif provider_key in {"haozhuma", "haozhuma_api"}:
+        elif provider_key == "haozhuma_api":
             sms_settings["haozhuma_phone"] = phone
         else:
-            return {"ok": False, "error": "SMS relogin currently supports only UOMsg and HaoZhuMa for existing phone numbers."}
+            return {"ok": False, "error": f"SMS relogin currently supports only UOMsg and HaoZhuMa for existing phone numbers. Resolved provider: {provider_key or '-'}"}
         if self.config and self.config.proxy and not str(sms_settings.get("sms_proxy") or sms_settings.get("proxy") or "").strip():
             sms_settings["sms_proxy"] = self.config.proxy
 
