@@ -24,11 +24,18 @@ from platforms.lingya_qq.core import (
 from platforms.lingya_qq.publish import fetch_lingya_qq_publish_asset
 
 
+LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS = 300
+
+
 def _as_int(value: Any, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _sms_timeout(value: Any, default: int = LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS) -> int:
+    return max(1, min(LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS, _as_int(value, default)))
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -337,7 +344,7 @@ class LingYaQQPlatform(BasePlatform):
         service = _resolve_sms_service(sms_settings, extra)
         country = _resolve_sms_country(sms_settings, extra)
         area_code = normalize_area_code(extra.get("lingya_qq_area_code") or extra.get("phone_area_code") or "+86")
-        timeout = _as_int(extra.get("lingya_qq_sms_timeout") or extra.get("sms_code_timeout"), 300)
+        timeout = _sms_timeout(extra.get("lingya_qq_sms_timeout") or extra.get("sms_code_timeout"))
 
         provider = create_sms_provider(provider_key, sms_settings)
         activation = None
@@ -475,7 +482,7 @@ class LingYaQQPlatform(BasePlatform):
 
         service = _resolve_sms_service(sms_settings, sms_extra)
         country = _resolve_sms_country(sms_settings, sms_extra)
-        timeout = _as_int(params.get("sms_timeout") or params.get("lingya_qq_sms_timeout") or 300, 300)
+        timeout = _sms_timeout(params.get("sms_timeout") or params.get("lingya_qq_sms_timeout"))
         provider = create_sms_provider(provider_key, sms_settings)
         activation = None
         completed = False

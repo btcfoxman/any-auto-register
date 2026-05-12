@@ -6,7 +6,7 @@ from core.registry import get, load_all
 from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS, _build_account_overview
 from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES, build_lingya_qq_account_fields
 from platforms.lingya_qq.core import DEFAULT_VIDEO_UPLOAD_SERVICE_ID, LingYaQQClient
-from platforms.lingya_qq.plugin import LingYaQQPlatform, _resolve_sms_runtime
+from platforms.lingya_qq.plugin import LingYaQQPlatform, _resolve_sms_runtime, _sms_timeout
 from platforms.lingya_qq.publish import LingYaQQPublishAsset
 
 
@@ -41,6 +41,12 @@ def test_lingya_qq_exposes_relogin_sms_action():
     assert "publish_work" in STATEFUL_ACTION_IDS
     assert {"vusession", "vurefresh", "vuid", "vdevice_guid"} <= PERSISTED_ACTION_DATA_KEYS
     assert {"v_vusession", "v_vurefresh", "v_vuserid", "vqq_vusession", "vdevice_guid"} <= PERSISTED_ACTION_DATA_KEYS
+
+
+def test_lingya_qq_sms_timeout_is_capped_at_300_seconds():
+    assert _sms_timeout("600") == 300
+    assert _sms_timeout("12") == 12
+    assert _sms_timeout("") == 300
 
 
 def test_lingya_qq_cookie_header_expands_to_account_fields():

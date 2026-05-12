@@ -1329,6 +1329,8 @@ class HaoZhuMaProvider(BaseSmsProvider):
                 payload[key] = value
         data = self._send_request(payload)
         code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"} and api == "getMessage" and _haozhuma_message_waiting_data(data):
+            raise RuntimeError(f"HaoZhuMa {api} pending: {data.get('msg') or data}")
         if code not in {"0", "200"} and needs_token and used_cached_token and self.user and self.password:
             self.token = ""
             payload["token"] = self._token()
@@ -1451,6 +1453,11 @@ class HaoZhuMaProvider(BaseSmsProvider):
                 logger.warning("HaoZhuMa getMessage transient request error for %s: %s", phone, exc)
                 time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
                 continue
+            except RuntimeError as exc:
+                if _haozhuma_message_waiting_error(exc):
+                    time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                    continue
+                raise
             code = str(data.get("yzm") or "").strip() or _extract_uomsg_code(str(data.get("sms") or ""))
             if code:
                 return code
@@ -1505,6 +1512,16 @@ class HaoZhuMaProvider(BaseSmsProvider):
 
     def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
         self._release_and_blacklist(activation_id)
+
+
+def _haozhuma_message_waiting_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in ("等待", "尚未", "未收到", "wait", "waiting", "no message"))
+
+
+def _haozhuma_message_waiting_data(data: dict[str, Any]) -> bool:
+    text = str(data.get("msg") or data.get("message") or data).lower()
+    return any(token in text for token in ("等待", "尚未", "未收到", "wait", "waiting", "no message"))
 
 
 def is_herosms_phone_cache_alive(config: dict | None = None) -> tuple[bool, dict]:
