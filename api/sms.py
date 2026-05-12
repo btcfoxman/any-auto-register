@@ -3,7 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.base_sms import HERO_SMS_DEFAULT_COUNTRY, HERO_SMS_DEFAULT_SERVICE, HeroSmsProvider, SmsBowerProvider, UOMsgProvider
+from core.base_sms import (
+    HERO_SMS_DEFAULT_COUNTRY,
+    HERO_SMS_DEFAULT_SERVICE,
+    HaoZhuMaProvider,
+    HeroSmsProvider,
+    SmsBowerProvider,
+    UOMsgProvider,
+)
 from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
 router = APIRouter(prefix="/sms", tags=["sms"])
@@ -249,6 +256,45 @@ def uomsg_balance(body: UOMsgQueryRequest | None = None):
     provider = _uomsg_from_payload(body)
     if not provider.token:
         raise HTTPException(400, "UOMsg API Token 未配置")
+    try:
+        return {"balance": provider.get_balance()}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+# ── HaoZhuMa endpoints ──────────────────────────────────────────────────────
+
+class HaoZhuMaQueryRequest(BaseModel):
+    token: str = ""
+    user: str = ""
+    password: str = ""
+    sid: str = ""
+    proxy: str = ""
+
+
+def _saved_haozhuma_config() -> dict:
+    return ProviderSettingsRepository().resolve_runtime_settings("sms", "haozhuma_api", {})
+
+
+def _haozhuma_from_payload(payload: HaoZhuMaQueryRequest | None = None) -> HaoZhuMaProvider:
+    payload = payload or HaoZhuMaQueryRequest()
+    saved = _saved_haozhuma_config()
+    return HaoZhuMaProvider(
+        token=str(payload.token or saved.get("haozhuma_token") or saved.get("token") or "").strip(),
+        user=str(payload.user or saved.get("haozhuma_user") or saved.get("haozhuma_username") or "").strip(),
+        password=str(payload.password or saved.get("haozhuma_password") or "").strip(),
+        sid=str(payload.sid or saved.get("haozhuma_sid") or saved.get("sms_service") or "").strip(),
+        proxy=str(payload.proxy or saved.get("sms_proxy") or saved.get("proxy") or "") or None,
+        base_url=str(saved.get("haozhuma_base_url") or "").strip(),
+    )
+
+
+@router.post("/haozhuma/balance")
+def haozhuma_balance(body: HaoZhuMaQueryRequest | None = None):
+    body = body or HaoZhuMaQueryRequest()
+    provider = _haozhuma_from_payload(body)
+    if not provider.token and not (provider.user and provider.password):
+        raise HTTPException(400, "HaoZhuMa API Token 或账号密码未配置")
     try:
         return {"balance": provider.get_balance()}
     except Exception as exc:

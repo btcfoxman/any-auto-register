@@ -96,6 +96,8 @@ def _resolve_sms_runtime(extra: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             provider_key = "herosms_api"
         elif extra.get("smsbower_api_key"):
             provider_key = "smsbower_api"
+        elif extra.get("haozhuma_token") or (extra.get("haozhuma_user") and extra.get("haozhuma_password")):
+            provider_key = "haozhuma_api"
     if not provider_key:
         raise RuntimeError("LingYaQQ requires an SMS provider. Configure a default SMS provider in Settings, or pass sms_provider and its API key in task parameters.")
     definition = definitions_repo.get_by_key("sms", provider_key)
@@ -111,6 +113,7 @@ def _resolve_sms_service(settings: dict[str, Any], extra: dict[str, Any]) -> str
         "herosms_default_service",
         "smsbower_service",
         "smsbower_default_service",
+        "haozhuma_sid",
         "sms_activate_service",
         "sms_activate_default_service",
     ):
@@ -125,6 +128,7 @@ def _resolve_sms_country(settings: dict[str, Any], extra: dict[str, Any]) -> str
         "sms_country",
         "phone_country",
         "uomsg_province",
+        "haozhuma_province",
         "herosms_country",
         "herosms_default_country",
         "smsbower_country",
@@ -319,6 +323,7 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "initial_delay", "label": "Audit initial delay seconds", "type": "number"},
                     {"key": "poll_interval", "label": "Audit poll interval seconds", "type": "number"},
                     {"key": "timeout", "label": "Audit timeout seconds", "type": "number"},
+                    {"key": "force", "label": "Force publish even if work exists", "type": "text"},
                 ],
             }
         )
@@ -752,6 +757,37 @@ class LingYaQQPlatform(BasePlatform):
                 return item
         return {}
 
+    def _work_title(self, work: dict[str, Any]) -> str:
+        base = work.get("base_info") if isinstance(work.get("base_info"), dict) else {}
+        return str(
+            work.get("title")
+            or base.get("title")
+            or work.get("work_title")
+            or base.get("work_title")
+            or ""
+        ).strip()
+
+    def _published_work_status(self, work: dict[str, Any], *, filter_status: int = 0) -> int:
+        status = _as_int(work.get("work_status"), 0)
+        if status == 1 or (filter_status == 3 and status == 0):
+            return 1
+        return status
+
+    def _find_existing_published_work(self, client: LingYaQQClient) -> dict[str, Any]:
+        for filter_status in (3, 1):
+            payload = client.get_my_work_list(filter_by_status=filter_status)
+            for work in self._work_items(payload):
+                if self._published_work_status(work, filter_status=filter_status) == 1:
+                    return work
+        return {}
+
+    def _quota_overview_or_empty(self, client: LingYaQQClient, *, context: str) -> dict[str, Any]:
+        try:
+            return _quota_summary(client.get_user_quota())
+        except Exception as exc:
+            self.log(f"LingYaQQ quota refresh skipped {context}: {exc}")
+            return {}
+
     def _wait_publish_success(
         self,
         client: LingYaQQClient,
@@ -832,6 +868,42 @@ class LingYaQQPlatform(BasePlatform):
     def _handle_publish_work(self, account: Account, params: dict | None = None) -> dict:
         params = params or {}
         source, cookie_fields, client = self._client_from_account(account)
+        force = _as_bool(params.get("force"), False)
+        if not force and str(source.get("last_publish_status") or "").strip().lower() == "released":
+            quota_overview = self._quota_overview_or_empty(client, context="after publish skip")
+            return {
+                "ok": True,
+                "data": {
+                    **cookie_fields,
+                    "message": "LingYaQQ publish skipped because this account already has a released work",
+                    "publish_skipped": True,
+                    "publish_skip_reason": "local_released",
+                    "last_publish_status": "released",
+                    **quota_overview,
+                },
+            }
+        if not force:
+            try:
+                existing_work = self._find_existing_published_work(client)
+            except Exception as exc:
+                self.log(f"LingYaQQ publish: existing work lookup skipped: {exc}")
+                existing_work = {}
+            if existing_work:
+                quota_overview = self._quota_overview_or_empty(client, context="after existing work lookup")
+                return {
+                    "ok": True,
+                    "data": {
+                        **cookie_fields,
+                        "message": "LingYaQQ publish skipped because a released work already exists",
+                        "publish_skipped": True,
+                        "publish_skip_reason": "remote_released",
+                        "last_publish_vid": self._work_vid(existing_work),
+                        "last_publish_title": self._work_title(existing_work),
+                        "last_publish_status": "released",
+                        "last_publish_work_status": self._published_work_status(existing_work, filter_status=3),
+                        **quota_overview,
+                    },
+                }
         source_url = str(
             _first_value(
                 params.get("source_url"),
@@ -993,12 +1065,7 @@ class LingYaQQPlatform(BasePlatform):
             cancel_check=cancel_check,
         )
 
-        quota: dict[str, Any] = {}
-        try:
-            quota = client.get_user_quota()
-        except Exception as exc:
-            self.log(f"LingYaQQ quota refresh skipped after publish: {exc}")
-        quota_overview = _quota_summary(quota)
+        quota_overview = self._quota_overview_or_empty(client, context="after publish")
         return {
             "ok": True,
             "data": {
@@ -1039,6 +1106,7 @@ class LingYaQQPlatform(BasePlatform):
     def _handle_keepalive_sync(self, account: Account, params: dict | None = None) -> dict:
         params = params or {}
         source, cookie_fields, client = self._client_from_account(account)
+        refresh_quota = _as_bool(params.get("refresh_quota"), True)
         main_login = str(
             source.get("v_main_login")
             or source.get("main_login")
@@ -1069,10 +1137,11 @@ class LingYaQQPlatform(BasePlatform):
             session_refreshed = bool(refresh_response.get("vusession") or latest_cookies.get("v_vusession"))
 
         quota: dict[str, Any] = {}
-        try:
-            quota = client.get_user_quota()
-        except Exception as exc:
-            self.log(f"LingYaQQ quota refresh skipped: {exc}")
+        if refresh_quota:
+            try:
+                quota = client.get_user_quota()
+            except Exception as exc:
+                self.log(f"LingYaQQ quota refresh skipped: {exc}")
         quota_overview = _quota_summary(quota)
 
         data: dict[str, Any] = {

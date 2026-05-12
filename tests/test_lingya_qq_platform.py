@@ -735,6 +735,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             "timeout": "1",
             "generation_timeout": "1",
             "generation_poll_interval": "0",
+            "force": "true",
         },
     )
 
@@ -756,6 +757,88 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID) in events
     assert ("upload_work", 2, "vid123", "publish title") in events
     assert ("upload_work", 1, "vid123", "publish title") in events
+
+
+def test_lingya_qq_publish_skips_when_local_released(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid
+
+        def get_user_quota(self):
+            events.append(("quota",))
+            return {"quota_balance": "99", "quota_sum": "100"}
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr(
+        "platforms.lingya_qq.plugin.fetch_lingya_qq_publish_asset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fetch should not run")),
+    )
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid",
+        extra={
+            "cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device",
+            "last_publish_status": "released",
+        },
+    )
+
+    result = platform.execute_action("publish_work", account, {})
+
+    assert result["ok"] is True
+    assert result["data"]["publish_skipped"] is True
+    assert result["data"]["publish_skip_reason"] == "local_released"
+    assert result["data"]["last_publish_status"] == "released"
+    assert result["data"]["quota_balance"] == "99"
+    assert events == [("quota",)]
+
+
+def test_lingya_qq_publish_skips_when_remote_released_exists(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid
+
+        def get_my_work_list(self, *, filter_by_status=1, page=1, page_size=15):
+            events.append(("work_list", filter_by_status))
+            if filter_by_status == 3:
+                return {"ret": 0, "data": {"work_list": [{"vid": "old_vid", "work_status": 1, "base_info": {"title": "old title"}}]}}
+            return {"ret": 0, "data": {"work_list": []}}
+
+        def get_user_quota(self):
+            events.append(("quota",))
+            return {"quota_balance": "88", "quota_sum": "100"}
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr(
+        "platforms.lingya_qq.plugin.fetch_lingya_qq_publish_asset",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fetch should not run")),
+    )
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid",
+        extra={"cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device"},
+    )
+
+    result = platform.execute_action("publish_work", account, {})
+
+    assert result["ok"] is True
+    assert result["data"]["publish_skipped"] is True
+    assert result["data"]["publish_skip_reason"] == "remote_released"
+    assert result["data"]["last_publish_vid"] == "old_vid"
+    assert result["data"]["last_publish_title"] == "old title"
+    assert result["data"]["quota_balance"] == "88"
+    assert events == [("work_list", 3), ("quota",)]
 
 
 def test_lingya_qq_publish_defaults_are_kept_in_account_overview():

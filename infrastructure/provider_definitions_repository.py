@@ -416,6 +416,32 @@ _BUILTIN_DEFINITIONS: list[dict] = [
             {"key": "uomsg_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "3", "category": "connection"},
         ],
     },
+    {
+        "provider_type": "sms",
+        "provider_key": "haozhuma_api",
+        "label": "HaoZhuMa",
+        "description": "HaoZhuMa 接码平台，使用项目 ID 取号取码；号码使用后自动释放并拉黑",
+        "driver_type": "haozhuma_api",
+        "default_auth_mode": "token",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [
+            {"value": "token", "label": "API Token"},
+            {"value": "password", "label": "账号密码"},
+        ],
+        "fields": [
+            {"key": "haozhuma_token", "label": "API Token（可选）", "secret": True, "category": "auth"},
+            {"key": "haozhuma_user", "label": "API 账号（可选）", "category": "auth"},
+            {"key": "haozhuma_password", "label": "API 密码（可选）", "secret": True, "category": "auth"},
+            {"key": "haozhuma_sid", "label": "项目 ID", "placeholder": "1000", "category": "identity"},
+            {"key": "haozhuma_province", "label": "省份代码（可选）", "placeholder": "44", "category": "connection"},
+            {"key": "haozhuma_isp", "label": "运营商（可选）", "placeholder": "1", "category": "connection"},
+            {"key": "haozhuma_ascription", "label": "号码类型（可选）", "placeholder": "1虚拟 / 2实卡", "category": "connection"},
+            {"key": "haozhuma_phone", "label": "指定号码（可选）", "placeholder": "130xxxxxxxx", "category": "identity"},
+            {"key": "haozhuma_uid", "label": "对接码 UID（可选）", "category": "connection"},
+            {"key": "haozhuma_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "15", "category": "connection"},
+        ],
+    },
     # ── proxy ────────────────────────────────────────────────────────
     {
         "provider_type": "proxy",
@@ -449,6 +475,38 @@ _BUILTIN_DEFINITIONS: list[dict] = [
         ],
     },
 ]
+
+
+_LEGACY_PROVIDER_ALIASES = {
+    ("sms", "herosms"): "herosms_api",
+    ("sms", "smsbower"): "smsbower_api",
+    ("sms", "uomsg"): "uomsg_api",
+    ("sms", "haozhuma"): "haozhuma_api",
+}
+
+
+def _definition_from_seed(provider_type: str, provider_key: str) -> ProviderDefinitionModel | None:
+    lookup_key = _LEGACY_PROVIDER_ALIASES.get((provider_type, provider_key), provider_key)
+    for raw_seed in _BUILTIN_DEFINITIONS:
+        seed = _normalize_seed_text(raw_seed)
+        if seed.get("provider_type") != provider_type or seed.get("provider_key") != lookup_key:
+            continue
+        item = ProviderDefinitionModel(
+            provider_type=seed["provider_type"],
+            provider_key=seed["provider_key"],
+            label=seed.get("label", seed["provider_key"]),
+            description=seed.get("description", ""),
+            driver_type=seed.get("driver_type", seed["provider_key"]),
+            default_auth_mode=seed.get("default_auth_mode", ""),
+            enabled=bool(seed.get("enabled", True)),
+            is_builtin=True,
+            category=seed.get("category", ""),
+        )
+        item.set_auth_modes(list(seed.get("auth_modes") or []))
+        item.set_fields(list(seed.get("fields") or []))
+        item.set_metadata(dict(seed.get("metadata") or {}))
+        return item
+    return None
 
 
 class ProviderDefinitionsRepository:
@@ -511,11 +569,23 @@ class ProviderDefinitionsRepository:
 
     def get_by_key(self, provider_type: str, provider_key: str) -> ProviderDefinitionModel | None:
         with Session(engine) as session:
-            return session.exec(
+            item = session.exec(
                 select(ProviderDefinitionModel)
                 .where(ProviderDefinitionModel.provider_type == provider_type)
                 .where(ProviderDefinitionModel.provider_key == provider_key)
             ).first()
+            if item:
+                return item
+            alias_key = _LEGACY_PROVIDER_ALIASES.get((provider_type, provider_key))
+            if alias_key:
+                item = session.exec(
+                    select(ProviderDefinitionModel)
+                    .where(ProviderDefinitionModel.provider_type == provider_type)
+                    .where(ProviderDefinitionModel.provider_key == alias_key)
+                ).first()
+                if item:
+                    return item
+            return _definition_from_seed(provider_type, provider_key)
 
     def list_driver_templates(self, provider_type: str) -> list[dict]:
         """从 DB 读取：按 driver_type 去重，返回可用驱动模板列表。"""

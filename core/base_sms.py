@@ -1214,6 +1214,188 @@ class UOMsgProvider(BaseSmsProvider):
         return self._request("queryUsed")
 
 
+HAOZHUMA_DEFAULT_BASE_URL = "https://api.haozhuyun.com/sms/"
+
+
+class HaoZhuMaProvider(BaseSmsProvider):
+    """HaoZhuMa provider (api.haozhuyun.com)."""
+
+    BASE_URL = HAOZHUMA_DEFAULT_BASE_URL
+
+    def __init__(
+        self,
+        token: str = "",
+        *,
+        user: str = "",
+        password: str = "",
+        sid: str = "",
+        phone: str = "",
+        isp: str = "",
+        province: str = "",
+        ascription: str = "",
+        paragraph: str = "",
+        exclude: str = "",
+        uid: str = "",
+        author: str = "",
+        poll_interval: int = 15,
+        proxy: str | None = None,
+        base_url: str = "",
+    ):
+        self.token = str(token or "").strip()
+        self.user = str(user or "").strip()
+        self.password = str(password or "").strip()
+        self.sid = str(sid or "").strip()
+        self.phone = str(phone or "").strip()
+        self.isp = str(isp or "").strip()
+        self.province = str(province or "").strip()
+        self.ascription = str(ascription or "").strip()
+        self.paragraph = str(paragraph or "").strip()
+        self.exclude = str(exclude or "").strip()
+        self.uid = str(uid or "").strip()
+        self.author = str(author or "").strip()
+        self.poll_interval = max(1, _safe_int(poll_interval, 15))
+        self.base_url = str(base_url or self.BASE_URL).strip() or self.BASE_URL
+        self.proxies = {"http": proxy, "https": proxy} if proxy else None
+        self._activation_sids: dict[str, str] = {}
+        self._closed_activations: set[str] = set()
+
+    def _request(self, api: str, *, needs_token: bool = True, **params) -> dict:
+        payload = {"api": api}
+        if needs_token:
+            payload["token"] = self._token()
+        for key, value in params.items():
+            if value not in (None, ""):
+                payload[key] = value
+        resp = requests.get(self.base_url, params=payload, timeout=20, proxies=self.proxies)
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise RuntimeError(f"HaoZhuMa {api} returned invalid JSON: {resp.text[:200]}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"HaoZhuMa {api} returned unexpected response: {data!r}")
+        code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"}:
+            raise RuntimeError(f"HaoZhuMa {api} failed: {data.get('msg') or data}")
+        return data
+
+    def _token(self) -> str:
+        if self.token:
+            return self.token
+        if not self.user or not self.password:
+            raise RuntimeError("HaoZhuMa 未配置 API Token 或账号密码")
+        data = self._request("login", needs_token=False, user=self.user, **{"pass": self.password})
+        self.token = str(data.get("token") or "").strip()
+        if not self.token:
+            raise RuntimeError(f"HaoZhuMa login did not return token: {data}")
+        return self.token
+
+    def _sid(self, service: str = "") -> str:
+        sid = str(self.sid or service or "").strip()
+        if not sid:
+            raise RuntimeError("HaoZhuMa 需要配置项目 ID(haozhuma_sid)")
+        return sid
+
+    def get_balance(self):
+        data = self._request("getSummary")
+        value = data.get("money")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+
+    def get_number(self, *, service: str, country: str = "") -> SmsActivation:
+        sid = self._sid(service)
+        data = self._request(
+            "getPhone",
+            sid=sid,
+            phone=self.phone,
+            isp=self.isp,
+            Province=country or self.province,
+            ascription=self.ascription,
+            paragraph=self.paragraph,
+            exclude=self.exclude,
+            uid=self.uid,
+            author=self.author,
+        )
+        phone = str(data.get("phone") or "").strip()
+        if not phone:
+            raise RuntimeError(f"HaoZhuMa getPhone 未返回手机号: {data}")
+        self._activation_sids[phone] = str(data.get("sid") or sid).strip() or sid
+        return SmsActivation(
+            activation_id=phone,
+            phone_number=phone,
+            country=country or self.province or str(data.get("country_code") or ""),
+            metadata={"sid": self._activation_sids[phone], "provider": "haozhuma", "raw": data},
+        )
+
+    def get_code(self, activation_id: str, *, timeout: int = 120) -> str:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return ""
+        sid = self._activation_sids.get(phone) or self._sid("")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                data = self._request("getMessage", sid=sid, phone=phone)
+            except requests.RequestException as exc:
+                logger.warning("HaoZhuMa getMessage transient request error for %s: %s", phone, exc)
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
+            code = str(data.get("yzm") or "").strip() or _extract_uomsg_code(str(data.get("sms") or ""))
+            if code:
+                return code
+            time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+        self._release_and_blacklist(phone)
+        return ""
+
+    def _release(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return False
+        sid = self._activation_sids.get(phone) or self._sid("")
+        self._request("cancelRecv", sid=sid, phone=phone)
+        return True
+
+    def block(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return False
+        sid = self._activation_sids.get(phone) or self._sid("")
+        self._request("addBlacklist", sid=sid, phone=phone)
+        return True
+
+    def _release_and_blacklist(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone or phone in self._closed_activations:
+            return False
+        ok = True
+        try:
+            self._release(phone)
+        except Exception as exc:
+            ok = False
+            logger.warning("HaoZhuMa cancelRecv failed for %s: %s", phone, exc)
+        try:
+            self.block(phone)
+        except Exception as exc:
+            ok = False
+            logger.warning("HaoZhuMa addBlacklist failed for %s: %s", phone, exc)
+        self._closed_activations.add(phone)
+        return ok
+
+    def cancel(self, activation_id: str) -> bool:
+        return self._release_and_blacklist(activation_id)
+
+    def report_success(self, activation_id: str) -> bool:
+        return self._release_and_blacklist(activation_id)
+
+    def mark_code_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
+
+    def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
+
+
 def is_herosms_phone_cache_alive(config: dict | None = None) -> tuple[bool, dict]:
     """Return whether the current HeroSMS cache is reusable for scheduling."""
     config = dict(config or {})
@@ -1284,6 +1466,29 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             poll_interval=_safe_int(config.get("uomsg_poll_interval"), 3),
             proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
             base_url=str(config.get("uomsg_base_url") or "").strip(),
+        )
+    if provider_key in ("haozhuma", "haozhuma_api"):
+        token = str(config.get("haozhuma_token") or config.get("token") or "").strip()
+        user = str(config.get("haozhuma_user") or config.get("haozhuma_username") or "").strip()
+        password = str(config.get("haozhuma_password") or "").strip()
+        if not token and not (user and password):
+            raise RuntimeError("HaoZhuMa 未配置 API Token 或账号密码")
+        return HaoZhuMaProvider(
+            token=token,
+            user=user,
+            password=password,
+            sid=str(config.get("haozhuma_sid") or config.get("sms_service") or "").strip(),
+            phone=str(config.get("haozhuma_phone") or "").strip(),
+            isp=str(config.get("haozhuma_isp") or "").strip(),
+            province=str(config.get("haozhuma_province") or config.get("sms_country") or "").strip(),
+            ascription=str(config.get("haozhuma_ascription") or "").strip(),
+            paragraph=str(config.get("haozhuma_paragraph") or "").strip(),
+            exclude=str(config.get("haozhuma_exclude") or "").strip(),
+            uid=str(config.get("haozhuma_uid") or "").strip(),
+            author=str(config.get("haozhuma_author") or "").strip(),
+            poll_interval=_safe_int(config.get("haozhuma_poll_interval"), 15),
+            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            base_url=str(config.get("haozhuma_base_url") or "").strip(),
         )
     raise RuntimeError(f"未知的接码服务: {provider_key}")
 

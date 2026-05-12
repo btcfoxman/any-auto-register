@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from core.base_sms import (
     HeroSmsProvider,
+    HaoZhuMaProvider,
     SmsActivation,
     SmsActivateProvider,
     UOMsgProvider,
@@ -81,6 +82,16 @@ class TestCreateSmsProvider:
     def test_uomsg_missing_token(self):
         with pytest.raises(RuntimeError, match="UOMsg 未配置"):
             create_sms_provider("uomsg_api", {})
+
+    def test_haozhuma(self):
+        provider = create_sms_provider("haozhuma_api", {"haozhuma_token": "tok123", "haozhuma_sid": "1000"})
+        assert isinstance(provider, HaoZhuMaProvider)
+        assert provider.token == "tok123"
+        assert provider.sid == "1000"
+
+    def test_haozhuma_missing_auth(self):
+        with pytest.raises(RuntimeError, match="HaoZhuMa 未配置"):
+            create_sms_provider("haozhuma_api", {"haozhuma_sid": "1000"})
 
     def test_unknown_provider(self):
         with pytest.raises(RuntimeError, match="未知"):
@@ -226,6 +237,80 @@ class TestUOMsgProvider:
         provider = UOMsgProvider("tok", default_keyword="腾讯")
 
         assert provider.get_code_after("16512345678", timeout=5) == "444444"
+
+
+class TestHaoZhuMaProvider:
+    def test_get_number_get_code_release_and_blacklist(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            api = (params or {}).get("api")
+            if api == "getPhone":
+                return FakeResponse({"code": "0", "sid": "1000", "phone": "16512345678", "country_code": "cn"})
+            if api == "getMessage":
+                return FakeResponse({"code": "0", "sms": "【腾讯】验证码为：654321", "yzm": "654321"})
+            if api == "cancelRecv":
+                return FakeResponse({"code": "0", "msg": "释放成功"})
+            if api == "addBlacklist":
+                return FakeResponse({"code": "0", "msg": "success"})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = HaoZhuMaProvider("tok", sid="1000", province="44", poll_interval=1)
+        activation = provider.get_number(service="qq")
+        assert activation.activation_id == "16512345678"
+        assert activation.metadata["sid"] == "1000"
+        assert provider.get_code(activation.activation_id, timeout=5) == "654321"
+        assert provider.report_success(activation.activation_id) is True
+        assert calls[0][1] == {"api": "getPhone", "token": "tok", "sid": "1000", "Province": "44"}
+        assert calls[1][1] == {"api": "getMessage", "token": "tok", "sid": "1000", "phone": "16512345678"}
+        assert calls[2][1] == {"api": "cancelRecv", "token": "tok", "sid": "1000", "phone": "16512345678"}
+        assert calls[3][1] == {"api": "addBlacklist", "token": "tok", "sid": "1000", "phone": "16512345678"}
+        provider.cancel(activation.activation_id)
+        assert len([call for call in calls if call[1]["api"] == "cancelRecv"]) == 1
+
+    def test_timeout_releases_and_blacklists(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            api = (params or {}).get("api")
+            if api == "getMessage":
+                return FakeResponse({"code": "0", "sms": "", "yzm": ""})
+            return FakeResponse({"code": "0", "msg": "ok"})
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = HaoZhuMaProvider("tok", sid="1000", poll_interval=1)
+        provider._activation_sids["16512345678"] = "1000"
+
+        assert provider.get_code("16512345678", timeout=0) == ""
+        assert [call["api"] for call in calls] == ["cancelRecv", "addBlacklist"]
 
 
 class TestCreatePhoneCallbacks:

@@ -277,6 +277,9 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'lingya2api_url', label: 'API URL', placeholder: 'http://localhost:8000' },
         { key: 'lingya2api_api_key', label: 'API Key', secret: true },
         { key: 'lingya2api_max_concurrency', label: 'Max Concurrency', placeholder: '1' },
+        { key: 'lingya_qq_keepalive_enabled', label: 'Local Keepalive', placeholder: 'true' },
+        { key: 'lingya_qq_heartbeat_interval_seconds', label: 'Heartbeat Interval Seconds', placeholder: '300' },
+        { key: 'lingya_qq_balance_interval_seconds', label: 'Balance Interval Seconds', placeholder: '600' },
       ],
     }, {
       section: 'Post-register automation',

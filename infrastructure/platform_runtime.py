@@ -255,6 +255,8 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             "last_publish_status",
             "last_publish_at",
             "last_publish_work_status",
+            "publish_skipped",
+            "publish_skip_reason",
         ):
             if data.get(key) not in (None, ""):
                 overview[key] = data.get(key)

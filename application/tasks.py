@@ -502,6 +502,8 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
         "last_publish_work_status",
         "last_publish_at",
         "last_publish_review_result",
+        "publish_skipped",
+        "publish_skip_reason",
         "quota_balance",
         "quota_sum",
     }
@@ -552,6 +554,37 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
 
 
 def _auto_followup_lingya_qq_rewards(
+    *,
+    platform_name: str,
+    payload: dict[str, Any],
+    platform,
+    account,
+    logger: "TaskLogger",
+) -> None:
+    if platform_name != "lingya_qq" or getattr(account, "platform", "") != "lingya_qq":
+        return
+
+    def _target() -> None:
+        try:
+            _run_auto_followup_lingya_qq_rewards(
+                platform_name=platform_name,
+                payload=payload,
+                platform=platform,
+                account=account,
+                logger=logger,
+            )
+        except Exception as exc:
+            logger.log(f"  [LingYaQQ] async follow-up error: {exc}", level="warning")
+
+    threading.Thread(
+        target=_target,
+        daemon=True,
+        name=f"lingya-followup-{str(getattr(account, 'email', '') or 'account')[:24]}",
+    ).start()
+    logger.log("  [LingYaQQ] post-register follow-up queued in background")
+
+
+def _run_auto_followup_lingya_qq_rewards(
     *,
     platform_name: str,
     payload: dict[str, Any],
