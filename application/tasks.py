@@ -48,9 +48,25 @@ ACTIVE_TASK_STATUSES = {
     TASK_STATUS_RUNNING,
     TASK_STATUS_CANCEL_REQUESTED,
 }
+ACTIVE_ACCOUNT_CHECK_LIFECYCLE_STATUSES = {"registered", "trial", "subscribed"}
+LINGYA_STATUS_LABELS = {
+    "signed": "已签到",
+    "already_signed": "今日已签到",
+    "not_available": "不可用",
+    "panel_unavailable": "签到面板不可用",
+    "disabled": "已关闭",
+    "skipped": "已跳过",
+    "succeeded": "成功",
+    "failed": "失败",
+}
 
 _task_locks: dict[str, threading.Lock] = {}
 _task_locks_guard = threading.Lock()
+
+
+def _lingya_status_label(value: Any) -> str:
+    text = str(value or "").strip()
+    return LINGYA_STATUS_LABELS.get(text, text)
 
 
 def _utcnow() -> datetime:
@@ -541,11 +557,11 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
         extra["quota"] = quota
     chips = list(overview.get("chips") or [])
     if data.get("daily_sign_in_status"):
-        chips.append(f"Sign-in {data.get('daily_sign_in_status')}")
+        chips.append(f"签到 {_lingya_status_label(data.get('daily_sign_in_status'))}")
     if data.get("last_publish_status"):
-        chips.append(f"Publish {data.get('last_publish_status')}")
+        chips.append(f"发布 {_lingya_status_label(data.get('last_publish_status'))}")
     if quota.get("quota_balance") not in (None, "") or quota.get("quota_sum") not in (None, ""):
-        chips.append(f"Quota {quota.get('quota_balance', '-')}/{quota.get('quota_sum', '-')}")
+        chips.append(f"额度 {quota.get('quota_balance', '-')}/{quota.get('quota_sum', '-')}")
     if chips:
         seen: set[str] = set()
         overview["chips"] = [chip for chip in chips if chip and not (chip in seen or seen.add(chip))]
@@ -599,18 +615,21 @@ def _run_auto_followup_lingya_qq_rewards(
     extra_cfg = dict(payload.get("extra") or {})
     publish_source_url = str(_task_config_value(extra_cfg, "lingya_qq_publish_source_url", "") or "").strip()
     publish_required = _bool_config(_task_config_value(extra_cfg, "lingya_qq_publish_required", False), False)
+    daily_sign_enabled = _bool_config(_task_config_value(extra_cfg, "lingya_qq_daily_sign_in_enabled", True), True)
 
-    if _bool_config(_task_config_value(extra_cfg, "lingya_qq_auto_daily_sign_in", True), True):
+    if not daily_sign_enabled:
+        logger.log("  [LingYaQQ] 签到功能已关闭")
+    elif _bool_config(_task_config_value(extra_cfg, "lingya_qq_auto_daily_sign_in", True), True):
         try:
-            logger.log("  [LingYaQQ] running daily sign-in if available")
+            logger.log("  [LingYaQQ] 执行每日签到")
             result = platform.execute_action("daily_sign_in", account, {"_cancel_check": logger.is_cancel_requested})
             if result.get("ok"):
                 _merge_lingya_followup_data(account, dict(result.get("data") or {}))
                 save_account(account)
             else:
-                logger.log(f"  [LingYaQQ] daily sign-in skipped/failed: {result.get('error')}", level="warning")
+                logger.log(f"  [LingYaQQ] 签到跳过或失败: {result.get('error')}", level="warning")
         except Exception as exc:
-            logger.log(f"  [LingYaQQ] daily sign-in error: {exc}", level="warning")
+            logger.log(f"  [LingYaQQ] 签到异常: {exc}", level="warning")
 
     try:
         should_publish = _bool_config(
@@ -620,13 +639,13 @@ def _run_auto_followup_lingya_qq_rewards(
         if not should_publish:
             return
         if not publish_source_url:
-            message = "LingYaQQ publish source URL is not configured"
+            message = "LingYaQQ 发布内容接口未配置"
             if publish_required:
                 raise RuntimeError(message)
-            logger.log(f"  [LingYaQQ] publish skipped: {message}", level="warning")
+            logger.log(f"  [LingYaQQ] 发布已跳过: {message}", level="warning")
             return
 
-        logger.log("  [LingYaQQ] publishing one work after login/registration")
+        logger.log("  [LingYaQQ] 登录/注册后发布一个作品")
         result = platform.execute_action(
             "publish_work",
             account,
@@ -643,16 +662,16 @@ def _run_auto_followup_lingya_qq_rewards(
         if result.get("ok"):
             _merge_lingya_followup_data(account, dict(result.get("data") or {}))
             save_account(account)
-            logger.log("  [LingYaQQ] publish completed and quota refreshed")
+            logger.log("  [LingYaQQ] 发布完成并已刷新额度")
         else:
-            message = str(result.get("error") or "LingYaQQ publish failed")
+            message = str(result.get("error") or "LingYaQQ 发布失败")
             if publish_required:
                 raise RuntimeError(message)
-            logger.log(f"  [LingYaQQ] publish failed: {message}", level="warning")
+            logger.log(f"  [LingYaQQ] 发布失败: {message}", level="warning")
     except Exception as exc:
         if publish_required:
             raise
-        logger.log(f"  [LingYaQQ] follow-up error: {exc}", level="warning")
+        logger.log(f"  [LingYaQQ] 后续自动化异常: {exc}", level="warning")
 
 
 def _auto_upload_cpa(task_logger: TaskLogger, account) -> None:
@@ -1130,17 +1149,23 @@ def _execute_account_check_all_task(payload: dict[str, Any], logger: TaskLogger)
             q = q.where(AccountModel.platform == platform)
         q = q.order_by(AccountModel.created_at.desc(), AccountModel.id.desc())
         accounts = session.exec(q.limit(limit)).all()
+        graphs = load_account_graphs(session, [int(item.id or 0) for item in accounts if item.id])
 
-    total = len(accounts)
+    targets = [
+        model for model in accounts
+        if _is_active_account_check_target(graphs.get(int(model.id or 0), {}))
+    ]
+    skipped = len(accounts) - len(targets)
+    total = len(targets)
     logger.set_progress(0, total)
     if total == 0:
-        logger.set_result_data({"valid": 0, "invalid": 0, "error": 0})
+        logger.set_result_data({"valid": 0, "invalid": 0, "error": 0, "skipped": skipped})
         logger.finish(TASK_STATUS_SUCCEEDED)
         return
 
-    results = {"valid": 0, "invalid": 0, "error": 0}
+    results = {"valid": 0, "invalid": 0, "error": 0, "skipped": skipped}
     completed = 0
-    for model in accounts:
+    for model in targets:
         if logger.is_cancel_requested():
             logger.finish(TASK_STATUS_CANCELLED, error="任务已取消")
             return
@@ -1158,3 +1183,14 @@ def _execute_account_check_all_task(payload: dict[str, Any], logger: TaskLogger)
         logger.set_progress(completed, total)
     logger.set_result_data(results)
     logger.finish(TASK_STATUS_SUCCEEDED)
+
+
+def _is_active_account_check_target(graph: dict[str, Any]) -> bool:
+    overview = graph.get("overview") or {}
+    lifecycle = str(graph.get("lifecycle_status") or overview.get("lifecycle_status") or "registered")
+    if lifecycle not in ACTIVE_ACCOUNT_CHECK_LIFECYCLE_STATUSES:
+        return False
+    validity = str(graph.get("validity_status") or overview.get("validity_status") or "").lower()
+    if validity == "invalid" or overview.get("valid") is False:
+        return False
+    return True

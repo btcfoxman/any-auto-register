@@ -314,17 +314,17 @@ class LingYaQQPlatform(BasePlatform):
         actions.append(
             {
                 "id": "keepalive_sync",
-                "label": "LingYaQQ keepalive + sync",
+                "label": "LingYaQQ 保活并同步",
                 "sync": False,
                 "params": [
-                    {"key": "force_refresh", "label": "Force WebRefresh (true/false)", "type": "text"},
+                    {"key": "force_refresh", "label": "强制刷新会话（true/false）", "type": "text"},
                 ],
             }
         )
         actions.append(
             {
                 "id": "sync_lingya2api",
-                "label": "Sync to lingya2api",
+                "label": "同步到 lingya2api",
                 "sync": False,
                 "params": [],
             }
@@ -332,27 +332,27 @@ class LingYaQQPlatform(BasePlatform):
         actions.append(
             {
                 "id": "daily_sign_in",
-                "label": "LingYaQQ daily sign-in",
+                "label": "LingYaQQ 每日签到",
                 "sync": False,
                 "params": [
-                    {"key": "force", "label": "Force sign-in (true/false)", "type": "text"},
+                    {"key": "force", "label": "强制签到（true/false）", "type": "text"},
                 ],
             }
         )
         actions.append(
             {
                 "id": "publish_work",
-                "label": "LingYaQQ publish work",
+                "label": "LingYaQQ 发布作品",
                 "sync": False,
                 "params": [
-                    {"key": "source_url", "label": "Third-party GET source URL", "type": "text"},
-                    {"key": "source_timeout", "label": "Source request timeout seconds", "type": "number"},
-                    {"key": "source_retries", "label": "Source request retries", "type": "number"},
-                    {"key": "upload_service_id", "label": "Video upload serviceId", "type": "text"},
-                    {"key": "initial_delay", "label": "Audit initial delay seconds", "type": "number"},
-                    {"key": "poll_interval", "label": "Audit poll interval seconds", "type": "number"},
-                    {"key": "timeout", "label": "Audit timeout seconds", "type": "number"},
-                    {"key": "force", "label": "Force publish even if work exists", "type": "text"},
+                    {"key": "source_url", "label": "第三方 GET 内容接口", "type": "text"},
+                    {"key": "source_timeout", "label": "内容接口超时秒数", "type": "number"},
+                    {"key": "source_retries", "label": "内容接口重试次数", "type": "number"},
+                    {"key": "upload_service_id", "label": "视频上传 serviceId", "type": "text"},
+                    {"key": "initial_delay", "label": "审核初始等待秒数", "type": "number"},
+                    {"key": "poll_interval", "label": "审核轮询间隔秒数", "type": "number"},
+                    {"key": "timeout", "label": "审核超时秒数", "type": "number"},
+                    {"key": "force", "label": "已有作品时仍强制发布", "type": "text"},
                 ],
             }
         )
@@ -654,12 +654,24 @@ class LingYaQQPlatform(BasePlatform):
 
     def _handle_daily_sign_in(self, account: Account, params: dict | None = None) -> dict:
         params = params or {}
+        source = _account_value_source(account)
+        if not _as_bool(self._runtime_value(source, params, "lingya_qq_daily_sign_in_enabled", True), True):
+            return {
+                "ok": True,
+                "data": {
+                    "message": "LingYaQQ 签到功能已关闭，已跳过",
+                    "daily_sign_in_status": "disabled",
+                    "daily_sign_in_at": int(time.time()),
+                    "daily_sign_signed": False,
+                    "daily_sign_already_signed": False,
+                },
+            }
         source, cookie_fields, client = self._client_from_account(account)
         force = _as_bool(params.get("force"), False)
         try:
             panel = client.get_credits_panel(False)
         except Exception as exc:
-            self.log(f"LingYaQQ credits panel unavailable; daily sign-in skipped: {exc}")
+            self.log(f"LingYaQQ 签到面板不可用，已跳过签到: {exc}")
             quota: dict[str, Any] = {}
             try:
                 quota = client.get_user_quota()
@@ -670,7 +682,7 @@ class LingYaQQPlatform(BasePlatform):
                 "ok": True,
                 "data": {
                     **cookie_fields,
-                    "message": "LingYaQQ daily sign-in skipped because the credits panel is unavailable",
+                    "message": "LingYaQQ 签到面板不可用，已跳过签到",
                     "daily_sign_in_status": "panel_unavailable",
                     "daily_sign_in_at": int(time.time()),
                     "daily_sign_signed": False,
@@ -685,25 +697,25 @@ class LingYaQQPlatform(BasePlatform):
         if need_sign:
             sign_response = client.credits_panel_sign_in()
             if _as_int(sign_response.get("ret"), 0) != 0:
-                return {"ok": False, "error": f"LingYaQQ daily sign-in failed: {sign_response.get('msg') or sign_response}"}
+                return {"ok": False, "error": f"LingYaQQ 签到失败: {sign_response.get('msg') or sign_response}"}
             sign_data = sign_response.get("data") if isinstance(sign_response.get("data"), dict) else {}
             signed = bool(sign_data.get("isSignInSuccess") or sign_data.get("is_sign_in_success"))
             if not signed:
-                return {"ok": False, "error": f"LingYaQQ daily sign-in was not accepted: {sign_response}"}
+                return {"ok": False, "error": f"LingYaQQ 签到未被接受: {sign_response}"}
             panel = client.get_credits_panel(False)
 
         quota: dict[str, Any] = {}
         try:
             quota = client.get_user_quota()
         except Exception as exc:
-            self.log(f"LingYaQQ quota refresh skipped after daily sign-in: {exc}")
+            self.log(f"LingYaQQ 签到后额度刷新已跳过: {exc}")
         quota_overview = _quota_summary(quota)
         status = "signed" if signed else ("already_signed" if already_signed else "not_available")
         return {
             "ok": True,
             "data": {
                 **cookie_fields,
-                "message": "LingYaQQ daily sign-in completed",
+                "message": "LingYaQQ 签到完成",
                 "daily_sign_in_status": status,
                 "daily_sign_in_at": int(time.time()),
                 "daily_sign_signed": signed,

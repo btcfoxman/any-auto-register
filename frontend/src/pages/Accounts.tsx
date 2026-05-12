@@ -11,12 +11,48 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { getTaskStatusText, TASK_STATUS_VARIANTS } from '@/lib/tasks'
-import { RefreshCw, Copy, ExternalLink, Download, Upload, Plus, X, Mail, Trash2, Zap } from 'lucide-react'
+import { RefreshCw, Copy, ExternalLink, Download, Upload, Plus, X, Mail, Trash2, Zap, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const STATUS_VARIANT: Record<string, any> = {
   registered: 'default', trial: 'success', subscribed: 'success',
   expired: 'warning', invalid: 'danger',
   free: 'secondary', eligible: 'secondary', valid: 'success', unknown: 'secondary',
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  registered: '已注册',
+  trial: '试用中',
+  subscribed: '已订阅',
+  expired: '已过期',
+  invalid: '已失效',
+  free: '免费',
+  eligible: '可试用',
+  valid: '有效',
+  unknown: '未知',
+  signed: '已签到',
+  already_signed: '今日已签到',
+  not_available: '不可用',
+  panel_unavailable: '签到面板不可用',
+  disabled: '已关闭',
+  skipped: '已跳过',
+}
+
+const ACTION_LABEL: Record<string, string> = {
+  'LingYaQQ keepalive + sync': 'LingYaQQ 保活并同步',
+  'Sync to lingya2api': '同步到 lingya2api',
+  'LingYaQQ daily sign-in': 'LingYaQQ 每日签到',
+  'LingYaQQ publish work': 'LingYaQQ 发布作品',
+}
+
+function statusLabel(status: any) {
+  const raw = String(status || '').trim()
+  if (!raw) return '-'
+  return STATUS_LABEL[raw.toLowerCase()] || raw
+}
+
+function actionLabel(label: any) {
+  const raw = String(label || '').trim()
+  return ACTION_LABEL[raw] || raw || '动作'
 }
 
 const platformActionsCache = new Map<string, any[]>()
@@ -65,14 +101,14 @@ function getCompactStatusMeta(acc: any) {
   if (primaryMetrics.length > 0) {
     return primaryMetrics.slice(0, 2).map((item: any) => {
       const sub = item?.sub ? ` · ${item.sub}` : ''
-      return `${item?.label || ''}:${item?.value || '-'}${sub}`
+      return `${item?.label || ''}:${statusLabel(item?.value || '-')}${sub}`
     }).join(' / ')
   }
   const overview = getAccountOverview(acc)
   const parts = [
-    `生命周期:${getLifecycleStatus(acc)}`,
-    `套餐:${getPlanState(acc)}`,
-    `有效:${getValidityStatus(acc)}`,
+    `生命周期:${statusLabel(getLifecycleStatus(acc))}`,
+    `套餐:${statusLabel(getPlanState(acc))}`,
+    `有效:${statusLabel(getValidityStatus(acc))}`,
   ]
   const remainingCredits = overview?.remaining_credits
   const usageTotal = overview?.usage_total
@@ -673,7 +709,7 @@ function AddModal({ platform, onClose, onDone }: { platform: string; onClose: ()
 function formatResultValue(value: any) {
   if (value === null || value === undefined || value === '') return '-'
   if (typeof value === 'boolean') return value ? '是' : '否'
-  return String(value)
+  return statusLabel(value)
 }
 
 function ResultStat({ label, value }: { label: string; value: any }) {
@@ -949,8 +985,8 @@ function ActionTaskModal({
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_0%,rgba(9,182,162,0.18),transparent_34%),linear-gradient(90deg,rgba(255,255,255,0.04),transparent)]" />
           <div className="relative flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="mb-2 inline-flex rounded-full border border-[var(--border)] bg-[var(--chip-bg)] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                Platform Action
+              <div className="mb-2 inline-flex rounded-full border border-[var(--border)] bg-[var(--chip-bg)] px-3 py-1 text-[11px] tracking-[0.12em] text-[var(--text-muted)]">
+                平台动作
               </div>
               <h2 className="truncate text-lg font-semibold text-[var(--text-primary)]">{title}</h2>
               <p className="mt-1 text-xs text-[var(--text-muted)]">任务状态、错误摘要与实时日志集中展示</p>
@@ -1010,7 +1046,7 @@ function ActionParamsModal({
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
           <div>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">{action?.label || '动作参数'}</h2>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">{actionLabel(action?.label)}</h2>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">填写执行该动作所需的参数</p>
           </div>
           <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
@@ -1105,7 +1141,7 @@ function ActionMenu({
         if (resp?.sync) {
           setRunning(null)
           if (!resp.ok) {
-            setToast({ type: 'error', text: resp.error || 'Operation failed' })
+            setToast({ type: 'error', text: resp.error || '操作失败' })
             return
           }
           onChanged()
@@ -1118,17 +1154,17 @@ function ActionMenu({
               // Ignore clipboard errors
             }
           }
-          onResult(action.label, resp.data)
+          onResult(actionLabel(action.label), resp.data)
           return
         }
         setActionTask({
           taskId: resp.task_id,
-          title: `${acc.email} · ${action.label}`,
+          title: `${acc.email} · ${actionLabel(action.label)}`,
         })
       })
       .catch(() => {
         setRunning(null)
-        setToast({ type: 'error', text: 'Request failed' })
+        setToast({ type: 'error', text: '请求失败' })
       })
   }
 
@@ -1312,7 +1348,7 @@ function ActionMenu({
                   }}
                   disabled={!!running}
                   className="w-full px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:opacity-50">
-                  {running === a.id ? '执行中...' : a.label}
+                  {running === a.id ? '执行中...' : actionLabel(a.label)}
                 </button>
               ))}
               <div className="my-1 border-t border-[var(--border)]/70" />
@@ -1391,22 +1427,22 @@ function DetailModal({ acc, onClose, onSave }: { acc: any; onClose: () => void; 
               <div>
                 <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">核心状态</div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Badge variant={STATUS_VARIANT[getDisplayStatus(acc)] || 'secondary'}>{getDisplayStatus(acc)}</Badge>
-                  <span className="text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{acc.plan_name || overview.plan_name || overview.plan || getPlanState(acc)}</span>
+                  <Badge variant={STATUS_VARIANT[getDisplayStatus(acc)] || 'secondary'}>{statusLabel(getDisplayStatus(acc))}</Badge>
+                  <span className="text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{acc.plan_name || overview.plan_name || overview.plan || statusLabel(getPlanState(acc))}</span>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-right text-[11px] text-[var(--text-muted)] sm:grid-cols-3">
                 <div className="rounded-xl border border-[var(--border-soft)] bg-black/10 px-2.5 py-2">
                   <div className="uppercase tracking-[0.12em]">生命周期</div>
-                  <div className="mt-1 text-[var(--text-primary)]">{getLifecycleStatus(acc)}</div>
+                  <div className="mt-1 text-[var(--text-primary)]">{statusLabel(getLifecycleStatus(acc))}</div>
                 </div>
                 <div className="rounded-xl border border-[var(--border-soft)] bg-black/10 px-2.5 py-2">
                   <div className="uppercase tracking-[0.12em]">有效性</div>
-                  <div className="mt-1 text-[var(--text-primary)]">{getValidityStatus(acc)}</div>
+                  <div className="mt-1 text-[var(--text-primary)]">{statusLabel(getValidityStatus(acc))}</div>
                 </div>
                 <div className="rounded-xl border border-[var(--border-soft)] bg-black/10 px-2.5 py-2">
                   <div className="uppercase tracking-[0.12em]">套餐状态</div>
-                  <div className="mt-1 text-[var(--text-primary)]">{getPlanState(acc)}</div>
+                  <div className="mt-1 text-[var(--text-primary)]">{statusLabel(getPlanState(acc))}</div>
                 </div>
               </div>
             </div>
@@ -1504,7 +1540,7 @@ function DetailModal({ acc, onClose, onSave }: { acc: any; onClose: () => void; 
             <label className="text-xs text-[var(--text-muted)] block mb-1">生命周期状态</label>
             <select value={form.lifecycle_status} onChange={e => setForm(f => ({ ...f, lifecycle_status: e.target.value }))}
               className="control-surface appearance-none">
-              {['registered','trial','subscribed','expired','invalid'].map(s => <option key={s} value={s}>{s}</option>)}
+              {['registered','trial','subscribed','expired','invalid'].map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
             </select>
           </div>
           <div>
@@ -1655,6 +1691,8 @@ export default function Accounts() {
 
   const [accounts, setAccounts] = useState<any[]>([])
   const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -1689,20 +1727,32 @@ export default function Accounts() {
 
   useEffect(() => {
     setSelectedIds(new Set())
+    setPage(1)
   }, [tab, filterStatus, debouncedSearch])
 
-  const load = useCallback(async (p = tab, s = debouncedSearch, fs = filterStatus) => {
+  const load = useCallback(async (p = tab, s = debouncedSearch, fs = filterStatus, pg = page, ps = pageSize) => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ platform: p, page: '1', page_size: '100' })
+      const params = new URLSearchParams({ platform: p, page: String(pg), page_size: String(ps) })
       if (s) params.set('email', s)
       if (fs) params.set('status', fs)
       const data = await apiFetch(`/accounts?${params}`)
-      setAccounts(data.items); setTotal(data.total)
+      setAccounts(Array.isArray(data.items) ? data.items : [])
+      setTotal(Number(data.total || 0))
     } finally { setLoading(false) }
-  }, [tab, debouncedSearch, filterStatus])
+  }, [tab, debouncedSearch, filterStatus, page, pageSize])
 
-  useEffect(() => { load(tab, debouncedSearch, filterStatus) }, [tab, debouncedSearch, filterStatus])
+  useEffect(() => { load(tab, debouncedSearch, filterStatus, page, pageSize) }, [tab, debouncedSearch, filterStatus, page, pageSize, load])
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const pageStart = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const pageEnd = Math.min(total, page * pageSize)
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [page, totalPages])
 
   useEffect(() => {
     setSelectedIds(prev => {
@@ -1920,6 +1970,49 @@ export default function Accounts() {
               </Button>
             )}
           </div>
+          <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--border)]/50 bg-[var(--bg-pane)]/20 px-5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs text-[var(--text-muted)]">
+              {total > 0 ? `显示 ${pageStart}-${pageEnd} / ${total}` : '显示 0 / 0'}
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={e => {
+                  setPageSize(Number(e.target.value))
+                  setPage(1)
+                }}
+                className="h-8 rounded-md border border-[var(--border)] bg-transparent px-2 text-xs text-[var(--text-primary)] focus:border-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--text-primary)]"
+              >
+                <option value={20}>20 / 页</option>
+                <option value={50}>50 / 页</option>
+                <option value={100}>100 / 页</option>
+                <option value={200}>200 / 页</option>
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 bg-transparent p-0"
+                disabled={loading || page <= 1}
+                onClick={() => setPage(prev => Math.max(1, prev - 1))}
+                title="上一页"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <div className="min-w-[72px] text-center text-xs text-[var(--text-secondary)]">
+                {page} / {totalPages}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 bg-transparent p-0"
+                disabled={loading || page >= totalPages}
+                onClick={() => setPage(prev => Math.min(totalPages, prev + 1))}
+                title="下一页"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </div>
       </Card>
 
@@ -1946,12 +2039,12 @@ export default function Accounts() {
                   className="checkbox-accent rounded-[3px] border-[var(--border)] focus:ring-[var(--text-primary)] focus:ring-offset-0 bg-transparent text-[var(--text-primary)]"
                 />
               </th>
-              <th className="px-3 py-2 text-left">邮箱 (Email)</th>
-              <th className="px-3 py-2 text-left">密码 (Pwd)</th>
-              <th className="px-3 py-2 text-left">状态 (Status)</th>
-              <th className="px-3 py-2 text-left">试用链接 (Link)</th>
-              <th className="px-3 py-2 text-left">注册时间 (Date)</th>
-              <th className="px-3 py-2 text-right">操作 (Action)</th>
+              <th className="px-3 py-2 text-left">邮箱</th>
+              <th className="px-3 py-2 text-left">密码</th>
+              <th className="px-3 py-2 text-left">状态</th>
+              <th className="px-3 py-2 text-left">试用链接</th>
+              <th className="px-3 py-2 text-left">注册时间</th>
+              <th className="px-3 py-2 text-right">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -2036,7 +2129,7 @@ export default function Accounts() {
                       return (
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${styles}`}>
                           <span className={`mr-1 h-1 w-1 rounded-full ${variant === 'success' ? 'bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.6)]' : variant === 'warning' ? 'bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.6)]' : variant === 'danger' ? 'bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.6)]' : variant === 'default' ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
-                          {status}
+                          {statusLabel(status)}
                         </span>
                       );
                     })()}

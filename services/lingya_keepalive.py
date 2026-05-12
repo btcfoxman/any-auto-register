@@ -91,7 +91,7 @@ class LingYaKeepaliveWorker:
         except Exception:
             return {}
 
-    def _target_account_ids(self) -> list[int]:
+    def _target_account_ids(self, *, refresh_quota: bool = False) -> list[int]:
         with Session(engine) as session:
             accounts = session.exec(select(AccountModel).where(AccountModel.platform == "lingya_qq")).all()
             graphs = load_account_graphs(session, [int(item.id or 0) for item in accounts if item.id])
@@ -100,14 +100,21 @@ class LingYaKeepaliveWorker:
                 account_id = int(account.id or 0)
                 if account_id <= 0:
                     continue
-                lifecycle = str(graphs.get(account_id, {}).get("lifecycle_status") or "registered")
-                if lifecycle in ACTIVE_LIFECYCLE_STATUSES:
-                    ids.append(account_id)
+                graph = graphs.get(account_id, {})
+                overview = graph.get("overview") or {}
+                lifecycle = str(graph.get("lifecycle_status") or overview.get("lifecycle_status") or "registered")
+                if lifecycle not in ACTIVE_LIFECYCLE_STATUSES:
+                    continue
+                if refresh_quota:
+                    validity = str(graph.get("validity_status") or overview.get("validity_status") or "").lower()
+                    if validity == "invalid" or overview.get("valid") is False:
+                        continue
+                ids.append(account_id)
             return ids
 
     def _run_for_accounts(self, *, refresh_quota: bool) -> None:
         runtime = PlatformRuntime()
-        for account_id in self._target_account_ids():
+        for account_id in self._target_account_ids(refresh_quota=refresh_quota):
             if not self._try_lock_account(account_id):
                 continue
             try:

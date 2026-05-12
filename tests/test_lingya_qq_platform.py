@@ -565,6 +565,32 @@ def test_lingya_qq_daily_sign_in_skips_when_already_signed(monkeypatch):
     assert ("sign",) not in events
 
 
+def test_lingya_qq_daily_sign_in_disabled_returns_without_client(monkeypatch):
+    def fail_client(*args, **kwargs):
+        raise AssertionError("client should not be created when sign-in is disabled")
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", fail_client)
+    platform = LingYaQQPlatform(
+        config=RegisterConfig(
+            executor_type="manual_assisted",
+            extra={"lingya_qq_daily_sign_in_enabled": "false"},
+        )
+    )
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid",
+        extra={"cookies": "v_vusession=session; v_vuserid=vuid; vdevice_guid=device"},
+    )
+
+    result = platform.execute_action("daily_sign_in", account, {})
+
+    assert result["ok"] is True
+    assert result["data"]["daily_sign_in_status"] == "disabled"
+    assert result["data"]["daily_sign_signed"] is False
+
+
 def test_lingya_qq_daily_sign_in_claims_when_unused(monkeypatch):
     events = []
 

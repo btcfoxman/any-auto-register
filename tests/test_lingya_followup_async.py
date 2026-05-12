@@ -81,3 +81,26 @@ def test_lingya_followup_background_target_logs_required_publish_errors(monkeypa
     started[0].target()
 
     assert any(level == "warning" and "async follow-up error" in message for message, level in logger.entries)
+
+
+def test_lingya_followup_skips_daily_sign_when_disabled():
+    calls = []
+    logger = _Logger()
+    account = SimpleNamespace(platform="lingya_qq", email="user@example.com", extra={})
+    platform = SimpleNamespace(execute_action=lambda *args, **kwargs: calls.append(args) or {"ok": True, "data": {}})
+
+    tasks._run_auto_followup_lingya_qq_rewards(
+        platform_name="lingya_qq",
+        payload={
+            "extra": {
+                "lingya_qq_daily_sign_in_enabled": "false",
+                "lingya_qq_auto_publish_after_register": "false",
+            }
+        },
+        platform=platform,
+        account=account,
+        logger=logger,
+    )
+
+    assert calls == []
+    assert any("签到功能已关闭" in message for message, _ in logger.entries)

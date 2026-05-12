@@ -48,6 +48,7 @@ class AccountsService:
         return {
             "total": total,
             "page": query.page,
+            "page_size": query.page_size,
             "items": [self._serialize(item) for item in items],
         }
 

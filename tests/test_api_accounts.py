@@ -51,6 +51,20 @@ def test_list_accounts_after_create(client):
     assert data["items"][0]["email"] == "test@example.com"
 
 
+def test_list_accounts_supports_pagination(client):
+    for index in range(3):
+        _create_account(client, email=f"page-{index}@example.com")
+
+    resp = client.get("/api/accounts", params={"platform": "chatgpt", "page": 2, "page_size": 1})
+    data = resp.json()
+
+    assert data["total"] == 3
+    assert data["page"] == 2
+    assert data["page_size"] == 1
+    assert len(data["items"]) == 1
+    assert data["items"][0]["email"] == "page-1@example.com"
+
+
 def test_get_account_by_id(client):
     create_resp = _create_account(client)
     account_id = create_resp.json()["id"]
