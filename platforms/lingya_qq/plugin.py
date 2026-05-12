@@ -25,6 +25,7 @@ from platforms.lingya_qq.publish import fetch_lingya_qq_publish_asset
 
 
 LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS = 300
+LINGYA_QQ_SESSION_RETRY_CODES = {20447, 20409, 20433, 20431, 20411}
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -51,6 +52,27 @@ def _as_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _session_error_code(value: Any) -> int:
+    if isinstance(value, dict):
+        for key in ("ret", "code", "error_code"):
+            code = _as_int(value.get(key), 0)
+            if code:
+                return code
+        inner = value.get("data")
+        if isinstance(inner, dict):
+            return _session_error_code(inner)
+        return 0
+    text = str(value or "")
+    for code in LINGYA_QQ_SESSION_RETRY_CODES:
+        if str(code) in text:
+            return code
+    return 0
+
+
+def _is_session_retry_error(value: Any) -> bool:
+    return _session_error_code(value) in LINGYA_QQ_SESSION_RETRY_CODES
 
 
 def _global_config_value(key: str, default: Any = "") -> Any:
@@ -1121,13 +1143,15 @@ class LingYaQQPlatform(BasePlatform):
             or "wx"
         ).strip() or "wx"
 
-        hello = client.hello()
         force_refresh = _as_bool(params.get("force_refresh"), False)
         should_refresh = force_refresh or _session_refresh_due({**source, **cookie_fields})
         refresh_payload: dict[str, Any] = {}
         refresh_response: dict[str, Any] = {}
         session_refreshed = False
-        if should_refresh:
+
+        def refresh_session(reason: str) -> None:
+            nonlocal cookie_fields, refresh_payload, refresh_response, session_refreshed
+            self.log(f"LingYaQQ keepalive refreshing session: {reason}")
             refresh_payload = client.refresh_session(main_login=main_login)
             refresh_response = _extract_refresh_response(refresh_payload)
             latest_cookies = {}
@@ -1142,6 +1166,25 @@ class LingYaQQPlatform(BasePlatform):
                 video_platform=VVERSION_PLATFORM,
             )
             session_refreshed = bool(refresh_response.get("vusession") or latest_cookies.get("v_vusession"))
+
+        if should_refresh:
+            refresh_session("due")
+
+        hello: dict[str, Any] = {}
+        for attempt in range(2):
+            try:
+                hello = client.hello()
+            except Exception as exc:
+                if attempt == 0 and _is_session_retry_error(exc):
+                    refresh_session(f"hello retryable session error { _session_error_code(exc) }")
+                    continue
+                raise
+            if _is_session_retry_error(hello):
+                if attempt == 0:
+                    refresh_session(f"hello retryable session response { _session_error_code(hello) }")
+                    continue
+                raise RuntimeError(f"LingYaQQ Hello failed after session refresh: {hello.get('msg') or hello}")
+            break
 
         quota: dict[str, Any] = {}
         if refresh_quota:

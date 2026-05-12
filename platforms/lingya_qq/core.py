@@ -172,8 +172,22 @@ class LingYaQQClient:
         elif payload is not None:
             kwargs["data"] = payload
         response = self.session.post(f"{PBACCESS_BASE}{path}", **kwargs)
-        response.raise_for_status()
-        return response.json()
+        headers = getattr(response, "headers", {}) or {}
+        header_code = headers.get("trpc-func-ret") or headers.get("trpc-ret")
+        if header_code and str(header_code) not in {"0", "200"}:
+            message = headers.get("trpc-error-msg") or headers.get("trpc-func-msg") or ""
+            raise RuntimeError(f"{path}: {message or f'TRPC error {header_code}'}")
+        try:
+            data = response.json()
+        except ValueError:
+            response.raise_for_status()
+            raise
+        status_code = int(getattr(response, "status_code", 200) or 200)
+        if status_code >= 400:
+            code = data.get("ret") or data.get("code")
+            message = data.get("msg") or data.get("message") or (f"TRPC error {code}" if code else response.text[:200])
+            raise RuntimeError(f"{path}: {message}")
+        return data
 
     def send_sms(self, *, phone: str, area_code: str = "+86") -> dict[str, Any]:
         response = self.session.post(
