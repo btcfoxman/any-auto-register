@@ -4,7 +4,15 @@ import argparse
 import sys
 import re
 import time
+import os
 from playwright.sync_api import sync_playwright
+
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 # ================= 基础配置区 =================
 BIT_API_URL = "http://127.0.0.1:54345"
@@ -29,11 +37,36 @@ START_Y = 50  # 第一个窗口的 Y 坐标
 OFFSET = 40  # 每个新窗口偏移的像素值
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 800
+DEFAULT_PROXY_BYPASS = os.getenv(
+    "BROWSER_PROXY_BYPASS",
+    "localhost;127.0.0.1;::1;192.168.3.5;192.168.3.*;<local>",
+)
 
 
 # ==============================================
 
-def update_browser_config(browser_id, proxy_type, host, port, pos_x, pos_y, user="", password=""):
+
+def build_launch_args(pos_x, pos_y, width, height, proxy_bypass=""):
+    launch_args = [
+        f"--window-position={pos_x},{pos_y}",
+        f"--window-size={width},{height}",
+    ]
+    bypass = str(proxy_bypass or "").strip()
+    if bypass:
+        launch_args.append(f"--proxy-bypass-list={bypass}")
+    return launch_args
+
+
+def merge_chrome_args(args_str, launch_args):
+    args_str = args_str or ""
+    args_str = re.sub(r'--window-position=-?\d+,-?\d+', '', args_str)
+    args_str = re.sub(r'--window-size=\d+,\d+', '', args_str)
+    args_str = re.sub(r'--start-maximized', '', args_str)
+    args_str = re.sub(r'--proxy-bypass-list=(?:"[^"]*"|\'[^\']*\'|\S+)', '', args_str)
+    return f"{args_str} {' '.join(launch_args)}".strip()
+
+
+def update_browser_config(browser_id, proxy_type, host, port, pos_x, pos_y, user="", password="", proxy_bypass=""):
     """
     更新浏览器配置（代理 + 窗口坐标）
     """
@@ -74,8 +107,8 @@ def update_browser_config(browser_id, proxy_type, host, port, pos_x, pos_y, user
     args_str = re.sub(r'--start-maximized', '', args_str)
 
     # 追加新的坐标和固定大小参数
-    new_args = f"--window-position={pos_x},{pos_y} --window-size={WINDOW_WIDTH},{WINDOW_HEIGHT}"
-    browser_config['args'] = f"{args_str} {new_args}".strip()
+    launch_args = build_launch_args(pos_x, pos_y, WINDOW_WIDTH, WINDOW_HEIGHT, proxy_bypass)
+    browser_config['args'] = merge_chrome_args(args_str, launch_args)
 
     # 4. 提交完整数据
     try:
@@ -93,11 +126,31 @@ def update_browser_config(browser_id, proxy_type, host, port, pos_x, pos_y, user
         return False
 
 
-def open_browser(browser_id):
+def close_browser(browser_id):
+    """Close a browser profile if it is already open."""
+    url = f"{BIT_API_URL}/browser/close"
+    try:
+        response = requests.post(url, json={"id": browser_id}, headers=HEADERS)
+        result = response.json()
+        if result.get('success'):
+            print("  ✅ 已先关闭浏览器环境。")
+            return True
+        print(f"  ⚠️ 关闭环境失败或环境原本未打开: {result.get('msg')}")
+        return False
+    except Exception as e:
+        print(f"  ⚠️ 请求关闭 API 失败，继续启动: {e}")
+        return False
+
+
+def open_browser(browser_id, launch_args=None):
     """启动浏览器"""
     url = f"{BIT_API_URL}/browser/open"
     try:
-        response = requests.post(url, json={"id": browser_id}, headers=HEADERS)
+        payload = {"id": browser_id}
+        if launch_args:
+            payload["args"] = list(launch_args)
+            print(f"  Chrome args: {' '.join(launch_args)}")
+        response = requests.post(url, json=payload, headers=HEADERS)
         result = response.json()
         if result.get('success'):
             print("  ✅ 浏览器进程启动成功！")
@@ -118,6 +171,21 @@ def parse_arguments():
         nargs='+',  # "+" 表示接受一个或多个参数，存为列表
         help="环境短号列表 (例如: 3 4 5)"
     )
+    parser.add_argument(
+        "--proxy-bypass",
+        default=DEFAULT_PROXY_BYPASS,
+        help="Chrome proxy bypass list, separated by semicolons.",
+    )
+    parser.add_argument(
+        "--no-proxy-bypass",
+        action="store_true",
+        help="Do not append --proxy-bypass-list.",
+    )
+    parser.add_argument(
+        "--stop-first",
+        action="store_true",
+        help="Close the BitBrowser profile before opening so launch args take effect.",
+    )
     return parser.parse_args()
 
 
@@ -128,6 +196,9 @@ if __name__ == '__main__':
     short_codes = list(dict.fromkeys(args.short_codes))
 
     print(f"🚀 准备启动的环境总数: {len(short_codes)} 个 ({', '.join(short_codes)})")
+    proxy_bypass = "" if args.no_proxy_bypass else args.proxy_bypass
+    if proxy_bypass:
+        print(f"Proxy bypass: {proxy_bypass}")
     print("=" * 50)
 
     # 复用一个 Playwright 实例进行快速验证
@@ -149,13 +220,18 @@ if __name__ == '__main__':
             current_y = START_Y + (idx * OFFSET)
 
             print(f"▶️ 正在处理环境短号: [{short_code}]")
+            launch_args = build_launch_args(current_x, current_y, WINDOW_WIDTH, WINDOW_HEIGHT, proxy_bypass)
+
+            if args.stop_first:
+                close_browser(BROWSER_ID)
+                time.sleep(1.0)
 
             # 更新配置（包含代理和坐标）
             if update_browser_config(BROWSER_ID, PROXY_TYPE, PROXY_HOST, PROXY_PORT, current_x, current_y, PROXY_USER,
-                                     PROXY_PASS):
+                                     PROXY_PASS, proxy_bypass=proxy_bypass):
 
                 # 启动浏览器
-                browser_data = open_browser(BROWSER_ID)
+                browser_data = open_browser(BROWSER_ID, launch_args=launch_args)
 
                 if browser_data:
                     ws_endpoint = browser_data.get('ws')

@@ -36,3 +36,4 @@ Scanning uses URL queries, domain queries, and an `all-accessible` cookie-store 
 When the active tab is `lingya.qq.com`, the popup also injects a short script to read `document.cookie`. This is the most reliable fallback for the non-HttpOnly `.lingya.qq.com` cookies shown in DevTools.
 
 The default `http://192.168.3.5:8000` origin is listed in `host_permissions`. For other LAN hosts, the popup can grant the origin through `optional_host_permissions`; reload the extension if you edited `manifest.json`.
+If BitBrowser is configured with a profile proxy, requests from the extension background may also go through that proxy. A remote proxy usually cannot reach your private LAN address such as `192.168.3.5`, which can surface as `ERR_EMPTY_RESPONSE`. In that case either use `http://127.0.0.1:8000` / `http://localhost:8000` when the service runs on the same machine, or add `127.0.0.1`, `localhost`, `192.168.3.5`, and your LAN subnet to the profile proxy bypass list.

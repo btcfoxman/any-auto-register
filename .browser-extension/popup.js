@@ -57,7 +57,6 @@ const DEFAULTS = {
   maxConcurrency: 1
 };
 const LEGACY_DEFAULT_SERVICE_URLS = new Set([
-  "http://127.0.0.1:8000",
   "http://127.0.0.1:8787",
   "http://192.168.3.3:8787"
 ]);

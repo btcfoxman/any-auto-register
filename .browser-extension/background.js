@@ -7,7 +7,6 @@ const ASSIST_DEFAULTS = {
 };
 
 const ASSIST_LEGACY_SERVICE_URLS = new Set([
-  "http://127.0.0.1:8000",
   "http://127.0.0.1:8787",
   "http://192.168.3.3:8787"
 ]);
@@ -17,6 +16,7 @@ const POLL_ACTIVE_MS = 2000;
 
 let pollTimer = null;
 let polling = false;
+let managedProxyKey = "";
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureExtensionId();
@@ -87,6 +87,7 @@ async function pollAssistOnce() {
       proxy_url: String(settings.proxyUrl || "").trim(),
       current_url: activeTab && activeTab.url ? activeTab.url : ""
     };
+    await applyManagedProxy(settings);
     const response = await fetchClaim(settings, payload);
     const data = await readJsonOrText(response);
     if (!response.ok) {
@@ -114,22 +115,105 @@ async function pollAssistOnce() {
 
 function fetchClaim(settings, payload) {
   const token = String(settings.apiKey || "").trim();
-  if (!token) {
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(payload)) {
-      if (value !== undefined && value !== null && String(value) !== "") {
-        params.set(key, String(value));
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== undefined && value !== null && String(value) !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const options = {
+    method: "GET",
+    cache: "no-store"
+  };
+  if (token) {
+    options.headers = buildAuthHeaders(token);
+  }
+  return fetch(apiUrl(settings.serviceUrl, `/api/browser/assist/claim?${params.toString()}`), options);
+}
+
+async function applyManagedProxy(settings) {
+  if (!chrome.proxy || !chrome.proxy.settings) return;
+
+  const proxyUrl = String(settings.proxyUrl || "").trim();
+  if (!proxyUrl) {
+    if (managedProxyKey) {
+      await clearProxySettings();
+      managedProxyKey = "";
+    }
+    return;
+  }
+
+  const singleProxy = parseProxyServer(proxyUrl);
+  if (!singleProxy) return;
+
+  const bypassList = proxyBypassList(settings.serviceUrl);
+  const value = {
+    mode: "fixed_servers",
+    rules: {
+      singleProxy,
+      bypassList
+    }
+  };
+  const key = JSON.stringify(value);
+  if (key === managedProxyKey) return;
+  await setProxySettings(value);
+  managedProxyKey = key;
+}
+
+function parseProxyServer(value) {
+  let text = String(value || "").trim();
+  if (!text) return null;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    text = `http://${text}`;
+  }
+  try {
+    const url = new URL(text);
+    const rawScheme = url.protocol.replace(":", "").toLowerCase();
+    const scheme = rawScheme === "socks" ? "socks5" : rawScheme;
+    if (!["http", "https", "socks4", "socks5"].includes(scheme)) return null;
+    const defaultPort = scheme === "https" ? 443 : scheme.startsWith("socks") ? 1080 : 80;
+    const port = Number(url.port || defaultPort);
+    if (!url.hostname || !Number.isInteger(port) || port <= 0) return null;
+    return { scheme, host: url.hostname, port };
+  } catch {
+    return null;
+  }
+}
+
+function proxyBypassList(serviceUrl) {
+  const hosts = ["localhost", "127.0.0.1", "::1", "<local>"];
+  try {
+    const host = new URL(String(serviceUrl || "")).hostname;
+    if (host) {
+      hosts.push(host);
+      const parts = host.split(".");
+      if (parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part))) {
+        hosts.push(`${parts[0]}.${parts[1]}.${parts[2]}.*`);
       }
     }
-    return fetch(apiUrl(settings.serviceUrl, `/api/browser/assist/claim?${params.toString()}`), {
-      method: "GET",
-      cache: "no-store"
-    });
+  } catch {
+    // Ignore invalid service URLs; fetch will report the real error.
   }
-  return fetch(apiUrl(settings.serviceUrl, "/api/browser/assist/claim"), {
-    method: "POST",
-    headers: buildHeaders(token),
-    body: JSON.stringify(payload)
+  return [...new Set(hosts)];
+}
+
+function setProxySettings(value) {
+  return new Promise((resolve, reject) => {
+    chrome.proxy.settings.set({ value, scope: "regular" }, () => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message || String(error)));
+      else resolve();
+    });
+  });
+}
+
+function clearProxySettings() {
+  return new Promise((resolve, reject) => {
+    chrome.proxy.settings.clear({ scope: "regular" }, () => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message || String(error)));
+      else resolve();
+    });
   });
 }
 
@@ -283,6 +367,16 @@ function safeOrigin(serviceUrl) {
   } catch {
     return "";
   }
+}
+
+function buildAuthHeaders(apiKey) {
+  const headers = {};
+  const token = String(apiKey || "").trim();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    headers["X-API-Key"] = token;
+  }
+  return headers;
 }
 
 function buildHeaders(apiKey) {

@@ -22,12 +22,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import requests
 from playwright.sync_api import sync_playwright
+
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 # ================= 基础配置区 =================
@@ -68,6 +76,10 @@ START_Y = 50
 OFFSET = 40
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 800
+DEFAULT_PROXY_BYPASS = os.getenv(
+    "BROWSER_PROXY_BYPASS",
+    "localhost;127.0.0.1;::1;192.168.3.5;192.168.3.*;<local>",
+)
 
 # 启动后 CDP 连接测试超时
 CDP_CONNECT_TIMEOUT_MS = 30000
@@ -393,14 +405,27 @@ def start_profile(profile_id: str, launch_args: Optional[List[str]] = None, star
         # AdsPower 不同版本字段略有差异，这里两个都带上。
         v2_body["launch_args"] = launch_args
         v2_body["args"] = launch_args
+    v2_user_body: Dict[str, Any] = dict(start_options or {})
+    v2_user_body["user_id"] = profile_id
+    v1_params_user: Dict[str, Any] = {"user_id": profile_id}
+    v1_params_id: Dict[str, Any] = {"id": profile_id}
+    v1_body_user: Dict[str, Any] = {"user_id": profile_id}
+    v1_body_id: Dict[str, Any] = {"id": profile_id}
+    if launch_args:
+        v2_user_body["launch_args"] = launch_args
+        v2_user_body["args"] = launch_args
+        joined_args = " ".join(launch_args)
+        for payload in (v1_params_user, v1_params_id, v1_body_user, v1_body_id):
+            payload["launch_args"] = joined_args
+            payload["args"] = joined_args
 
     attempts = [
         ("POST", "/api/v2/browser-profile/start", None, v2_body),
-        ("POST", "/api/v2/browser-profile/start", None, {"user_id": profile_id}),
-        ("GET", "/api/v1/browser/start", {"user_id": profile_id}, None),
-        ("GET", "/api/v1/browser/start", {"id": profile_id}, None),
-        ("POST", "/api/v1/browser/start", None, {"user_id": profile_id}),
-        ("POST", "/api/v1/browser/start", None, {"id": profile_id}),
+        ("POST", "/api/v2/browser-profile/start", None, v2_user_body),
+        ("GET", "/api/v1/browser/start", v1_params_user, None),
+        ("GET", "/api/v1/browser/start", v1_params_id, None),
+        ("POST", "/api/v1/browser/start", None, v1_body_user),
+        ("POST", "/api/v1/browser/start", None, v1_body_id),
     ]
 
     last_error: Optional[Exception] = None
@@ -414,11 +439,21 @@ def start_profile(profile_id: str, launch_args: Optional[List[str]] = None, star
     raise RuntimeError(f"AdsPower 启动失败: {last_error}")
 
 
-def launch_args_for_window(pos_x: int, pos_y: int, width: int, height: int) -> List[str]:
-    return [
+def launch_args_for_window(
+    pos_x: int,
+    pos_y: int,
+    width: int,
+    height: int,
+    proxy_bypass: str = "",
+) -> List[str]:
+    launch_args = [
         f"--window-position={pos_x},{pos_y}",
         f"--window-size={width},{height}",
     ]
+    bypass = str(proxy_bypass or "").strip()
+    if bypass:
+        launch_args.append(f"--proxy-bypass-list={bypass}")
+    return launch_args
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -436,6 +471,17 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--proxy-host", default=PROXY_HOST, help="代理主机")
     parser.add_argument("--proxy-user", default=PROXY_USER, help="代理用户名")
     parser.add_argument("--proxy-pass", default=PROXY_PASS, help="代理密码")
+
+    parser.add_argument(
+        "--proxy-bypass",
+        default=DEFAULT_PROXY_BYPASS,
+        help="Chrome proxy bypass list, separated by semicolons.",
+    )
+    parser.add_argument(
+        "--no-proxy-bypass",
+        action="store_true",
+        help="Do not append --proxy-bypass-list.",
+    )
 
     parser.add_argument("--start-x", type=int, default=START_X)
     parser.add_argument("--start-y", type=int, default=START_Y)
@@ -459,6 +505,9 @@ def main() -> None:
 
     print(f"🚀 准备启动 AdsPower 环境总数: {len(short_codes)} 个 ({', '.join(short_codes)})")
     print(f"🔌 AdsPower API: {normalize_api_url(ADSPOWER_API_URL)}")
+    proxy_bypass = "" if args.no_proxy_bypass else args.proxy_bypass
+    if proxy_bypass:
+        print(f"Proxy bypass: {proxy_bypass}")
     print("=" * 60)
 
     playwright_ctx = sync_playwright().start() if not args.no_cdp_check else None
@@ -507,7 +556,8 @@ def main() -> None:
                         print("-" * 60)
                         continue
 
-            launch_args = launch_args_for_window(pos_x, pos_y, args.width, args.height)
+            launch_args = launch_args_for_window(pos_x, pos_y, args.width, args.height, proxy_bypass=proxy_bypass)
+            print(f"  Chrome args: {' '.join(launch_args)}")
             start_options: Dict[str, Any] = {}
             if profile_no:
                 start_options["profile_no"] = profile_no
