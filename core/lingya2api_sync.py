@@ -10,7 +10,7 @@ from platforms.lingya_qq.cookies import (
     build_lingya_qq_account_fields,
     format_lingya_qq_cookie_header,
 )
-from platforms.lingya_qq.core import DEFAULT_USER_AGENT
+from platforms.lingya_qq.core import DEFAULT_SEC_CH_UA, DEFAULT_SEC_CH_UA_PLATFORM, DEFAULT_USER_AGENT
 
 
 logger = logging.getLogger(__name__)
@@ -111,7 +111,12 @@ def build_lingya2api_payload(
     max_concurrency: int = 1,
     extra_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    extra = dict(getattr(account, "extra", {}) or {})
+    base_extra = dict(getattr(account, "extra", {}) or {})
+    overview = base_extra.get("account_overview") if isinstance(base_extra.get("account_overview"), dict) else {}
+    legacy_extra = overview.get("legacy_extra") if isinstance(overview.get("legacy_extra"), dict) else {}
+    extra = dict(legacy_extra)
+    extra.update({key: value for key, value in overview.items() if key != "legacy_extra"})
+    extra.update(base_extra)
     if extra_overrides:
         extra.update(extra_overrides)
     cookie_fields = build_lingya_qq_account_fields(extra)
@@ -174,10 +179,10 @@ def build_lingya2api_payload(
         "vuserid": vuserid,
         "vdevice_guid": vdevice_guid,
         "nick": _text(cookie_fields.get("nick") or extra.get("nick")),
-        "main_login": _text(cookie_fields.get("v_main_login") or extra.get("main_login")) or "wx",
+        "main_login": _text(cookie_fields.get("v_main_login") or extra.get("main_login")) or "phone",
         "user_agent": _text(extra.get("user_agent")) or DEFAULT_USER_AGENT,
-        "sec_ch_ua": _text(extra.get("sec_ch_ua")),
-        "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")),
+        "sec_ch_ua": _text(extra.get("sec_ch_ua")) or DEFAULT_SEC_CH_UA,
+        "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")) or DEFAULT_SEC_CH_UA_PLATFORM,
         "proxy_url": _text(extra.get("proxy_url") or extra.get("proxy") or extra.get("proxyUrl")),
         "enabled": _as_bool(extra.get("lingya2api_enabled"), True),
         "enable_auto_maintenance": _as_bool(extra.get("lingya2api_enable_auto_maintenance"), False),

@@ -13,7 +13,7 @@ from services.lingya_keepalive import (
 
 def test_lingya_keepalive_defaults_match_lingya2api_lifecycle():
     assert DEFAULT_HEARTBEAT_INTERVAL_SECONDS == 300
-    assert DEFAULT_BALANCE_INTERVAL_SECONDS == 600
+    assert DEFAULT_BALANCE_INTERVAL_SECONDS == 60
 
 
 def test_lingya_keepalive_runs_keepalive_action_with_quota_flag(monkeypatch):
@@ -28,12 +28,22 @@ def test_lingya_keepalive_runs_keepalive_action_with_quota_flag(monkeypatch):
     monkeypatch.setattr("services.lingya_keepalive.PlatformRuntime", lambda: FakeRuntime())
     monkeypatch.setattr(worker, "_target_account_ids", lambda **kwargs: [7])
 
-    worker._run_for_accounts(refresh_quota=False)
-    worker._run_for_accounts(refresh_quota=True)
+    worker._run_for_accounts(refresh_quota=False, run_hello=True)
+    worker._run_for_accounts(refresh_quota=True, run_hello=False)
 
     assert calls == [
-        ("lingya_qq", 7, "keepalive_sync", {"force_refresh": "true", "refresh_quota": "false"}),
-        ("lingya_qq", 7, "keepalive_sync", {"force_refresh": "true", "refresh_quota": "true"}),
+        (
+            "lingya_qq",
+            7,
+            "keepalive_sync",
+            {"force_refresh": "false", "refresh_quota": "false", "run_hello": "true"},
+        ),
+        (
+            "lingya_qq",
+            7,
+            "keepalive_sync",
+            {"force_refresh": "false", "refresh_quota": "true", "run_hello": "false"},
+        ),
     ]
 
 

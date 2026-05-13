@@ -67,7 +67,7 @@ def test_lingya_qq_cookie_header_expands_to_account_fields():
         }
     )
 
-    assert len(LINGYA_QQ_COOKIE_NAMES) == 28
+    assert len(LINGYA_QQ_COOKIE_NAMES) == 29
     assert fields["vusession"] == "session-cookie"
     assert fields["vurefresh"] == "refresh-cookie"
     assert fields["vuid"] == "vuid-cookie"
@@ -116,6 +116,42 @@ def test_lingya_qq_client_accepts_zero_ret_login_response(monkeypatch):
     result = client.login_with_phone_code(phone="13800138000", code="123456")
 
     assert result is payload
+
+
+def test_lingya_qq_refresh_session_writes_browser_like_schedule(monkeypatch):
+    client = LingYaQQClient(vdevice_guid="device1234567890")
+    monkeypatch.setattr("platforms.lingya_qq.core.time.time", lambda: 1778663095.792)
+    monkeypatch.setattr(
+        client,
+        "_post_pbaccess",
+        lambda path, body: {
+            "ret": 0,
+            "msg": "",
+            "data": {
+                "error_code": 0,
+                "rsp": {
+                    "refresh_response": {
+                        "vuid": "vuid-ok",
+                        "vusession": "session-ok",
+                        "vurefresh": "refresh-ok",
+                        "vusession_expire_timestamp": "1778670293",
+                        "vusession_expire_in": 7200,
+                    }
+                },
+            },
+        },
+    )
+
+    client.refresh_session(main_login="phone")
+
+    cookies = client.cookie_dict()
+    assert cookies["v_main_login"] == "phone"
+    assert cookies["last_refresh_second"] == "1778663095"
+    assert cookies["_new_next_refresh_time"] == "1778669395792"
+    assert cookies["last_refresh_vuserid"] == "vuid-ok"
+    assert cookies["video_appid"] == "3000116"
+    assert cookies["video_platform"] == "2"
+    assert "-" in cookies["last_refresh_time"]
 
 
 def test_lingya_qq_manual_phone_register(monkeypatch):
@@ -184,11 +220,16 @@ def test_lingya_qq_manual_phone_register(monkeypatch):
         "platforms.lingya_qq.plugin._resolve_sms_runtime",
         lambda extra: ("sms_activate_api", {"sms_activate_api_key": "key"}),
     )
+    monkeypatch.setattr(
+        "platforms.lingya_qq.plugin._publish_lingya_phone_login_assist",
+        lambda **kwargs: events.append(("assist", kwargs)) or {"assist_id": "assist_1"},
+    )
 
     platform = LingYaQQPlatform(
         config=RegisterConfig(
             executor_type="manual_assisted",
-            extra={"lingya_qq_sms_timeout": "12"},
+            proxy="http://127.0.0.1:10809",
+            extra={"lingya_qq_sms_timeout": "12", "_task_id": "task_1"},
         )
     )
     logs = []
@@ -218,6 +259,11 @@ def test_lingya_qq_manual_phone_register(monkeypatch):
     assert any("register SMS code received: 123456 (len=6)" in message for message in logs)
     assert ("login", "13800138000", "123456", "+86") in events
     assert ("report_success", "act_1") in events
+    assist_event = next(item for item in events if item[0] == "assist")
+    assert assist_event[1]["phone"] == "+8613800138000"
+    assert assist_event[1]["local_phone"] == "13800138000"
+    assert assist_event[1]["proxy_url"] == "http://127.0.0.1:10809"
+    assert assist_event[1]["timeout_seconds"] == 12
     assert not any(event[0] == "cancel" for event in events)
 
 
@@ -754,6 +800,49 @@ def test_lingya_qq_keepalive_refreshes_and_syncs(monkeypatch):
     assert ("refresh", "wx") in events
     assert events.index(("refresh", "wx")) < events.index(("hello",))
     assert any(event[0] == "sync" and event[1] is False and event[2] == "session-new" for event in events)
+
+
+def test_lingya_qq_keepalive_quota_ping_can_skip_hello(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid or "device-old"
+
+        def hello(self):
+            events.append(("hello",))
+            raise AssertionError("quota-only keepalive should not call hello")
+
+        def get_user_quota(self):
+            events.append(("quota",))
+            return {"quota_balance": "8", "quota_sum": "10"}
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, check=False, extra_overrides=None):
+        events.append(("sync", heartbeat, account.extra.get("v_vusession")))
+        return {"ok": True}
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr("platforms.lingya_qq.plugin.sync_account_to_lingya2api", fake_sync)
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid-old",
+        extra={
+            "cookies": "v_vusession=session-old; v_vurefresh=refresh-old; v_vuserid=vuid-old; vdevice_guid=device-old",
+            "v_main_login": "phone",
+        },
+    )
+
+    result = platform.execute_action("keepalive_sync", account, {"refresh_quota": "true", "run_hello": "false"})
+
+    assert result["ok"] is True
+    assert result["data"]["heartbeat_ok"] is True
+    assert result["data"]["hello_token_ok"] is None
+    assert result["data"]["quota_balance"] == "8"
+    assert events == [("quota",), ("sync", False, "session-old")]
 
 
 def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkeypatch):

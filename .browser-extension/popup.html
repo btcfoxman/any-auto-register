@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Any Register Lingya Helper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="card">
+    <header>
+      <p>any-auto-register</p>
+      <h1>Lingya Helper</h1>
+    </header>
+
+    <label>
+      Service URL
+      <input id="serviceUrl" spellcheck="false" placeholder="http://192.168.3.3:8787">
+    </label>
+
+    <label>
+      API Key
+      <input id="apiKey" type="password" spellcheck="false" placeholder="sk-test-api-key">
+    </label>
+
+    <div class="grid">
+      <label>
+        Account Name
+        <input id="accountName" spellcheck="false" placeholder="browser-account">
+      </label>
+      <label>
+        Max
+        <input id="maxConcurrency" type="number" min="1" max="10" value="1">
+      </label>
+    </div>
+
+    <label>
+      Proxy URL
+      <input id="proxyUrl" spellcheck="false" placeholder="http://user:pwd@127.0.0.1:10809">
+    </label>
+
+    <section class="assist-panel" aria-live="polite">
+      <div class="assist-head">
+        <strong>Lingya Task Assistant</strong>
+        <span id="assistUpdated">Listening</span>
+      </div>
+      <div id="assistStatus" class="assist-status">Task assistant idle.</div>
+    </section>
+
+    <section class="cookie-panel" aria-live="polite">
+      <div class="cookie-head">
+        <strong>Cookies to Import</strong>
+        <button id="refreshCookiesButton" class="mini" type="button">Refresh</button>
+      </div>
+      <div id="cookieSummary" class="cookie-summary">Scanning...</div>
+      <div id="scanDebug" class="scan-debug"></div>
+      <div id="cookieList" class="cookie-list"></div>
+    </section>
+
+    <div class="actions-grid">
+      <button id="importButton" class="primary">Import Lingya Account</button>
+      <button id="openConsoleButton">Open Console</button>
+    </div>
+
+    <output id="status" role="status">Ready.</output>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

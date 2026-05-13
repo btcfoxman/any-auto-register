@@ -340,6 +340,51 @@ def _account_with_extra(account: Account, extra: dict[str, Any]) -> Account:
     )
 
 
+def _publish_lingya_phone_login_assist(
+    *,
+    extra: dict[str, Any],
+    phone: str,
+    local_phone: str,
+    area_code: str,
+    proxy_url: str = "",
+    timeout_seconds: int = 300,
+    log_fn=None,
+) -> dict[str, Any] | None:
+    task_id = str(extra.get("_task_id") or extra.get("task_id") or "").strip()
+    if not task_id:
+        return None
+    try:
+        from application.browser_assist import browser_assist_registry
+
+        request = browser_assist_registry.publish_lingya_phone_login(
+            task_id=task_id,
+            phone=phone,
+            local_phone=local_phone,
+            area_code=area_code,
+            proxy_url=proxy_url,
+            ttl_seconds=max(int(timeout_seconds or 300) + 60, 90),
+            metadata={"source": "lingya_register"},
+        )
+        if callable(log_fn):
+            _log_browser_assist_message(log_fn, f"LingYaQQ browser assist task published: {request.get('assist_id')}")
+        return request
+    except Exception as exc:
+        if callable(log_fn):
+            _log_browser_assist_message(
+                log_fn,
+                f"LingYaQQ browser assist task publish failed; continuing manual flow: {exc}",
+                level="warning",
+            )
+        return None
+
+
+def _log_browser_assist_message(log_fn, message: str, *, level: str = "info") -> None:
+    try:
+        log_fn(message, level=level)
+    except TypeError:
+        log_fn(message)
+
+
 @register
 class LingYaQQPlatform(BasePlatform):
     name = "lingya_qq"
@@ -363,6 +408,7 @@ class LingYaQQPlatform(BasePlatform):
         vdevice_guid: str | None = None,
         cookies: dict[str, Any] | None = None,
         proxy: str | None = None,
+        user_agent: str | None = None,
     ) -> LingYaQQClient:
         extra = dict(self.config.extra or {}) if self.config else {}
         cookie_map = cookies if cookies is not None else extract_lingya_qq_cookies(extra)
@@ -370,6 +416,7 @@ class LingYaQQPlatform(BasePlatform):
             proxy=proxy or (self.config.proxy if self.config else None) or str(extra.get("proxy_url") or extra.get("proxy") or "").strip() or None,
             vdevice_guid=vdevice_guid or str(extra.get("vdevice_guid") or "").strip() or None,
             cookies=cookie_map,
+            user_agent=user_agent or str(extra.get("user_agent") or "").strip() or None,
             timeout=_as_int(extra.get("lingya_qq_http_timeout"), 20),
         )
 
@@ -397,6 +444,7 @@ class LingYaQQPlatform(BasePlatform):
                 "sync": False,
                 "params": [
                     {"key": "force_refresh", "label": "强制刷新会话（true/false）", "type": "text"},
+                    {"key": "run_hello", "label": "执行 Hello 心跳（true/false）", "type": "text"},
                 ],
             }
         )
@@ -457,6 +505,7 @@ class LingYaQQPlatform(BasePlatform):
             phone = normalize_lingya_phone(raw_phone, area_code)
             if not phone:
                 raise RuntimeError("SMS provider did not return a usable phone number")
+            account_label = f"{area_code}{phone}"
             self.log(f"Phone number rented: {phone}")
             manual_proxy = str((self.config.proxy if self.config else "") or "").strip()
             if manual_proxy:
@@ -464,6 +513,15 @@ class LingYaQQPlatform(BasePlatform):
                 self.log("Open Chrome/Edge with the same proxy before sending the SMS on lingya.qq.com.")
             else:
                 self.log("LingYaQQ proxy mode is off for this task; use a direct browser connection for manual SMS sending.")
+            _publish_lingya_phone_login_assist(
+                extra=extra,
+                phone=account_label,
+                local_phone=phone,
+                area_code=area_code,
+                proxy_url=manual_proxy,
+                timeout_seconds=timeout,
+                log_fn=self.log,
+            )
             self.log("Open https://lingya.qq.com in normal Chrome/Edge, enter this phone number, complete the graphic CAPTCHA, then send SMS.")
             self.log(f"Waiting for SMS verification code, timeout {timeout} seconds.")
 
@@ -489,7 +547,6 @@ class LingYaQQPlatform(BasePlatform):
             profile = _extract_user_profile(profile_data)
             quota = client.get_user_quota()
             quota_overview = _quota_summary(quota)
-            account_label = f"{area_code}{phone}"
             nick = str(profile.get("nickname") or ((login_response.get("user_info") or {}).get("user_nick")) or "")
             cookie_fields = build_lingya_qq_account_fields(
                 extra,
@@ -738,6 +795,7 @@ class LingYaQQPlatform(BasePlatform):
             vdevice_guid=vdevice_guid,
             cookies=extract_lingya_qq_cookies(cookie_fields or source),
             proxy=str(source.get("proxy_url") or source.get("proxy") or "").strip() or None,
+            user_agent=str(source.get("user_agent") or "").strip() or None,
         )
         return source, cookie_fields, client
 
@@ -1277,12 +1335,13 @@ class LingYaQQPlatform(BasePlatform):
         params = params or {}
         source, cookie_fields, client = self._client_from_account(account)
         refresh_quota = _as_bool(params.get("refresh_quota"), True)
+        run_hello = _as_bool(params.get("run_hello"), True)
         main_login = str(
             source.get("v_main_login")
             or source.get("main_login")
             or cookie_fields.get("v_main_login")
-            or "wx"
-        ).strip() or "wx"
+            or "phone"
+        ).strip() or "phone"
 
         force_refresh = _as_bool(params.get("force_refresh"), False)
         should_refresh = force_refresh or _session_refresh_due({**source, **cookie_fields})
@@ -1312,20 +1371,23 @@ class LingYaQQPlatform(BasePlatform):
             refresh_session("due")
 
         hello: dict[str, Any] = {}
-        for attempt in range(2):
-            try:
-                hello = client.hello()
-            except Exception as exc:
-                if attempt == 0 and _is_session_retry_error(exc):
-                    refresh_session(f"hello retryable session error { _session_error_code(exc) }")
-                    continue
-                raise
-            if _is_session_retry_error(hello):
-                if attempt == 0:
-                    refresh_session(f"hello retryable session response { _session_error_code(hello) }")
-                    continue
-                raise RuntimeError(f"LingYaQQ Hello failed after session refresh: {hello.get('msg') or hello}")
-            break
+        hello_ran = False
+        if run_hello or session_refreshed:
+            for attempt in range(2):
+                try:
+                    hello = client.hello()
+                    hello_ran = True
+                except Exception as exc:
+                    if attempt == 0 and _is_session_retry_error(exc):
+                        refresh_session(f"hello retryable session error { _session_error_code(exc) }")
+                        continue
+                    raise
+                if _is_session_retry_error(hello):
+                    if attempt == 0:
+                        refresh_session(f"hello retryable session response { _session_error_code(hello) }")
+                        continue
+                    raise RuntimeError(f"LingYaQQ Hello failed after session refresh: {hello.get('msg') or hello}")
+                break
 
         quota: dict[str, Any] = {}
         if refresh_quota:
@@ -1351,10 +1413,10 @@ class LingYaQQPlatform(BasePlatform):
             **cookie_fields,
             "message": "LingYaQQ keepalive completed",
             "valid": True,
-            "heartbeat_ok": True,
+            "heartbeat_ok": True if not hello_ran else bool(hello),
             "session_refreshed": session_refreshed,
             "hello_timestamp": hello.get("timestamp"),
-            "hello_token_ok": bool(hello.get("token")),
+            "hello_token_ok": bool(hello.get("token")) if hello_ran else None,
             "v_main_login": main_login,
             **quota_overview,
         }

@@ -731,6 +731,7 @@ def _build_platform_instance(platform_name: str, payload: dict[str, Any], logger
     executor_type = str(payload.get("executor_type", "protocol") or "protocol")
     captcha_solver = str(payload.get("captcha_solver", "auto") or "auto")
     extra = dict(payload.get("extra") or {})
+    extra.setdefault("_task_id", logger.task_id)
     config = RegisterConfig(
         executor_type=executor_type,
         captcha_solver=captcha_solver,

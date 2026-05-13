@@ -27,8 +27,11 @@ VIDEO_UPLOAD_CHUNK_SIZE = 1024 * 1024
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
+    "Chrome/147.0.0.0 Safari/537.36"
 )
+DEFAULT_SEC_CH_UA = '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"'
+DEFAULT_SEC_CH_UA_MOBILE = "?0"
+DEFAULT_SEC_CH_UA_PLATFORM = '"Windows"'
 
 
 def make_vdevice_guid(length: int = 16) -> str:
@@ -49,6 +52,12 @@ def normalize_lingya_phone(phone: str, area_code: str = "+86") -> str:
     if country and digits.startswith(country) and len(digits) > 11:
         digits = digits[len(country):]
     return digits
+
+
+def _sec_ch_ua_from_user_agent(user_agent: str) -> str:
+    match = re.search(r"Chrome/(\d+)", str(user_agent or ""))
+    major = match.group(1) if match else "147"
+    return f'"Google Chrome";v="{major}", "Not.A/Brand";v="8", "Chromium";v="{major}"'
 
 
 def _int_response_field(value: Any, default: int = -1) -> int:
@@ -81,6 +90,8 @@ class LingYaQQClient:
         vdevice_guid: str | None = None,
         cookies: dict[str, Any] | None = None,
         user_agent: str | None = None,
+        sec_ch_ua: str | None = None,
+        sec_ch_ua_platform: str | None = None,
         timeout: int = 20,
     ):
         cookie_device = ""
@@ -89,6 +100,8 @@ class LingYaQQClient:
         self.vdevice_guid = vdevice_guid or cookie_device or make_vdevice_guid()
         self.timeout = int(timeout or 20)
         self.user_agent = user_agent or DEFAULT_USER_AGENT
+        self.sec_ch_ua = sec_ch_ua or _sec_ch_ua_from_user_agent(self.user_agent)
+        self.sec_ch_ua_platform = sec_ch_ua_platform or DEFAULT_SEC_CH_UA_PLATFORM
         self.session = requests.Session()
         if proxy:
             self.session.proxies.update({"http": proxy, "https": proxy})
@@ -117,12 +130,18 @@ class LingYaQQClient:
             "vdevice_guid": self.vdevice_guid,
         }
 
-    def _headers(self, *, json_content: bool = True) -> dict[str, str]:
+    def _headers(self, *, json_content: bool = True, accept: str | None = None) -> dict[str, str]:
         headers = {
-            "Accept": "application/json" if json_content else "*/*",
+            "Accept": accept or ("application/json" if json_content else "*/*"),
             "Origin": LINGYA_ORIGIN,
             "Referer": f"{LINGYA_ORIGIN}/",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-site",
             "User-Agent": self.user_agent,
+            "sec-ch-ua": self.sec_ch_ua,
+            "sec-ch-ua-mobile": DEFAULT_SEC_CH_UA_MOBILE,
+            "sec-ch-ua-platform": self.sec_ch_ua_platform,
         }
         if json_content:
             headers["Content-Type"] = "application/json"
@@ -161,10 +180,11 @@ class LingYaQQClient:
         payload: dict[str, Any] | None = None,
         *,
         json_content: bool = True,
+        accept: str | None = None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "params": self._pbaccess_params(),
-            "headers": self._headers(json_content=json_content),
+            "headers": self._headers(json_content=json_content, accept=accept),
             "timeout": self.timeout,
         }
         if json_content:
@@ -241,7 +261,7 @@ class LingYaQQClient:
         return self._post_pbaccess("/trpc.workstation.backend.Space/GetUserQuota", {})
 
     def hello(self) -> dict[str, Any]:
-        return self._post_pbaccess("/trpc.workstation.backend.Space/Hello", {})
+        return self._post_pbaccess("/trpc.workstation.backend.Space/Hello", {}, accept="*/*")
 
     def homepage(self) -> dict[str, Any]:
         return self._post_pbaccess("/trpc.workstation.backend.Space/HomePage", {})
@@ -518,10 +538,11 @@ class LingYaQQClient:
         _raise_for_ret(data, "LingYaQQ GetMyWorkList")
         return data
 
-    def refresh_session(self, *, main_login: str = "wx") -> dict[str, Any]:
+    def refresh_session(self, *, main_login: str = "phone") -> dict[str, Any]:
+        main_login = str(main_login or "phone").strip() or "phone"
         data = self._post_pbaccess(
             "/trpc.caotai.account.WebLogin/WebRefresh",
-            {"type": str(main_login or "wx")},
+            {"type": main_login},
         )
         if _int_response_field(data.get("ret")) != 0:
             raise RuntimeError(f"Lingya WebRefresh failed: {data.get('msg') or data}")
@@ -535,10 +556,15 @@ class LingYaQQClient:
         vurefresh = str(refresh_response.get("vurefresh") or "").strip()
         if vusession:
             now = int(time.time())
+            now_ms = int(time.time() * 1000)
             expire_in = int(refresh_response.get("vusession_expire_in") or 7200)
-            expire_at = int(refresh_response.get("vusession_expire_timestamp") or (now + expire_in))
+            next_refresh_delay = max(60, expire_in - 900)
+            next_refresh_ms = now_ms + next_refresh_delay * 1000
             self.set_cookies(
                 {
+                    "env": "production",
+                    "video_appid": VIDEO_APPID,
+                    "video_platform": VVERSION_PLATFORM,
                     "v_vuserid": vuid,
                     "vuserid": vuid,
                     "vqq_vuserid": vuid,
@@ -546,11 +572,13 @@ class LingYaQQClient:
                     "vusession": vusession,
                     "vqq_vusession": vusession,
                     "v_vurefresh": vurefresh,
+                    "last_refresh_vuserid": vuid,
                     "last_refresh_second": str(now),
-                    "last_refresh_time": str(now),
+                    "last_refresh_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+                    "v_main_login": main_login,
                     "v_next_refresh_time": str(expire_in),
                     "min_expire_time": str(expire_in),
-                    "_new_next_refresh_time": str(max(now + 60, expire_at - 900)),
+                    "_new_next_refresh_time": str(next_refresh_ms),
                 }
             )
         return data

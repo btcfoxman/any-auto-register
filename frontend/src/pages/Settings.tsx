@@ -279,7 +279,7 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'lingya2api_max_concurrency', label: '最大并发', placeholder: '1' },
         { key: 'lingya_qq_keepalive_enabled', label: '启用本地保活', placeholder: 'true' },
         { key: 'lingya_qq_heartbeat_interval_seconds', label: '心跳间隔秒数', placeholder: '300' },
-        { key: 'lingya_qq_balance_interval_seconds', label: '额度刷新间隔秒数', placeholder: '600' },
+        { key: 'lingya_qq_balance_interval_seconds', label: '额度刷新间隔秒数', placeholder: '60' },
       ],
     }, {
       section: '注册后自动化',

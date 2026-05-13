@@ -32,7 +32,9 @@ def test_build_lingya2api_payload_from_lingya_account():
     assert "vdevice_guid=device" in payload["cookie"]
     assert payload["vuserid"] == "vuid"
     assert payload["vdevice_guid"] == "device"
-    assert payload["main_login"] == "wx"
+    assert payload["main_login"] == "phone"
+    assert 'Chromium";v="147"' in payload["sec_ch_ua"]
+    assert payload["sec_ch_ua_platform"] == '"Windows"'
     assert payload["enabled"] is True
     assert payload["enable_auto_maintenance"] is False
 
@@ -51,6 +53,32 @@ def test_build_lingya2api_payload_can_explicitly_enable_remote_auto_maintenance(
     payload = build_lingya2api_payload(account)
 
     assert payload["enable_auto_maintenance"] is True
+
+
+def test_build_lingya2api_payload_reads_account_overview_legacy_extra():
+    account = Account(
+        platform="lingya_qq",
+        email="browser-import",
+        password="",
+        extra={
+            "cookies": "v_vusession=session; v_vurefresh=refresh; v_vuserid=vuid; vdevice_guid=device",
+            "account_overview": {
+                "legacy_extra": {
+                    "lingya2api_max_concurrency": 4,
+                    "proxy_url": "http://proxy.example:8080",
+                    "user_agent": "Browser UA",
+                    "sec_ch_ua": '"Chromium";v="147"',
+                }
+            },
+        },
+    )
+
+    payload = build_lingya2api_payload(account, max_concurrency=1)
+
+    assert payload["max_concurrency"] == 4
+    assert payload["proxy_url"] == "http://proxy.example:8080"
+    assert payload["user_agent"] == "Browser UA"
+    assert payload["sec_ch_ua"] == '"Chromium";v="147"'
 
 
 def test_build_lingya2api_payload_rebuilds_cookie_from_split_fields():

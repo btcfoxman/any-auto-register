@@ -1,0 +1,263 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d1015;
+  --panel: #161c24;
+  --panel-2: #202834;
+  --line: #343d4a;
+  --text: #f0f4f7;
+  --muted: #9aa7b6;
+  --accent: #4bd1a0;
+  --bad: #ff8585;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 520px;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.36 "Aptos", "Segoe UI", sans-serif;
+}
+
+.card {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+p,
+h1 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+p {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+h1 {
+  font-size: 16px;
+  line-height: 1.08;
+}
+
+label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #10151c;
+  color: var(--text);
+  padding: 7px 8px;
+  font: inherit;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 78px;
+  gap: 8px;
+}
+
+button {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 8px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+.primary {
+  border-color: rgba(75, 209, 160, 0.55);
+  background: #17382d;
+  color: #e0f9ef;
+}
+
+output {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 8px 9px;
+  overflow-wrap: anywhere;
+}
+
+output.ok {
+  color: var(--accent);
+}
+
+output.bad {
+  color: var(--bad);
+}
+
+.assist-panel {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(75, 209, 160, 0.42);
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(23, 56, 45, 0.86), rgba(22, 28, 36, 0.94));
+  padding: 9px;
+}
+
+.assist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assist-head strong {
+  font-size: 11px;
+}
+
+.assist-head span {
+  color: var(--muted);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 10px;
+}
+
+.assist-status {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.assist-status.ok {
+  color: var(--accent);
+}
+
+.assist-status.bad {
+  color: var(--bad);
+}
+
+.cookie-panel {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 9px;
+}
+
+.cookie-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cookie-head strong {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.mini {
+  width: auto;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.cookie-summary {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.cookie-summary.ok {
+  color: var(--accent);
+}
+
+.cookie-summary.bad {
+  color: var(--bad);
+}
+
+.scan-debug {
+  display: none;
+  gap: 2px;
+  color: var(--muted);
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 10px;
+  max-height: 54px;
+  overflow: hidden;
+}
+
+.scan-debug.visible {
+  display: grid;
+}
+
+.scan-debug span {
+  overflow-wrap: anywhere;
+}
+
+.cookie-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-height: 78px;
+  overflow: hidden;
+}
+
+.cookie-row {
+  display: inline-flex;
+  align-items: center;
+  max-width: 154px;
+  gap: 5px;
+  padding: 4px 6px;
+  border: 1px solid rgba(52, 61, 74, 0.7);
+  border-radius: 999px;
+  background: #111821;
+}
+
+.cookie-row code {
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookie-row span {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cookie-row .value {
+  font-family: "Cascadia Mono", "Consolas", monospace;
+  color: var(--text);
+}
+
+.cookie-more {
+  color: var(--muted);
+  align-self: center;
+  padding: 4px 2px;
+}
+
+.actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}

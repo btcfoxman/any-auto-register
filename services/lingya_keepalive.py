@@ -15,7 +15,7 @@ from infrastructure.platform_runtime import PlatformRuntime
 
 ACTIVE_LIFECYCLE_STATUSES = {"registered", "trial", "subscribed"}
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 300
-DEFAULT_BALANCE_INTERVAL_SECONDS = 600
+DEFAULT_BALANCE_INTERVAL_SECONDS = 60
 
 
 class LingYaKeepaliveWorker:
@@ -65,7 +65,7 @@ class LingYaKeepaliveWorker:
             heartbeat_due = now - self._last_heartbeat >= heartbeat_interval
             balance_due = now - self._last_balance >= balance_interval
             if heartbeat_due or balance_due:
-                self._run_for_accounts(refresh_quota=balance_due)
+                self._run_for_accounts(refresh_quota=balance_due, run_hello=heartbeat_due)
             if heartbeat_due:
                 self._last_heartbeat = now
             if balance_due:
@@ -112,7 +112,7 @@ class LingYaKeepaliveWorker:
                 ids.append(account_id)
             return ids
 
-    def _run_for_accounts(self, *, refresh_quota: bool) -> None:
+    def _run_for_accounts(self, *, refresh_quota: bool, run_hello: bool = True) -> None:
         runtime = PlatformRuntime()
         for account_id in self._target_account_ids(refresh_quota=refresh_quota):
             if not self._try_lock_account(account_id):
@@ -123,8 +123,9 @@ class LingYaKeepaliveWorker:
                     account_id=account_id,
                     action_id="keepalive_sync",
                     params={
-                        "force_refresh": "true",
+                        "force_refresh": "false",
                         "refresh_quota": "true" if refresh_quota else "false",
+                        "run_hello": "true" if run_hello else "false",
                     },
                 )
                 result = runtime.execute_action(command, log_fn=lambda message: print(f"[LingYaKeepalive] {message}"))

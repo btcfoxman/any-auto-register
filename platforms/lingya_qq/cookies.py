@@ -16,6 +16,7 @@ LINGYA_QQ_COOKIE_NAMES: tuple[str, ...] = (
     "env",
     "last_refresh_second",
     "last_refresh_time",
+    "last_refresh_vuserid",
     "min_expire_time",
     "nick",
     "v_login_time_init",

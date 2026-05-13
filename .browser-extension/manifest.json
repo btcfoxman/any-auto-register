@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Any Register Lingya Helper",
+  "description": "Import Lingya browser cookies into any-auto-register and assist phone-login tasks.",
+  "version": "0.1.0",
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "cookies",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://lingya.qq.com/*",
+    "https://*.lingya.qq.com/*",
+    "https://pbaccess.lingya.qq.com/*",
+    "https://*.pbaccess.lingya.qq.com/*",
+    "https://v.qq.com/*",
+    "https://qq.com/*",
+    "https://*.qq.com/*",
+    "https://tencent.com/*",
+    "https://*.tencent.com/*",
+    "http://192.168.3.3/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://127.0.0.1/*",
+    "https://localhost/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Any Register Lingya Helper"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
