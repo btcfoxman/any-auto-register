@@ -191,6 +191,8 @@ def test_lingya_qq_manual_phone_register(monkeypatch):
             extra={"lingya_qq_sms_timeout": "12"},
         )
     )
+    logs = []
+    platform.set_logger(logs.append)
     account = platform.register()
 
     assert account.platform == "lingya_qq"
@@ -213,6 +215,7 @@ def test_lingya_qq_manual_phone_register(monkeypatch):
     assert "v_vusession=session-token" in account.extra["cookies"]
     assert ("get_number", "qq", "") in events
     assert ("get_code", "act_1", 12) in events
+    assert any("register SMS code received: 123456 (len=6)" in message for message in logs)
     assert ("login", "13800138000", "123456", "+86") in events
     assert ("report_success", "act_1") in events
     assert not any(event[0] == "cancel" for event in events)
@@ -429,6 +432,7 @@ def test_lingya_qq_relogin_sms_action(monkeypatch):
     assert result["data"]["quota_balance"] == "3"
     assert ("get_number", "qq", "å¹¿ä¸œ") in events
     assert ("get_code_after", "13800138000", 10, "ã€è…¾è®¯ç§‘æŠ€ã€‘éªŒè¯ç 111111ï¼Œç”¨äºŽç™»å½•") in events
+    assert any("relogin SMS code received: 654321 (len=6)" in message for message in logs)
     assert ("login", "13800138000", "654321", "+86") in events
     assert ("report_success", "13800138000") in events
     assert not any(event[0] == "cancel" for event in events)

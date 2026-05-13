@@ -39,6 +39,12 @@ def _sms_timeout(value: Any, default: int = LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS) -
     return max(1, min(LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS, _as_int(value, default)))
 
 
+def _log_sms_code(log_fn, code: Any, *, context: str) -> None:
+    text = str(code or "").strip()
+    if callable(log_fn):
+        log_fn(f"LingYaQQ {context} SMS code received: {text} (len={len(text)})")
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value in (None, ""):
         return default
@@ -468,6 +474,7 @@ class LingYaQQPlatform(BasePlatform):
             code = provider.get_code(activation.activation_id, timeout=timeout)
             if not code:
                 raise RuntimeError("LingYaQQ SMS verification code was not received")
+            _log_sms_code(self.log, code, context="register")
 
             client = self._client()
             login = client.login_with_phone_code(phone=phone, code=code, area_code=area_code)
@@ -642,6 +649,7 @@ class LingYaQQPlatform(BasePlatform):
                 code = provider.get_code(activation.activation_id, timeout=timeout)
             if not code:
                 raise RuntimeError("LingYaQQ relogin SMS verification code was not received")
+            _log_sms_code(self.log, code, context="relogin")
 
             account_cookies = extract_lingya_qq_cookies(account_source)
             vdevice_guid = str(account_source.get("vdevice_guid") or "").strip() or None
