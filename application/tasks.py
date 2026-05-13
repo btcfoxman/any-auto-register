@@ -995,8 +995,8 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 account_extra["proxy_url"] = resolved_proxy
                 account.extra = account_extra
             existing_account_id = _existing_account_id(account.platform, account.email)
-            saved_model = save_account(account)
-            saved_account_id = int(getattr(saved_model, "id", 0) or 0)
+            save_account(account)
+            saved_account_id = existing_account_id or _existing_account_id(account.platform, account.email) or 0
             if saved_account_id:
                 save_mode = "updated existing" if existing_account_id else "created"
                 logger.log(f"  [Accounts] saved account id={saved_account_id} ({save_mode})")
