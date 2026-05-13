@@ -32,8 +32,8 @@ def test_lingya_keepalive_runs_keepalive_action_with_quota_flag(monkeypatch):
     worker._run_for_accounts(refresh_quota=True)
 
     assert calls == [
-        ("lingya_qq", 7, "keepalive_sync", {"refresh_quota": "false"}),
-        ("lingya_qq", 7, "keepalive_sync", {"refresh_quota": "true"}),
+        ("lingya_qq", 7, "keepalive_sync", {"force_refresh": "true", "refresh_quota": "false"}),
+        ("lingya_qq", 7, "keepalive_sync", {"force_refresh": "true", "refresh_quota": "true"}),
     ]
 
 

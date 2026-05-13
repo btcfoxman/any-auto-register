@@ -488,9 +488,28 @@ def _auto_sync_lingya2api(task_logger: TaskLogger, account) -> None:
     try:
         from core.lingya2api_sync import sync_account_to_lingya2api
 
-        sync_account_to_lingya2api(account, log_fn=task_logger.log)
+        result = sync_account_to_lingya2api(account, log_fn=task_logger.log)
+        if result:
+            task_logger.log("  [Lingya2API] LingYaQQ account synced after registration")
+        else:
+            task_logger.log("  [Lingya2API] auto sync skipped or failed; check lingya2api_url/API key and previous warning logs", level="warning")
     except Exception as exc:
         task_logger.log(f"  [Lingya2API] auto sync error: {exc}", level="warning")
+
+
+def _existing_account_id(platform: str, email: str) -> int | None:
+    if not platform or not email:
+        return None
+    try:
+        with Session(engine) as session:
+            model = session.exec(
+                select(AccountModel)
+                .where(AccountModel.platform == platform)
+                .where(AccountModel.email == email)
+            ).first()
+            return int(model.id or 0) if model and model.id else None
+    except Exception:
+        return None
 
 
 def _task_config_value(extra: dict[str, Any], key: str, default: Any = "") -> Any:
@@ -975,7 +994,13 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 account_extra = dict(account.extra or {})
                 account_extra["proxy_url"] = resolved_proxy
                 account.extra = account_extra
-            save_account(account)
+            existing_account_id = _existing_account_id(account.platform, account.email)
+            saved_model = save_account(account)
+            saved_account_id = int(getattr(saved_model, "id", 0) or 0)
+            if saved_account_id:
+                save_mode = "updated existing" if existing_account_id else "created"
+                logger.log(f"  [Accounts] saved account id={saved_account_id} ({save_mode})")
+            _auto_sync_lingya2api(logger, account)
             _auto_followup_windsurf_payment(
                 platform_name=platform_name,
                 payload=payload,
@@ -997,7 +1022,6 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             )
             _auto_upload_cpa(logger, account)
             _auto_push_any2api(logger, account)
-            _auto_sync_lingya2api(logger, account)
             extra = dict(account.extra or {})
             overview = dict(extra.get("account_overview") or {})
             cashier_url = str(extra.get("cashier_url") or overview.get("cashier_url") or "")

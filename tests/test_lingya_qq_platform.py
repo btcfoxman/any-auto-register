@@ -223,6 +223,34 @@ def test_lingya_qq_check_valid(monkeypatch):
         def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
             assert vdevice_guid == "device1234567890"
             assert cookies["v_vusession"] == "session-cookie"
+            self.vdevice_guid = vdevice_guid
+            self._cookies = dict(cookies or {})
+
+        def refresh_session(self, *, main_login: str = "wx"):
+            self._cookies.update(
+                {
+                    "v_vusession": "session-refreshed",
+                    "vusession": "session-refreshed",
+                    "vqq_vusession": "session-refreshed",
+                    "v_vuserid": "1234567890",
+                }
+            )
+            return {
+                "ret": 0,
+                "data": {
+                    "rsp": {
+                        "refresh_response": {
+                            "vuid": "1234567890",
+                            "vusession": "session-refreshed",
+                            "vusession_expire_timestamp": "1778227200",
+                            "vusession_expire_in": 7200,
+                        }
+                    }
+                },
+            }
+
+        def cookie_dict(self):
+            return dict(self._cookies)
 
         def get_user_quota(self):
             return {"quota_balance": "1", "quota_sum": "2"}
@@ -800,6 +828,86 @@ def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkey
     assert result["data"]["hello_token_ok"] is True
     assert result["data"]["v_vusession"] == "session-new"
     assert events[:3] == [("hello", 1), ("refresh", "wx"), ("hello", 2)]
+    assert any(event == ("sync", False, "session-new") for event in events)
+
+
+def test_lingya_qq_keepalive_refreshes_and_retries_on_quota_session_error(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid or "device-old"
+            self._cookies = dict(cookies or {})
+            self._quota_calls = 0
+
+        def hello(self):
+            events.append(("hello",))
+            return {"timestamp": "1778223000", "token": "hello-token"}
+
+        def refresh_session(self, *, main_login: str = "wx"):
+            events.append(("refresh", main_login))
+            self._cookies.update(
+                {
+                    "v_vusession": "session-new",
+                    "vusession": "session-new",
+                    "vqq_vusession": "session-new",
+                    "v_vurefresh": "refresh-new",
+                    "v_vuserid": "vuid-new",
+                    "vuserid": "vuid-new",
+                    "vqq_vuserid": "vuid-new",
+                }
+            )
+            return {
+                "ret": 0,
+                "data": {
+                    "rsp": {
+                        "refresh_response": {
+                            "vuid": "vuid-new",
+                            "vusession": "session-new",
+                            "vurefresh": "refresh-new",
+                            "vusession_expire_timestamp": "1778227200",
+                            "vusession_expire_in": 7200,
+                        }
+                    }
+                },
+            }
+
+        def cookie_dict(self):
+            return dict(self._cookies)
+
+        def get_user_quota(self):
+            self._quota_calls += 1
+            events.append(("quota", self._quota_calls))
+            if self._quota_calls == 1:
+                raise RuntimeError("trpc.workstation.backend.Space/GetUserQuota: TRPC error 20447")
+            return {"quota_balance": "9", "quota_sum": "10"}
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, check=False, extra_overrides=None):
+        events.append(("sync", heartbeat, account.extra.get("v_vusession")))
+        return {"ok": True}
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr("platforms.lingya_qq.plugin.sync_account_to_lingya2api", fake_sync)
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid-old",
+        extra={
+            "cookies": "v_vusession=session-old; v_vurefresh=refresh-old; v_vuserid=vuid-old; vdevice_guid=device-old",
+            "v_main_login": "wx",
+        },
+    )
+
+    result = platform.execute_action("keepalive_sync", account, {"refresh_quota": "true"})
+
+    assert result["ok"] is True
+    assert result["data"]["session_refreshed"] is True
+    assert result["data"]["v_vusession"] == "session-new"
+    assert result["data"]["quota_balance"] == "9"
+    assert events[:4] == [("hello",), ("quota", 1), ("refresh", "wx"), ("quota", 2)]
     assert any(event == ("sync", False, "session-new") for event in events)
 
 

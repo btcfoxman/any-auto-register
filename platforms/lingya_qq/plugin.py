@@ -1321,10 +1321,22 @@ class LingYaQQPlatform(BasePlatform):
 
         quota: dict[str, Any] = {}
         if refresh_quota:
-            try:
-                quota = client.get_user_quota()
-            except Exception as exc:
-                self.log(f"LingYaQQ quota refresh skipped: {exc}")
+            for attempt in range(2):
+                try:
+                    quota = client.get_user_quota()
+                except Exception as exc:
+                    if attempt == 0 and _is_session_retry_error(exc):
+                        refresh_session(f"quota retryable session error { _session_error_code(exc) }")
+                        continue
+                    self.log(f"LingYaQQ quota refresh skipped: {exc}")
+                    break
+                if _is_session_retry_error(quota):
+                    if attempt == 0:
+                        refresh_session(f"quota retryable session response { _session_error_code(quota) }")
+                        continue
+                    self.log(f"LingYaQQ quota refresh skipped after session refresh: {quota.get('msg') or quota}")
+                    quota = {}
+                break
         quota_overview = _quota_summary(quota)
 
         data: dict[str, Any] = {
@@ -1354,7 +1366,7 @@ class LingYaQQPlatform(BasePlatform):
         return {"ok": True, "data": data}
 
     def _load_state(self, account: Account) -> dict[str, Any]:
-        result = self._handle_keepalive_sync(account, {"refresh_quota": "true"})
+        result = self._handle_keepalive_sync(account, {"force_refresh": "true", "refresh_quota": "true"})
         if not result.get("ok"):
             raise RuntimeError(str(result.get("error") or "LingYaQQ keepalive check failed"))
         data = dict(result.get("data") or {})

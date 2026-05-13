@@ -122,7 +122,10 @@ class LingYaKeepaliveWorker:
                     platform="lingya_qq",
                     account_id=account_id,
                     action_id="keepalive_sync",
-                    params={"refresh_quota": "true" if refresh_quota else "false"},
+                    params={
+                        "force_refresh": "true",
+                        "refresh_quota": "true" if refresh_quota else "false",
+                    },
                 )
                 result = runtime.execute_action(command, log_fn=lambda message: print(f"[LingYaKeepalive] {message}"))
                 if not getattr(result, "ok", False):

@@ -145,7 +145,7 @@ class AccountsRepository:
                 statement = statement.where(AccountModel.platform == query.platform)
             if query.email:
                 statement = statement.where(AccountModel.email.contains(query.email))
-            statement = statement.order_by(AccountModel.created_at.desc(), AccountModel.id.desc())
+            statement = statement.order_by(AccountModel.updated_at.desc(), AccountModel.created_at.desc(), AccountModel.id.desc())
             models = session.exec(statement).all()
             records = self._load_records(session, models)
             if query.status:
@@ -177,7 +177,7 @@ class AccountsRepository:
                 statement = statement.where(AccountModel.email.contains(selection.search_filter))
             if not selection.select_all and selection.ids:
                 statement = statement.where(AccountModel.id.in_(selection.ids))
-            statement = statement.order_by(AccountModel.created_at.desc(), AccountModel.id.desc())
+            statement = statement.order_by(AccountModel.updated_at.desc(), AccountModel.created_at.desc(), AccountModel.id.desc())
             models = session.exec(statement).all()
             records = self._load_records(session, models)
         if selection.status_filter:
@@ -370,7 +370,9 @@ class AccountsRepository:
 
     def stats(self) -> AccountStats:
         with Session(engine) as session:
-            accounts = session.exec(select(AccountModel).order_by(AccountModel.created_at.desc(), AccountModel.id.desc())).all()
+            accounts = session.exec(
+                select(AccountModel).order_by(AccountModel.updated_at.desc(), AccountModel.created_at.desc(), AccountModel.id.desc())
+            ).all()
             records = self._load_records(session, accounts)
         stats = compute_account_stats(
             [
