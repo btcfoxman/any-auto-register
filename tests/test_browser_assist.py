@@ -102,6 +102,26 @@ def test_browser_assist_api_claim_and_state_writes_task_event(client):
     browser_assist_registry.clear_for_tests()
 
 
+def test_browser_assist_api_claim_supports_get_without_auth_headers(client):
+    browser_assist_registry.clear_for_tests()
+    request = browser_assist_registry.publish_lingya_phone_login(
+        task_id="task_get",
+        phone="+8613800138000",
+        local_phone="13800138000",
+        area_code="+86",
+        proxy_url="",
+    )
+
+    claim_resp = client.get(
+        "/api/browser/assist/claim",
+        params={"extension_id": "ext_get", "platform": "lingya_qq", "proxy_url": ""},
+    )
+
+    assert claim_resp.status_code == 200
+    assert claim_resp.json()["request"]["assist_id"] == request["assist_id"]
+    browser_assist_registry.clear_for_tests()
+
+
 def test_browser_assist_api_uses_existing_bearer_auth_when_enabled(client, monkeypatch):
     browser_assist_registry.clear_for_tests()
     monkeypatch.setenv("APP_PASSWORD", "secret")

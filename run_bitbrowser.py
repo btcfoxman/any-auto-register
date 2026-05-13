@@ -12,10 +12,10 @@ HEADERS = {'Content-Type': 'application/json'}
 
 # 环境短号到 真实环境 ID 和 代理端口 的映射表
 ENV_MAPPING = {
-    "3": {"id": "c100ade220ea4ef5b8f37cdfb035539e", "port": 20009},
-    "4": {"id": "9e567805001c493fb7bae305332d1c2a", "port": 20020},
-    "5": {"id": "4c417fd9e5fa4cf085fac3e4eb02f7dd", "port": 20021},
-    "6": {"id": "7a046e29b9964f41b0d023956c8d62e5", "port": 20022}
+    "3": {"id": "c100ade220ea4ef5b8f37cdfb035539e", "port": 20003},
+    "4": {"id": "9e567805001c493fb7bae305332d1c2a", "port": 20005},
+    "5": {"id": "4c417fd9e5fa4cf085fac3e4eb02f7dd", "port": 20013},
+    "6": {"id": "7a046e29b9964f41b0d023956c8d62e5", "port": 20014}
 }
 
 PROXY_TYPE = "socks5"

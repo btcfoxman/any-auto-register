@@ -1,12 +1,17 @@
 const ASSIST_DEFAULTS = {
   serviceUrl: "http://192.168.3.5:8000",
-  apiKey: "sk-test-api-key",
+  apiKey: "",
   proxyUrl: "",
   extensionId: "",
   assistLastStatus: "Task assistant idle."
 };
 
-const ASSIST_LEGACY_SERVICE_URL = "http://127.0.0.1:8000";
+const ASSIST_LEGACY_SERVICE_URLS = new Set([
+  "http://127.0.0.1:8000",
+  "http://127.0.0.1:8787",
+  "http://192.168.3.3:8787"
+]);
+const ASSIST_LEGACY_API_KEYS = new Set(["sk-test-api-key"]);
 const POLL_IDLE_MS = 5000;
 const POLL_ACTIVE_MS = 2000;
 
@@ -33,7 +38,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.serviceUrl || changes.apiKey || changes.proxyUrl) {
+  if (changes.serviceUrl || changes.apiKey || changes.proxyUrl || changes.serviceAccessGrantedAt) {
     scheduleAssistPoll(250);
   }
 });
@@ -57,11 +62,21 @@ function scheduleAssistPoll(delayMs = POLL_IDLE_MS) {
 async function pollAssistOnce() {
   if (polling) return;
   polling = true;
+  let serviceUrl = "";
   try {
     const settings = await storageGet(ASSIST_DEFAULTS);
     settings.serviceUrl = defaultServiceUrl(settings.serviceUrl);
+    settings.apiKey = defaultApiKey(settings.apiKey);
+    serviceUrl = settings.serviceUrl;
     if (!settings.serviceUrl) {
       await setAssistStatus("Task assistant needs a Service URL.");
+      scheduleAssistPoll(POLL_IDLE_MS);
+      return;
+    }
+    const access = await serviceAccessStatus(settings.serviceUrl);
+    if (!access.ok) {
+      await setAssistStatus(access.message, "bad");
+      scheduleAssistPoll(POLL_IDLE_MS);
       return;
     }
     const extensionId = await ensureExtensionId();
@@ -72,14 +87,13 @@ async function pollAssistOnce() {
       proxy_url: String(settings.proxyUrl || "").trim(),
       current_url: activeTab && activeTab.url ? activeTab.url : ""
     };
-    const response = await fetch(apiUrl(settings.serviceUrl, "/api/browser/assist/claim"), {
-      method: "POST",
-      headers: buildHeaders(settings.apiKey),
-      body: JSON.stringify(payload)
-    });
+    const response = await fetchClaim(settings, payload);
     const data = await readJsonOrText(response);
     if (!response.ok) {
       throw new Error(errorMessage(data, response.status));
+    }
+    if (!data || typeof data !== "object") {
+      throw new Error("Task assistant API returned non-JSON. Restart any-auto-register backend and check the Service URL.");
     }
     const request = data && data.request ? data.request : null;
     if (!request) {
@@ -91,11 +105,32 @@ async function pollAssistOnce() {
     await handleAssistRequest(settings, extensionId, request);
     scheduleAssistPoll(POLL_ACTIVE_MS);
   } catch (error) {
-    await setAssistStatus(`Task assistant error: ${error.message || String(error)}`, "bad");
+    await setAssistStatus(`Task assistant error: ${fetchErrorMessage(error, serviceUrl)}`, "bad");
     scheduleAssistPoll(POLL_IDLE_MS);
   } finally {
     polling = false;
   }
+}
+
+function fetchClaim(settings, payload) {
+  const token = String(settings.apiKey || "").trim();
+  if (!token) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(payload)) {
+      if (value !== undefined && value !== null && String(value) !== "") {
+        params.set(key, String(value));
+      }
+    }
+    return fetch(apiUrl(settings.serviceUrl, `/api/browser/assist/claim?${params.toString()}`), {
+      method: "GET",
+      cache: "no-store"
+    });
+  }
+  return fetch(apiUrl(settings.serviceUrl, "/api/browser/assist/claim"), {
+    method: "POST",
+    headers: buildHeaders(token),
+    body: JSON.stringify(payload)
+  });
 }
 
 async function handleAssistRequest(settings, extensionId, request) {
@@ -188,11 +223,66 @@ async function ensureExtensionId() {
 }
 
 function defaultServiceUrl(value) {
-  const serviceUrl = String(value || "").trim();
-  if (!serviceUrl || serviceUrl === ASSIST_LEGACY_SERVICE_URL) {
+  const serviceUrl = String(value || "").trim().replace(/\/+$/, "");
+  if (!serviceUrl || ASSIST_LEGACY_SERVICE_URLS.has(serviceUrl)) {
     return ASSIST_DEFAULTS.serviceUrl;
   }
-  return serviceUrl.replace(/\/+$/, "");
+  return serviceUrl;
+}
+
+function defaultApiKey(value) {
+  const apiKey = String(value || "").trim();
+  return ASSIST_LEGACY_API_KEYS.has(apiKey) ? "" : apiKey;
+}
+
+async function serviceAccessStatus(serviceUrl) {
+  const pattern = serviceOriginPattern(serviceUrl);
+  if (!pattern) {
+    return { ok: false, message: `Invalid Service URL: ${serviceUrl || "-"}` };
+  }
+  if (!chrome.permissions || !chrome.permissions.contains) {
+    return { ok: true, message: "" };
+  }
+  try {
+    const allowed = await chrome.permissions.contains({ origins: [pattern] });
+    if (allowed) return { ok: true, message: "" };
+    return {
+      ok: false,
+      message: `Task assistant needs access to ${new URL(serviceUrl).origin}. Open the extension popup and click Grant Access.`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Task assistant cannot check access for ${serviceUrl}: ${error.message || String(error)}`
+    };
+  }
+}
+
+function serviceOriginPattern(serviceUrl) {
+  try {
+    const url = new URL(String(serviceUrl || "").trim());
+    if (!/^https?:$/.test(url.protocol)) return "";
+    return `${url.protocol}//${url.hostname}/*`;
+  } catch {
+    return "";
+  }
+}
+
+function fetchErrorMessage(error, serviceUrl) {
+  const message = error && error.message ? error.message : String(error || "");
+  if (message === "Failed to fetch" || message.includes("Failed to fetch")) {
+    const origin = safeOrigin(serviceUrl);
+    return `Failed to fetch ${origin || "service"}. Check that any-auto-register is running, the Service URL is correct, and popup access is granted.`;
+  }
+  return message || "unknown error";
+}
+
+function safeOrigin(serviceUrl) {
+  try {
+    return new URL(String(serviceUrl || "")).origin;
+  } catch {
+    return "";
+  }
 }
 
 function buildHeaders(apiKey) {

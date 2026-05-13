@@ -15,12 +15,16 @@
 
     <label>
       Service URL
-      <input id="serviceUrl" spellcheck="false" placeholder="http://192.168.3.3:8787">
+      <input id="serviceUrl" spellcheck="false" placeholder="http://192.168.3.5:8000">
     </label>
+    <div class="service-access-row">
+      <span id="serviceAccessStatus" class="service-access-status">Checking service access...</span>
+      <button id="grantAccessButton" class="mini" type="button">Grant Access</button>
+    </div>
 
     <label>
-      API Key
-      <input id="apiKey" type="password" spellcheck="false" placeholder="sk-test-api-key">
+      API Key / APP_PASSWORD
+      <input id="apiKey" type="password" spellcheck="false" placeholder="Leave blank unless APP_PASSWORD is set">
     </label>
 
     <div class="grid">

@@ -181,6 +181,28 @@ output.bad {
   font-size: 11px;
 }
 
+.service-access-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: -4px;
+}
+
+.service-access-status {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.service-access-status.ok {
+  color: var(--accent);
+}
+
+.service-access-status.bad {
+  color: var(--bad);
+}
+
 .cookie-summary {
   color: var(--muted);
   overflow-wrap: anywhere;

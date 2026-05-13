@@ -50,13 +50,18 @@ const SYNC_COOKIE_NAMES = new Set([
 ]);
 
 const DEFAULTS = {
-  serviceUrl: "http://192.168.3.3:8787",
-  apiKey: "sk-test-api-key",
+  serviceUrl: "http://192.168.3.5:8000",
+  apiKey: "",
   accountName: "",
   proxyUrl: "",
   maxConcurrency: 1
 };
-const LEGACY_DEFAULT_SERVICE_URL = "http://127.0.0.1:8787";
+const LEGACY_DEFAULT_SERVICE_URLS = new Set([
+  "http://127.0.0.1:8000",
+  "http://127.0.0.1:8787",
+  "http://192.168.3.3:8787"
+]);
+const LEGACY_DEFAULT_API_KEYS = new Set(["sk-test-api-key"]);
 
 const $ = (id) => document.getElementById(id);
 let scannedCookies = [];
@@ -67,18 +72,20 @@ let saveTimer = null;
 document.addEventListener("DOMContentLoaded", async () => {
   const saved = await storageGet(DEFAULTS);
   const serviceUrl = defaultServiceUrl(saved.serviceUrl);
+  const apiKey = defaultApiKey(saved.apiKey);
   $("serviceUrl").value = serviceUrl;
-  $("apiKey").value = saved.apiKey || DEFAULTS.apiKey;
+  $("apiKey").value = apiKey;
   $("accountName").value = saved.accountName || "";
   $("proxyUrl").value = saved.proxyUrl || "";
   $("maxConcurrency").value = saved.maxConcurrency || 1;
-  if (saved.serviceUrl !== serviceUrl) {
-    await storageSet({ serviceUrl });
+  if (saved.serviceUrl !== serviceUrl || saved.apiKey !== apiKey) {
+    await storageSet({ serviceUrl, apiKey });
   }
 
   $("importButton").addEventListener("click", importCookies);
   $("openConsoleButton").addEventListener("click", openConsole);
   $("refreshCookiesButton").addEventListener("click", () => scanAndRenderCookies(true));
+  $("grantAccessButton").addEventListener("click", grantServiceAccess);
   for (const id of ["serviceUrl", "apiKey", "accountName", "proxyUrl", "maxConcurrency"]) {
     $(id).addEventListener("input", persistSettingsSoon);
     $(id).addEventListener("change", persistSettingsSoon);
@@ -91,21 +98,28 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   await storageSet(readSettings());
   await renderAssistStatus();
+  await renderServiceAccessStatus();
   await scanAndRenderCookies(!saved.accountName);
 });
 
 function defaultServiceUrl(value) {
-  const serviceUrl = String(value || "").trim();
-  if (!serviceUrl || serviceUrl === LEGACY_DEFAULT_SERVICE_URL) {
+  const serviceUrl = String(value || "").trim().replace(/\/+$/, "");
+  if (!serviceUrl || LEGACY_DEFAULT_SERVICE_URLS.has(serviceUrl)) {
     return DEFAULTS.serviceUrl;
   }
   return serviceUrl;
+}
+
+function defaultApiKey(value) {
+  const apiKey = String(value || "").trim();
+  return LEGACY_DEFAULT_API_KEYS.has(apiKey) ? "" : apiKey;
 }
 
 async function importCookies() {
   setStatus("Collecting Lingya cookies for local import...");
   try {
     const settings = readSettings();
+    await ensureServiceAccess(settings.serviceUrl, { requestIfMissing: true });
     await storageSet(settings);
 
     const cookies = scannedCookies.length ? scannedCookies : await scanAndRenderCookies(true);
@@ -163,6 +177,12 @@ async function scanAndRenderCookies(forceNameFromCookie = false) {
 
 async function openConsole() {
   const settings = readSettings();
+  try {
+    await ensureServiceAccess(settings.serviceUrl, { requestIfMissing: true });
+  } catch (error) {
+    setStatus(error.message || String(error), "bad");
+    return;
+  }
   await storageSet(settings);
   const url = settings.apiKey
     ? `${settings.serviceUrl.replace(/\/+$/, "")}/?token=${encodeURIComponent(settings.apiKey)}`
@@ -427,8 +447,24 @@ function persistSettingsSoon() {
   saveTimer = setTimeout(async () => {
     saveTimer = null;
     await storageSet(readSettings());
+    await renderServiceAccessStatus();
     await renderAssistStatus();
   }, 250);
+}
+
+async function grantServiceAccess() {
+  const settings = readSettings();
+  setStatus(`Requesting access to ${safeOrigin(settings.serviceUrl) || settings.serviceUrl}...`);
+  try {
+    await ensureServiceAccess(settings.serviceUrl, { requestIfMissing: true });
+    await storageSet({ ...settings, serviceAccessGrantedAt: new Date().toISOString() });
+    await renderServiceAccessStatus();
+    await renderAssistStatus();
+    setStatus(`Service access granted for ${safeOrigin(settings.serviceUrl)}.`, "ok");
+  } catch (error) {
+    await renderServiceAccessStatus();
+    setStatus(error.message || String(error), "bad");
+  }
 }
 
 async function renderAssistStatus() {
@@ -442,6 +478,66 @@ async function renderAssistStatus() {
   status.className = `assist-status ${data.assistLastKind || ""}`.trim();
   status.textContent = data.assistLastStatus || "Task assistant idle.";
   updated.textContent = data.assistLastUpdatedAt ? new Date(data.assistLastUpdatedAt).toLocaleTimeString() : "Listening";
+}
+
+async function renderServiceAccessStatus() {
+  const status = $("serviceAccessStatus");
+  if (!status) return;
+  const serviceUrl = readSettings().serviceUrl;
+  const origin = safeOrigin(serviceUrl);
+  try {
+    const allowed = await hasServiceAccess(serviceUrl);
+    status.className = `service-access-status ${allowed ? "ok" : "bad"}`;
+    status.textContent = allowed
+      ? `Access granted: ${origin}`
+      : `Access required: ${origin || serviceUrl}`;
+  } catch (error) {
+    status.className = "service-access-status bad";
+    status.textContent = error.message || String(error);
+  }
+}
+
+async function ensureServiceAccess(serviceUrl, { requestIfMissing = false } = {}) {
+  const pattern = serviceOriginPattern(serviceUrl);
+  if (!pattern) {
+    throw new Error(`Invalid Service URL: ${serviceUrl || "-"}`);
+  }
+  if (!chrome.permissions || !chrome.permissions.contains) {
+    return true;
+  }
+  const allowed = await chrome.permissions.contains({ origins: [pattern] });
+  if (allowed) return true;
+  if (!requestIfMissing) return false;
+  if (!chrome.permissions.request) {
+    throw new Error(`Extension access is missing for ${safeOrigin(serviceUrl)}.`);
+  }
+  const granted = await chrome.permissions.request({ origins: [pattern] });
+  if (!granted) {
+    throw new Error(`Extension access was not granted for ${safeOrigin(serviceUrl)}.`);
+  }
+  return true;
+}
+
+async function hasServiceAccess(serviceUrl) {
+  return ensureServiceAccess(serviceUrl, { requestIfMissing: false });
+}
+
+function serviceOriginPattern(serviceUrl) {
+  try {
+    const url = new URL(String(serviceUrl || "").trim());
+    if (!/^https?:$/.test(url.protocol)) return "";
+    return `${url.protocol}//${url.hostname}/*`;
+  } catch {
+    return "";
+  }
+}
+
+function safeOrigin(serviceUrl) {
+  try {
+    return new URL(String(serviceUrl || "")).origin;
+  } catch {
+    return "";
+  }
 }
 
 function buildHeaders(apiKey) {

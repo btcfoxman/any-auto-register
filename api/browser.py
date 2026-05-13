@@ -206,6 +206,22 @@ def claim_browser_assist(body: BrowserAssistClaimRequest):
     return {"request": request, "poll_after_ms": 5000 if not request else 2000}
 
 
+@router.get("/assist/claim")
+def claim_browser_assist_get(
+    extension_id: str = "",
+    platform: str = "lingya_qq",
+    proxy_url: str = "",
+    current_url: str = "",
+):
+    request = browser_assist_registry.claim(
+        platform=platform,
+        proxy_url=proxy_url,
+        extension_id=extension_id,
+        current_url=current_url,
+    )
+    return {"request": request, "poll_after_ms": 5000 if not request else 2000}
+
+
 @router.post("/assist/{assist_id}/state")
 def update_browser_assist_state(assist_id: str, body: BrowserAssistStateRequest):
     request = browser_assist_registry.update_state(

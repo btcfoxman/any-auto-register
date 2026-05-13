@@ -22,10 +22,15 @@
     "https://tencent.com/*",
     "https://*.tencent.com/*",
     "http://192.168.3.3/*",
+    "http://192.168.3.5/*",
     "http://127.0.0.1/*",
     "http://localhost/*",
     "https://127.0.0.1/*",
     "https://localhost/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "action": {
     "default_popup": "popup.html",

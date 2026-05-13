@@ -47,6 +47,7 @@ from api.auth import router as auth_router
 from api.browser import router as browser_router
 from api.config import router as config_router
 from core.auth import AuthMiddleware
+from core.cors import PrivateNetworkAccessMiddleware
 from api.health import router as health_router
 from api.lifecycle import router as lifecycle_router
 from api.platform_capabilities import router as platform_capabilities_router
@@ -105,6 +106,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PrivateNetworkAccessMiddleware)
 
 app.include_router(accounts_router, prefix="/api")
 app.include_router(account_checks_router, prefix="/api")
