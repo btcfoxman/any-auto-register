@@ -74,6 +74,23 @@ def test_browser_assist_claim_normalizes_proxy():
     assert normalize_proxy_url(claimed["proxy_url"]) == "http://127.0.0.1"
 
 
+def test_browser_assist_claim_does_not_replay_handled_request():
+    registry = BrowserAssistRegistry()
+    request = registry.publish_lingya_phone_login(
+        task_id="task_1",
+        phone="+8613800138000",
+        local_phone="13800138000",
+        area_code="+86",
+        proxy_url="",
+    )
+
+    claimed = registry.claim(platform="lingya_qq", proxy_url="", extension_id="ext_1")
+    registry.update_state(request["assist_id"], extension_id="ext_1", state="filled")
+
+    assert claimed is not None
+    assert registry.claim(platform="lingya_qq", proxy_url="", extension_id="ext_1") is None
+
+
 def test_browser_assist_api_claim_and_state_writes_task_event(client):
     browser_assist_registry.clear_for_tests()
     task = create_register_task({"platform": "lingya_qq", "count": 1})

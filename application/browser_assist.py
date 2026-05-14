@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 LINGYA_ASSIST_KIND = "lingya_phone_login"
 LINGYA_ASSIST_PAGE_URL = "https://lingya.qq.com/"
 ACTIVE_ASSIST_STATUSES = {"pending", "claimed", "opened", "visible", "filled"}
+RESUMABLE_ASSIST_STATUSES = {"claimed"}
 TERMINAL_ASSIST_STATUSES = {"failed", "expired", "cancelled"}
 
 
@@ -195,7 +196,7 @@ class BrowserAssistRegistry:
                 continue
             if request.claimed_by != extension_id:
                 continue
-            if request.status in TERMINAL_ASSIST_STATUSES:
+            if request.status not in RESUMABLE_ASSIST_STATUSES:
                 continue
             return request
         return None

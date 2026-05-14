@@ -1,6 +1,9 @@
 (() => {
   const PANEL_ID = "any-auto-register-lingya-assist";
   const STYLE_ID = "any-auto-register-lingya-assist-style";
+  const ATTENTION_CLASS = "aar-attention";
+  let attentionTimer = null;
+  let stopListenersInstalled = false;
 
   if (window.__anyAutoRegisterLingyaAssistLoaded) return;
   window.__anyAutoRegisterLingyaAssistLoaded = true;
@@ -38,6 +41,7 @@
     }
 
     renderPanel({
+      assistId: request.assist_id || request.task_id || displayPhone,
       displayPhone,
       fillPhone: phone || "-",
       proxy,
@@ -66,13 +70,15 @@
     }
   }
 
-  function renderPanel({ displayPhone, fillPhone, proxy, taskId, filled, error }) {
+  function renderPanel({ assistId, displayPhone, fillPhone, proxy, taskId, filled, error }) {
     let panel = document.getElementById(PANEL_ID);
     if (!panel) {
       panel = document.createElement("aside");
       panel.id = PANEL_ID;
       document.documentElement.appendChild(panel);
     }
+    const previousAssistId = panel.dataset.assistId || "";
+    panel.dataset.assistId = String(assistId || "");
     panel.innerHTML = `
       <div class="aar-pulse"></div>
       <div class="aar-head">
@@ -87,6 +93,39 @@
       </dl>
       ${error ? `<p>${escapeHtml(error)}</p>` : ""}
     `;
+    if (previousAssistId !== panel.dataset.assistId) {
+      startAttention(panel);
+    } else {
+      stopAttention(panel);
+    }
+  }
+
+  function startAttention(panel) {
+    installStopListeners();
+    stopAttention(panel);
+    panel.classList.add(ATTENTION_CLASS);
+    attentionTimer = window.setTimeout(() => stopAttention(panel), 3800);
+  }
+
+  function stopAttention(panel = document.getElementById(PANEL_ID)) {
+    if (attentionTimer) {
+      window.clearTimeout(attentionTimer);
+      attentionTimer = null;
+    }
+    if (panel) {
+      panel.classList.remove(ATTENTION_CLASS);
+    }
+  }
+
+  function installStopListeners() {
+    if (stopListenersInstalled) return;
+    stopListenersInstalled = true;
+    window.addEventListener("focus", () => stopAttention(), true);
+    document.addEventListener("pointerdown", () => stopAttention(), true);
+    document.addEventListener("keydown", () => stopAttention(), true);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) stopAttention();
+    }, true);
   }
 
   function ensureStyle() {
@@ -113,7 +152,9 @@
         height: 3px;
         background: linear-gradient(90deg, #5bffc6, #ffcf5a, #5bffc6);
         background-size: 220% 100%;
-        animation: aar-scan 1.1s linear infinite;
+      }
+      #${PANEL_ID}.${ATTENTION_CLASS} .aar-pulse {
+        animation: aar-scan 1.1s linear 3;
       }
       #${PANEL_ID} .aar-head {
         display: grid;

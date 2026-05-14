@@ -50,15 +50,14 @@ const SYNC_COOKIE_NAMES = new Set([
 ]);
 
 const DEFAULTS = {
-  serviceUrl: "http://192.168.3.5:8000",
+  serviceUrl: "https://any-register.aiid.edu.kg",
   apiKey: "",
   accountName: "",
-  proxyUrl: "",
+  proxyUrl: "socks5://xray:20003",
   maxConcurrency: 1
 };
 const LEGACY_DEFAULT_SERVICE_URLS = new Set([
-  "http://127.0.0.1:8787",
-  "http://192.168.3.3:8787"
+  "http://192.168.3.5:8000"
 ]);
 const LEGACY_DEFAULT_API_KEYS = new Set(["sk-test-api-key"]);
 
@@ -72,13 +71,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const saved = await storageGet(DEFAULTS);
   const serviceUrl = defaultServiceUrl(saved.serviceUrl);
   const apiKey = defaultApiKey(saved.apiKey);
+  const proxyUrl = defaultProxyUrl(saved.proxyUrl);
   $("serviceUrl").value = serviceUrl;
   $("apiKey").value = apiKey;
   $("accountName").value = saved.accountName || "";
-  $("proxyUrl").value = saved.proxyUrl || "";
+  $("proxyUrl").value = proxyUrl;
   $("maxConcurrency").value = saved.maxConcurrency || 1;
-  if (saved.serviceUrl !== serviceUrl || saved.apiKey !== apiKey) {
-    await storageSet({ serviceUrl, apiKey });
+  if (saved.serviceUrl !== serviceUrl || saved.apiKey !== apiKey || saved.proxyUrl !== proxyUrl) {
+    await storageSet({ serviceUrl, apiKey, proxyUrl });
   }
 
   $("importButton").addEventListener("click", importCookies);
@@ -112,6 +112,11 @@ function defaultServiceUrl(value) {
 function defaultApiKey(value) {
   const apiKey = String(value || "").trim();
   return LEGACY_DEFAULT_API_KEYS.has(apiKey) ? "" : apiKey;
+}
+
+function defaultProxyUrl(value) {
+  const proxyUrl = String(value || "").trim();
+  return proxyUrl || DEFAULTS.proxyUrl;
 }
 
 async function importCookies() {

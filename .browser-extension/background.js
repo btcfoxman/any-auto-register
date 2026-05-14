@@ -1,22 +1,21 @@
 const ASSIST_DEFAULTS = {
-  serviceUrl: "http://192.168.3.5:8000",
+  serviceUrl: "https://any-register.aiid.edu.kg",
   apiKey: "",
-  proxyUrl: "",
+  proxyUrl: "socks5://xray:20003",
   extensionId: "",
   assistLastStatus: "Task assistant idle."
 };
 
 const ASSIST_LEGACY_SERVICE_URLS = new Set([
-  "http://127.0.0.1:8787",
-  "http://192.168.3.3:8787"
+  "http://192.168.3.5:8000"
 ]);
 const ASSIST_LEGACY_API_KEYS = new Set(["sk-test-api-key"]);
 const POLL_IDLE_MS = 5000;
-const POLL_ACTIVE_MS = 2000;
+const HANDLED_ASSIST_STORAGE_KEY = "handledAssistIds";
+const HANDLED_ASSIST_TTL_MS = 10 * 60 * 1000;
 
 let pollTimer = null;
 let polling = false;
-let managedProxyKey = "";
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureExtensionId();
@@ -67,6 +66,7 @@ async function pollAssistOnce() {
     const settings = await storageGet(ASSIST_DEFAULTS);
     settings.serviceUrl = defaultServiceUrl(settings.serviceUrl);
     settings.apiKey = defaultApiKey(settings.apiKey);
+    settings.proxyUrl = defaultProxyUrl(settings.proxyUrl);
     serviceUrl = settings.serviceUrl;
     if (!settings.serviceUrl) {
       await setAssistStatus("Task assistant needs a Service URL.");
@@ -87,7 +87,6 @@ async function pollAssistOnce() {
       proxy_url: String(settings.proxyUrl || "").trim(),
       current_url: activeTab && activeTab.url ? activeTab.url : ""
     };
-    await applyManagedProxy(settings);
     const response = await fetchClaim(settings, payload);
     const data = await readJsonOrText(response);
     if (!response.ok) {
@@ -102,9 +101,17 @@ async function pollAssistOnce() {
       scheduleAssistPoll(Number(data && data.poll_after_ms) || POLL_IDLE_MS);
       return;
     }
+    if (await wasAssistHandled(request.assist_id)) {
+      await setAssistStatus(`Task assistant already displayed ${request.phone || request.local_phone || "-"}.`, "ok");
+      scheduleAssistPoll(Number(data && data.poll_after_ms) || POLL_IDLE_MS);
+      return;
+    }
     await setAssistStatus(`Claimed ${request.phone || request.local_phone || "-"} for Lingya.`, "ok");
-    await handleAssistRequest(settings, extensionId, request);
-    scheduleAssistPoll(POLL_ACTIVE_MS);
+    const handled = await handleAssistRequest(settings, extensionId, request);
+    if (handled) {
+      await rememberAssistHandled(request.assist_id);
+    }
+    scheduleAssistPoll(POLL_IDLE_MS);
   } catch (error) {
     await setAssistStatus(`Task assistant error: ${fetchErrorMessage(error, serviceUrl)}`, "bad");
     scheduleAssistPoll(POLL_IDLE_MS);
@@ -131,92 +138,6 @@ function fetchClaim(settings, payload) {
   return fetch(apiUrl(settings.serviceUrl, `/api/browser/assist/claim?${params.toString()}`), options);
 }
 
-async function applyManagedProxy(settings) {
-  if (!chrome.proxy || !chrome.proxy.settings) return;
-
-  const proxyUrl = String(settings.proxyUrl || "").trim();
-  if (!proxyUrl) {
-    if (managedProxyKey) {
-      await clearProxySettings();
-      managedProxyKey = "";
-    }
-    return;
-  }
-
-  const singleProxy = parseProxyServer(proxyUrl);
-  if (!singleProxy) return;
-
-  const bypassList = proxyBypassList(settings.serviceUrl);
-  const value = {
-    mode: "fixed_servers",
-    rules: {
-      singleProxy,
-      bypassList
-    }
-  };
-  const key = JSON.stringify(value);
-  if (key === managedProxyKey) return;
-  await setProxySettings(value);
-  managedProxyKey = key;
-}
-
-function parseProxyServer(value) {
-  let text = String(value || "").trim();
-  if (!text) return null;
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
-    text = `http://${text}`;
-  }
-  try {
-    const url = new URL(text);
-    const rawScheme = url.protocol.replace(":", "").toLowerCase();
-    const scheme = rawScheme === "socks" ? "socks5" : rawScheme;
-    if (!["http", "https", "socks4", "socks5"].includes(scheme)) return null;
-    const defaultPort = scheme === "https" ? 443 : scheme.startsWith("socks") ? 1080 : 80;
-    const port = Number(url.port || defaultPort);
-    if (!url.hostname || !Number.isInteger(port) || port <= 0) return null;
-    return { scheme, host: url.hostname, port };
-  } catch {
-    return null;
-  }
-}
-
-function proxyBypassList(serviceUrl) {
-  const hosts = ["localhost", "127.0.0.1", "::1", "<local>"];
-  try {
-    const host = new URL(String(serviceUrl || "")).hostname;
-    if (host) {
-      hosts.push(host);
-      const parts = host.split(".");
-      if (parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part))) {
-        hosts.push(`${parts[0]}.${parts[1]}.${parts[2]}.*`);
-      }
-    }
-  } catch {
-    // Ignore invalid service URLs; fetch will report the real error.
-  }
-  return [...new Set(hosts)];
-}
-
-function setProxySettings(value) {
-  return new Promise((resolve, reject) => {
-    chrome.proxy.settings.set({ value, scope: "regular" }, () => {
-      const error = chrome.runtime.lastError;
-      if (error) reject(new Error(error.message || String(error)));
-      else resolve();
-    });
-  });
-}
-
-function clearProxySettings() {
-  return new Promise((resolve, reject) => {
-    chrome.proxy.settings.clear({ scope: "regular" }, () => {
-      const error = chrome.runtime.lastError;
-      if (error) reject(new Error(error.message || String(error)));
-      else resolve();
-    });
-  });
-}
-
 async function handleAssistRequest(settings, extensionId, request) {
   try {
     const tab = await ensureLingyaTab(request.page_url || "https://lingya.qq.com/");
@@ -225,9 +146,11 @@ async function handleAssistRequest(settings, extensionId, request) {
     await reportAssistState(settings, extensionId, request.assist_id, result.filled ? "filled" : "visible", result);
     const label = result.filled ? "Filled" : "Displayed";
     await setAssistStatus(`${label} ${request.local_phone || request.phone || "-"} on lingya.qq.com.`, "ok");
+    return true;
   } catch (error) {
     await reportAssistState(settings, extensionId, request.assist_id, "failed", { error: error.message || String(error) });
     await setAssistStatus(`Lingya assist failed: ${error.message || String(error)}`, "bad");
+    return false;
   }
 }
 
@@ -238,7 +161,10 @@ async function ensureLingyaTab(pageUrl) {
     const update = isLingyaUrl(tab.url || "") ? { active: true } : { active: true, url: pageUrl };
     await chrome.tabs.update(tab.id, update);
     if (tab.windowId !== undefined) {
-      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
+      const win = await chrome.windows.get(tab.windowId).catch(() => null);
+      if (!win || !win.focused) {
+        await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
+      }
     }
     return waitForTabReady(tab.id);
   }
@@ -317,6 +243,43 @@ function defaultServiceUrl(value) {
 function defaultApiKey(value) {
   const apiKey = String(value || "").trim();
   return ASSIST_LEGACY_API_KEYS.has(apiKey) ? "" : apiKey;
+}
+
+function defaultProxyUrl(value) {
+  const proxyUrl = String(value || "").trim();
+  return proxyUrl || ASSIST_DEFAULTS.proxyUrl;
+}
+
+async function wasAssistHandled(assistId) {
+  const id = String(assistId || "").trim();
+  if (!id) return false;
+  const map = await handledAssistMap();
+  return Boolean(map[id]);
+}
+
+async function rememberAssistHandled(assistId) {
+  const id = String(assistId || "").trim();
+  if (!id) return;
+  const map = await handledAssistMap();
+  map[id] = Date.now();
+  await storageSet({ [HANDLED_ASSIST_STORAGE_KEY]: pruneHandledAssistMap(map) });
+}
+
+async function handledAssistMap() {
+  const data = await storageGet({ [HANDLED_ASSIST_STORAGE_KEY]: {} });
+  return pruneHandledAssistMap(data[HANDLED_ASSIST_STORAGE_KEY] || {});
+}
+
+function pruneHandledAssistMap(value) {
+  const now = Date.now();
+  const clean = {};
+  for (const [id, timestamp] of Object.entries(value || {})) {
+    const time = Number(timestamp || 0);
+    if (id && time > 0 && now - time <= HANDLED_ASSIST_TTL_MS) {
+      clean[id] = time;
+    }
+  }
+  return clean;
 }
 
 async function serviceAccessStatus(serviceUrl) {

@@ -7,7 +7,6 @@
     "activeTab",
     "alarms",
     "cookies",
-    "proxy",
     "scripting",
     "storage",
     "tabs"
@@ -22,7 +21,7 @@
     "https://*.qq.com/*",
     "https://tencent.com/*",
     "https://*.tencent.com/*",
-    "http://192.168.3.3/*",
+    "https://any-register.aiid.edu.kg/*",
     "http://192.168.3.5/*",
     "http://127.0.0.1/*",
     "http://localhost/*",

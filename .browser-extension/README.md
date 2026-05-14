@@ -13,14 +13,14 @@ This is a local Chrome/Edge Manifest V3 extension for importing the current Ling
 
 1. Sign in at `https://lingya.qq.com/` in the same browser profile.
 2. Open the extension popup.
-3. Set `Service URL`, default `http://192.168.3.5:8000`; for another device on the same LAN, use `http://<LAN-IP>:8000`.
+3. Set `Service URL`, default `https://any-register.aiid.edu.kg`; for another device on the same LAN, use `http://<LAN-IP>:8000`.
 4. Leave `API Key / APP_PASSWORD` blank unless the backend was started with `APP_PASSWORD=...`; if it was, enter that exact value.
 5. Click `Grant Access` if the popup shows that service access is required, then reload the extension after manifest changes.
-6. Optionally set `Proxy URL`, for example `http://user:pwd@127.0.0.1:10809`.
+6. Set `Proxy URL` if this browser profile should claim only tasks using the same proxy. The default is `socks5://xray:20003`.
 7. Keep the extension loaded. The background task assistant polls the service and will claim Lingya registration tasks whose proxy matches this `Proxy URL`; two empty proxy values also match.
 8. Click `Import Lingya Account` only when you want to import an already signed-in Lingya browser account into this project.
 
-The task assistant sends `POST /api/browser/assist/claim` and reports state to `POST /api/browser/assist/{assist_id}/state`. If `API Key / APP_PASSWORD` is filled, it uses `Authorization: Bearer <value>` and also sends `X-API-Key` for compatibility.
+The task assistant sends `GET /api/browser/assist/claim` and reports state to `POST /api/browser/assist/{assist_id}/state`. If `API Key / APP_PASSWORD` is filled, it uses `Authorization: Bearer <value>` and also sends `X-API-Key` for compatibility.
 When a matching task is claimed, the extension opens or focuses `https://lingya.qq.com/`, shows a flashing top-right panel with phone/proxy/task details, and fills the phone input. It does not click the SMS send button or solve the graphic CAPTCHA.
 
 The cookie importer sends `POST /api/browser/import-account`; when `API Key / APP_PASSWORD` is filled it includes `Authorization: Bearer <value>` and `X-API-Key`.
@@ -35,5 +35,5 @@ Scanning uses URL queries, domain queries, and an `all-accessible` cookie-store 
 
 When the active tab is `lingya.qq.com`, the popup also injects a short script to read `document.cookie`. This is the most reliable fallback for the non-HttpOnly `.lingya.qq.com` cookies shown in DevTools.
 
-The default `http://192.168.3.5:8000` origin is listed in `host_permissions`. For other LAN hosts, the popup can grant the origin through `optional_host_permissions`; reload the extension if you edited `manifest.json`.
-If BitBrowser is configured with a profile proxy, requests from the extension background may also go through that proxy. A remote proxy usually cannot reach your private LAN address such as `192.168.3.5`, which can surface as `ERR_EMPTY_RESPONSE`. In that case either use `http://127.0.0.1:8000` / `http://localhost:8000` when the service runs on the same machine, or add `127.0.0.1`, `localhost`, `192.168.3.5`, and your LAN subnet to the profile proxy bypass list.
+The default `https://any-register.aiid.edu.kg` origin is listed in `host_permissions`. For other LAN hosts, the popup can grant the origin through `optional_host_permissions`; reload the extension if you edited `manifest.json`.
+`Proxy URL` is only sent to the service for task matching and account import metadata. The extension does not configure Chrome or BitBrowser proxy settings.
