@@ -490,7 +490,7 @@ def _auto_sync_lingya2api(task_logger: TaskLogger, account) -> None:
 
         result = sync_account_to_lingya2api(account, log_fn=task_logger.log)
         if result:
-            task_logger.log("  [Lingya2API] LingYaQQ account synced after registration")
+            task_logger.log("  [Lingya2API] LingYaQQ account synced")
         else:
             task_logger.log("  [Lingya2API] auto sync skipped or failed; check lingya2api_url/API key and previous warning logs", level="warning")
     except Exception as exc:
@@ -682,6 +682,8 @@ def _run_auto_followup_lingya_qq_rewards(
             _merge_lingya_followup_data(account, dict(result.get("data") or {}))
             save_account(account)
             logger.log("  [LingYaQQ] 发布完成并已刷新额度")
+            logger.log("  [Lingya2API] 发布完成后再次同步 LingYaQQ 账号")
+            _auto_sync_lingya2api(logger, account)
         else:
             message = str(result.get("error") or "LingYaQQ 发布失败")
             if publish_required:

@@ -104,3 +104,48 @@ def test_lingya_followup_skips_daily_sign_when_disabled():
 
     assert calls == []
     assert any("签到功能已关闭" in message for message, _ in logger.entries)
+
+
+def test_lingya_followup_syncs_lingya2api_after_publish_success(monkeypatch):
+    saved_accounts = []
+    synced_accounts = []
+    logger = _Logger()
+    account = SimpleNamespace(platform="lingya_qq", email="user@example.com", extra={})
+
+    def fake_execute_action(action_id, action_account, params):
+        assert action_id == "publish_work"
+        assert action_account is account
+        return {
+            "ok": True,
+            "data": {
+                "last_publish_status": "released",
+                "last_publish_vid": "vid123",
+                "quota_balance": 9,
+                "quota_sum": 10,
+                "lingya_qq_publish_source_url": "https://example.com/work",
+            },
+        }
+
+    monkeypatch.setattr(tasks, "save_account", lambda item: saved_accounts.append(item))
+    monkeypatch.setattr(tasks, "_auto_sync_lingya2api", lambda _logger, item: synced_accounts.append(item))
+
+    tasks._run_auto_followup_lingya_qq_rewards(
+        platform_name="lingya_qq",
+        payload={
+            "extra": {
+                "lingya_qq_auto_daily_sign_in": "false",
+                "lingya_qq_auto_publish_after_register": "true",
+                "lingya_qq_publish_source_url": "https://example.com/work",
+            }
+        },
+        platform=SimpleNamespace(execute_action=fake_execute_action),
+        account=account,
+        logger=logger,
+    )
+
+    assert saved_accounts == [account]
+    assert synced_accounts == [account]
+    assert account.extra["last_publish_status"] == "released"
+    assert account.extra["account_overview"]["last_publish_vid"] == "vid123"
+    assert account.extra["account_overview"]["quota_balance"] == 9
+    assert any("发布完成后再次同步" in message for message, _ in logger.entries)
