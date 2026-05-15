@@ -99,6 +99,8 @@ def test_publish_asset_reads_intro_and_prompt_aliases(monkeypatch):
                 "title": "title",
                 "intro": "intro text",
                 "highlight_prompt": "scene prompt",
+                "creation_process_text": "api creation process",
+                "tag_infos": [{"id": "tag_2QCVIf1DjL", "title": "玄幻", "alias": ""}],
                 "video_base64": _b64(b"video"),
                 "cover_base64": _b64(b"cover"),
             }
@@ -110,6 +112,40 @@ def test_publish_asset_reads_intro_and_prompt_aliases(monkeypatch):
 
     assert asset.description == "intro text"
     assert asset.prompt == "scene prompt"
+    assert asset.creation_process_text == "api creation process"
+    assert asset.tag_infos == [{"id": "tag_2QCVIf1DjL", "title": "玄幻", "alias": ""}]
+
+
+def test_publish_asset_json_source_ignores_content_defaults(monkeypatch):
+    def fake_get(url, timeout=5, proxies=None):
+        return FakeResponse(
+            {
+                "title": "api title",
+                "video_base64": _b64(b"video"),
+                "cover_base64": _b64(b"cover"),
+            }
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+
+    asset = fetch_lingya_qq_publish_asset(
+        "https://source.example/work",
+        defaults={
+            "description": "default intro",
+            "prompt": "default prompt",
+            "duration": 99,
+            "cover_ratio": 0.5,
+            "tag_infos": [{"id": "tag_default", "title": "default"}],
+            "creation_process_text": "configured creation process",
+        },
+    )
+
+    assert asset.description == ""
+    assert asset.prompt == "api title"
+    assert asset.duration == 10
+    assert asset.cover_ratio == 0.75
+    assert asset.tag_infos == []
+    assert asset.creation_process_text == "Seedance 2.0 全能参考"
 
 
 def test_publish_asset_calculates_cover_ratio_from_cover_image(monkeypatch):

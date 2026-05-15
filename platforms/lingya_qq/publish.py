@@ -7,7 +7,7 @@ import mimetypes
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -41,6 +41,8 @@ COVER_URL_KEYS = (
     "thumbnailUrl",
 )
 COVER_LIST_KEYS = ("cover_urls", "coverUrls", "images")
+DEFAULT_CREATION_PROCESS_TEXT = "Seedance 2.0 全能参考"
+LEGACY_CREATION_PROCESS_TEXTS = {"sora2 tool", "sora 2 tool", "seedance 2.0 tool"}
 
 
 @dataclass
@@ -56,6 +58,8 @@ class LingYaQQPublishAsset:
     cover_content_type: str
     duration: int
     cover_ratio: float = 0.75
+    tag_infos: list[dict[str, Any]] = field(default_factory=list)
+    creation_process_text: str = DEFAULT_CREATION_PROCESS_TEXT
 
 
 def _proxy_map(proxy: str | None) -> dict[str, str] | None:
@@ -289,6 +293,64 @@ def _prompt_from_payload(payload: Any, defaults: dict[str, Any], *, title: str =
     return prompt[:1200]
 
 
+def _creation_process_text_from_payload(payload: Any, defaults: dict[str, Any]) -> str:
+    value = _pick(
+        payload,
+        (
+            "creation_process_text",
+            "creationProcessText",
+            "creation_process",
+            "creationProcess",
+            "process_text",
+            "processText",
+        ),
+    )
+    text = str(
+        value
+        or defaults.get("creation_process_text")
+        or defaults.get("creationProcessText")
+        or defaults.get("creation_process")
+        or defaults.get("creationProcess")
+        or DEFAULT_CREATION_PROCESS_TEXT
+    ).strip()
+    if not text or text.lower() in LEGACY_CREATION_PROCESS_TEXTS:
+        return DEFAULT_CREATION_PROCESS_TEXT
+    return text
+
+
+def _tag_infos_from_value(value: Any) -> list[dict[str, str]]:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            value = json.loads(text)
+        except Exception:
+            return []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    tags: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("tag_info") if isinstance(item.get("tag_info"), dict) else item
+        tag_id = str(source.get("id") or "").strip()
+        title = str(source.get("title") or "").strip()
+        if not tag_id or not title:
+            continue
+        tags.append({"id": tag_id, "title": title, "alias": str(source.get("alias") or "").strip()})
+    return tags
+
+
+def _tag_infos_from_payload(payload: Any, defaults: dict[str, Any]) -> list[dict[str, str]]:
+    return (
+        _tag_infos_from_value(_pick(payload, ("tag_infos", "tagInfos", "tags", "tag_info", "tagInfo")))
+        or _tag_infos_from_value(defaults.get("tag_infos") or defaults.get("tagInfos") or defaults.get("tags"))
+    )
+
+
 def fetch_lingya_qq_publish_asset(
     source_url: str,
     *,
@@ -337,6 +399,8 @@ def fetch_lingya_qq_publish_asset(
             cover_content_type=cover_type or "image/jpeg",
             duration=_to_int(defaults.get("duration"), 10),
             cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, _to_float(defaults.get("cover_ratio"), 0.75)),
+            tag_infos=_tag_infos_from_payload({}, defaults),
+            creation_process_text=_creation_process_text_from_payload({}, defaults),
         )
 
     video_base64 = _pick(payload, ("video_base64", "videoBase64", "video_data", "videoData"))
@@ -357,9 +421,7 @@ def fetch_lingya_qq_publish_asset(
     cover_content_type = ""
     cover_filename = str(_pick(payload, ("cover_filename", "coverFilename")) or "").strip()
     if not cover_bytes:
-        cover_url = _pick_media_url(payload, COVER_URL_KEYS, COVER_LIST_KEYS) or str(
-            defaults.get("cover_url") or defaults.get("coverUrl") or ""
-        ).strip()
+        cover_url = _pick_media_url(payload, COVER_URL_KEYS, COVER_LIST_KEYS)
         if not cover_url:
             raise RuntimeError("LingYaQQ publish source did not provide cover_url/cover_base64")
         cover_bytes, downloaded_cover_name, cover_content_type = _download_bytes(cover_url, timeout=timeout, proxy=proxy, retries=retries)
@@ -367,19 +429,21 @@ def fetch_lingya_qq_publish_asset(
     if not cover_filename:
         cover_filename = "cover.jpg"
 
-    title = _title_from_payload(payload, defaults)
-    description = str(_pick(payload, ("description", "intro", "desc", "summary")) or defaults.get("description") or defaults.get("intro") or "")
-    fallback_cover_ratio = _to_float(_pick(payload, ("cover_ratio", "coverRatio")), _to_float(defaults.get("cover_ratio"), 0.75))
+    title = _title_from_payload(payload, {})
+    description = str(_pick(payload, ("description", "intro", "desc", "summary")) or "")
+    fallback_cover_ratio = _to_float(_pick(payload, ("cover_ratio", "coverRatio")), 0.75)
     return LingYaQQPublishAsset(
         title=title,
         description=description,
-        prompt=_prompt_from_payload(payload, defaults, title=title, description=description),
+        prompt=_prompt_from_payload(payload, {}, title=title, description=description),
         video_bytes=video_bytes,
         video_filename=video_filename,
         video_content_type=video_content_type or "video/mp4",
         cover_bytes=cover_bytes,
         cover_filename=cover_filename,
         cover_content_type=cover_content_type or "image/jpeg",
-        duration=max(_to_int(_pick(payload, ("duration", "duration_seconds", "durationSeconds")), _to_int(defaults.get("duration"), 10)), 1),
+        duration=max(_to_int(_pick(payload, ("duration", "duration_seconds", "durationSeconds")), 10), 1),
         cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, fallback_cover_ratio),
+        tag_infos=_tag_infos_from_payload(payload, {}),
+        creation_process_text=_creation_process_text_from_payload(payload, {}),
     )

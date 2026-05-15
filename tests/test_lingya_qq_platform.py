@@ -45,8 +45,9 @@ def test_lingya_qq_exposes_relogin_sms_action():
         "source_timeout",
         "source_retries",
         "upload_service_id",
-        "prompt",
         "creation_process_text",
+        "credit_timeout",
+        "credit_poll_interval",
         "initial_delay",
         "poll_interval",
         "timeout",
@@ -1178,12 +1179,21 @@ def test_lingya_qq_sign_in_endpoints_match_observed_flow():
     client.session.post = fake_post
     client.get_credits_panel(False)
     client.credits_panel_sign_in()
+    client.check_first_post_credit()
+    client.check_credits_first_register()
+    client.get_user_events()
 
     assert calls[0][0].endswith("/trpc.caotai.task_adapter.TaskAdapter/GetCreditsPanel")
     assert calls[0][1]["json"] == {"is_first_register": False}
     assert calls[1][0].endswith("/trpc.caotai.task_adapter.TaskAdapter/CreditsPanelSignIn")
     assert "json" not in calls[1][1]
     assert "Content-Type" not in calls[1][1]["headers"]
+    assert calls[2][0].endswith("/trpc.caotai.task_adapter.TaskAdapter/CheckFirstPostCredit")
+    assert calls[2][1]["json"] == {}
+    assert calls[3][0].endswith("/trpc.caotai.task_adapter.TaskAdapter/CheckCreditsFirstRegister")
+    assert "json" not in calls[3][1]
+    assert calls[4][0].endswith("/trpc.caotai.account.UserEventService/GetUserEvents")
+    assert "json" not in calls[4][1]
 
 
 def test_lingya_qq_video_upload_uses_observed_service_id_and_sdk_headers(monkeypatch):
@@ -1251,6 +1261,26 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
         def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
             self.vdevice_guid = vdevice_guid
             events.append(("client_proxy", proxy))
+
+        def homepage(self):
+            events.append(("homepage",))
+            return {"home": {"pid": "project-1"}}
+
+        def refresh_session(self, *, main_login: str = "phone"):
+            events.append(("refresh_session", main_login))
+            return {"ret": 0, "data": {"rsp": {"refresh_response": {"vusession": "session-refresh"}}}}
+
+        def ack_project(self, project_id: str):
+            events.append(("ack", project_id))
+            return {}
+
+        def get_user_events(self):
+            events.append(("user_events",))
+            return {"ret": 0, "data": {"total": 0, "events": []}}
+
+        def check_first_post_credit(self):
+            events.append(("first_post_credit",))
+            return {"ret": 0, "data": {"is_granted": False, "text": "first post credit"}}
 
         def upload_image_bytes(self, image_bytes, *, filename="cover.jpg", content_type=None):
             events.append(("cover", filename, content_type, image_bytes))
@@ -1322,6 +1352,8 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             cover_content_type="image/jpeg",
             duration=99,
             cover_ratio=0.75,
+            tag_infos=[{"id": "tag_2QCVIf1DjL", "title": "玄幻", "alias": ""}],
+            creation_process_text="asset creation process",
         )
 
     monkeypatch.setattr("platforms.lingya_qq.plugin.fetch_lingya_qq_publish_asset", fake_fetch_asset)
@@ -1375,6 +1407,15 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert fetch_calls[0][1]["timeout"] == 12
     assert fetch_calls[0][1]["retries"] == 4
     assert ("client_proxy", "http://account-proxy.example:8080") in events
+    assert events[:5] == [
+        ("client_proxy", "http://account-proxy.example:8080"),
+        ("homepage",),
+        ("refresh_session", "phone"),
+        ("ack", "project-1"),
+        ("user_events",),
+    ]
+    assert ("first_post_credit",) in events
+    assert events.count(("first_post_credit",)) == 1
     assert ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID) in events
     assert ("highlight_scene_list", "vid123") in events
     assert ("upload_work", 2, "vid123", "publish title") in events
@@ -1384,15 +1425,19 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert final_payload["base_info"]["duration"] == 16
     assert final_payload["creation_tools"][2]["tools"][0]["title"] == "Seedance 2.0"
     assert final_payload["creation_tools"][2]["tools"][0]["id"] == "tag_8Hy4Gy2MCZ"
-    assert final_payload["creation_processes"][0]["extra"] == '{"type":"text","data":{"text":"Seedance 2.0 Tool","pureText":true}}'
+    assert final_payload["related_info"]["tag_infos"] == [{"id": "tag_2QCVIf1DjL", "title": "玄幻", "alias": ""}]
+    assert final_payload["creation_processes"][0]["extra"] == '{"type":"text","data":{"text":"asset creation process","pureText":true}}'
     assert final_payload["highlight_scenes"][0]["prompt"] == "first scene prompt"
     assert final_payload["highlight_scenes"][0]["server_id"] == ""
     assert final_payload["highlight_scenes"][0]["cover"] == "https://filecdn.lumio.qq.com/image/cover.jpg"
     assert final_payload["highlight_scenes"][0]["video_segments"] == {"start_ms": 0, "end_ms": 1600}
-    assert "key_frame_images" not in final_payload["highlight_scenes"][0]
+    assert final_payload["highlight_scenes"][0]["key_frame_images"] == []
     assert final_payload["highlight_scenes"][0]["main_tool"][0]["id"] == "tag_8Hy4Gy2MCZ"
     assert final_payload["highlight_scenes"][0]["main_tool"][0]["title"] == "Seedance 2.0"
     assert final_payload["only_self_visible"] is False
+    assert data["last_publish_initial_first_post_credit_granted"] is False
+    assert data["last_publish_first_post_credit_granted"] is True
+    assert data["last_publish_first_post_credit_text"] == "first post credit"
 
 
 def test_lingya_qq_extracts_first_highlight_segment_from_scene_list():
@@ -1474,8 +1519,8 @@ def test_lingya_qq_publish_skips_when_remote_released_exists(monkeypatch):
 
         def get_my_work_list(self, *, filter_by_status=1, page=1, page_size=15):
             events.append(("work_list", filter_by_status))
-            if filter_by_status == 3:
-                return {"ret": 0, "data": {"work_list": [{"vid": "old_vid", "work_status": 1, "base_info": {"title": "old title"}}]}}
+            if filter_by_status == 1:
+                return {"ret": 0, "data": {"work_list": [{"vid": "old_vid", "work_status": 3, "base_info": {"title": "old title"}}]}}
             return {"ret": 0, "data": {"work_list": []}}
 
         def get_user_quota(self):
@@ -1505,7 +1550,7 @@ def test_lingya_qq_publish_skips_when_remote_released_exists(monkeypatch):
     assert result["data"]["last_publish_vid"] == "old_vid"
     assert result["data"]["last_publish_title"] == "old title"
     assert result["data"]["quota_balance"] == "88"
-    assert events == [("work_list", 3), ("quota",)]
+    assert events == [("work_list", 1), ("quota",)]
 
 
 def test_lingya_qq_publish_defaults_are_kept_in_account_overview():

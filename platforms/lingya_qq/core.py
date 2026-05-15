@@ -266,10 +266,29 @@ class LingYaQQClient:
     def homepage(self) -> dict[str, Any]:
         return self._post_pbaccess("/trpc.workstation.backend.Space/HomePage", {})
 
+    def ack_project(self, project_id: str) -> dict[str, Any]:
+        return self._post_pbaccess(
+            "/trpc.workstation.backend.Space/Ack",
+            {"project_id": str(project_id or "")},
+        )
+
+    def get_user_events(self) -> dict[str, Any]:
+        return self._post_pbaccess(
+            "/trpc.caotai.account.UserEventService/GetUserEvents",
+            None,
+            json_content=False,
+        )
+
     def get_credits_panel(self, is_first_register: bool = False) -> dict[str, Any]:
         return self._post_pbaccess(
             "/trpc.caotai.task_adapter.TaskAdapter/GetCreditsPanel",
             {"is_first_register": bool(is_first_register)},
+        )
+
+    def check_first_post_credit(self) -> dict[str, Any]:
+        return self._post_pbaccess(
+            "/trpc.caotai.task_adapter.TaskAdapter/CheckFirstPostCredit",
+            {},
         )
 
     def credits_panel_sign_in(self) -> dict[str, Any]:
@@ -280,8 +299,9 @@ class LingYaQQClient:
 
     def check_credits_first_register(self) -> dict[str, Any]:
         return self._post_pbaccess(
-            "/trpc.workstation.backend.TaskAdapter/CheckCreditsFirstRegister",
-            {},
+            "/trpc.caotai.task_adapter.TaskAdapter/CheckCreditsFirstRegister",
+            None,
+            json_content=False,
         )
 
     def get_video_upload_params(self, seq: str | None = None) -> dict[str, Any]:
@@ -328,6 +348,26 @@ class LingYaQQClient:
         url = str(data.get("url") or (data.get("data") or {}).get("url") or "").strip()
         if not url:
             raise RuntimeError(f"LingYaQQ image upload did not return url: {data}")
+        return url
+
+    def upload_image_data_url(self, data_url: str, *, filename: str = "cover.jpg") -> str:
+        response = self.session.post(
+            f"{FILEACCESS_BASE}/upload/image",
+            params={
+                "channel": "caotai_image",
+                "vversion_platform": VVERSION_PLATFORM,
+                "video_appid": VIDEO_APPID,
+            },
+            json={"base64": str(data_url or ""), "fileName": filename or "cover.jpg"},
+            headers=self._headers(json_content=True),
+            timeout=max(self.timeout, 60),
+        )
+        response.raise_for_status()
+        data = response.json()
+        _raise_for_ret(data, "LingYaQQ image data-url upload")
+        url = str(data.get("url") or (data.get("data") or {}).get("url") or "").strip()
+        if not url:
+            raise RuntimeError(f"LingYaQQ image data-url upload did not return url: {data}")
         return url
 
     def _post_video_json(

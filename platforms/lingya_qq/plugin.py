@@ -1,8 +1,11 @@
 ﻿from __future__ import annotations
 
+import base64
+import io
 import json
 import time
 from typing import Any
+import zipfile
 
 from core.base_platform import Account, AccountStatus, BasePlatform, RegisterConfig
 from core.base_sms import create_sms_provider
@@ -22,7 +25,7 @@ from platforms.lingya_qq.core import (
     normalize_area_code,
     normalize_lingya_phone,
 )
-from platforms.lingya_qq.publish import fetch_lingya_qq_publish_asset
+from platforms.lingya_qq.publish import DEFAULT_CREATION_PROCESS_TEXT, fetch_lingya_qq_publish_asset
 
 
 LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS = 300
@@ -33,8 +36,7 @@ DEFAULT_CREATION_TOOL = {
     "alias": "tag_8Hy4Gy2MCZ",
     "model_type": "video",
 }
-DEFAULT_CREATION_PROCESS_TEXT = "Seedance 2.0 Tool"
-LEGACY_CREATION_PROCESS_TEXTS = {"sora2 tool", "sora 2 tool"}
+LEGACY_CREATION_PROCESS_TEXTS = {"sora2 tool", "sora 2 tool", "seedance 2.0 tool"}
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -497,8 +499,9 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "source_timeout", "label": "内容接口超时秒数", "type": "number"},
                     {"key": "source_retries", "label": "内容接口重试次数", "type": "number"},
                     {"key": "upload_service_id", "label": "视频上传 serviceId", "type": "text"},
-                    {"key": "prompt", "label": "第一段分镜提示词", "type": "text"},
                     {"key": "creation_process_text", "label": "创作过程文本", "type": "text"},
+                    {"key": "credit_timeout", "label": "首发积分等待秒数", "type": "number"},
+                    {"key": "credit_poll_interval", "label": "首发积分轮询间隔秒数", "type": "number"},
                     {"key": "initial_delay", "label": "审核初始等待秒数", "type": "number"},
                     {"key": "poll_interval", "label": "审核轮询间隔秒数", "type": "number"},
                     {"key": "timeout", "label": "审核超时秒数", "type": "number"},
@@ -1009,6 +1012,28 @@ class LingYaQQPlatform(BasePlatform):
         end_ms = segments[-1]["end_ms"]
         return max(end_ms // 1000, 1)
 
+    def _highlight_frame_cover(self, payload: dict[str, Any], vid: str) -> tuple[bytes, str, str] | None:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        encoded = str(data.get("highlight_frames_file_data") or "").strip()
+        if not encoded:
+            return None
+        try:
+            raw = base64.b64decode(encoded)
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                for name in archive.namelist():
+                    lower = name.lower()
+                    if not lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        continue
+                    image_bytes = archive.read(name)
+                    if not image_bytes:
+                        continue
+                    suffix = lower.rsplit(".", 1)[-1]
+                    content_type = "image/jpeg" if suffix in {"jpg", "jpeg"} else f"image/{suffix}"
+                    return image_bytes, f"scene_{vid}_highlight_0_cover.{suffix}", content_type
+        except Exception as exc:
+            self.log(f"LingYaQQ publish: highlight frame cover decode skipped: {exc}")
+        return None
+
     def _work_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         if not isinstance(data, dict):
@@ -1053,12 +1078,12 @@ class LingYaQQPlatform(BasePlatform):
 
     def _published_work_status(self, work: dict[str, Any], *, filter_status: int = 0) -> int:
         status = _as_int(work.get("work_status"), 0)
-        if status == 1 or (filter_status == 3 and status == 0):
+        if status in {1, 3} or (filter_status == 3 and status == 0):
             return 1
         return status
 
     def _find_existing_published_work(self, client: LingYaQQClient) -> dict[str, Any]:
-        for filter_status in (3, 1):
+        for filter_status in (1, 4, 3):
             payload = client.get_my_work_list(filter_by_status=filter_status)
             for work in self._work_items(payload):
                 if self._published_work_status(work, filter_status=filter_status) == 1:
@@ -1071,6 +1096,61 @@ class LingYaQQPlatform(BasePlatform):
         except Exception as exc:
             self.log(f"LingYaQQ quota refresh skipped {context}: {exc}")
             return {}
+
+    def _quota_has_balance(self, quota: dict[str, Any]) -> bool:
+        return _as_int(quota.get("quota_balance"), 0) > 0 or _as_int(quota.get("quota_sum"), 0) > 0
+
+    def _prepare_first_post_credit_context(self, client: LingYaQQClient) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        project_id = ""
+        try:
+            home = client.homepage()
+            result["homepage"] = home
+            home_info = home.get("home") if isinstance(home.get("home"), dict) else {}
+            project_id = str(home_info.get("pid") or home.get("project_id") or "").strip()
+        except Exception as exc:
+            self.log(f"LingYaQQ publish: homepage before first post credit skipped: {exc}")
+        try:
+            result["refresh_session"] = client.refresh_session(main_login="phone")
+        except Exception as exc:
+            self.log(f"LingYaQQ publish: WebRefresh before first post credit skipped: {exc}")
+        if project_id:
+            try:
+                result["ack"] = client.ack_project(project_id)
+            except Exception as exc:
+                self.log(f"LingYaQQ publish: homepage ack before first post credit skipped: {exc}")
+        try:
+            result["user_events"] = client.get_user_events()
+        except Exception as exc:
+            self.log(f"LingYaQQ publish: user events before first post credit skipped: {exc}")
+        try:
+            result["first_post_credit"] = client.check_first_post_credit()
+        except Exception as exc:
+            self.log(f"LingYaQQ publish: first post credit check skipped: {exc}")
+        return result
+
+    def _wait_first_post_credit_quota(
+        self,
+        client: LingYaQQClient,
+        *,
+        timeout: int,
+        poll_interval: int,
+        cancel_check=None,
+    ) -> dict[str, Any]:
+        deadline = time.time() + max(timeout, 0)
+        last_quota: dict[str, Any] = {}
+        while True:
+            if callable(cancel_check) and cancel_check():
+                raise RuntimeError("LingYaQQ follow-up cancelled")
+            try:
+                last_quota = client.get_user_quota()
+                if self._quota_has_balance(last_quota):
+                    return last_quota
+            except Exception as exc:
+                self.log(f"LingYaQQ publish: quota refresh skipped while waiting first post credit: {exc}")
+            if time.time() >= deadline:
+                return last_quota
+            self._sleep_with_cancel(min(max(poll_interval, 1), max(0, deadline - time.time())), cancel_check)
 
     def _wait_publish_success(
         self,
@@ -1088,14 +1168,14 @@ class LingYaQQPlatform(BasePlatform):
         while True:
             if callable(cancel_check) and cancel_check():
                 raise RuntimeError("LingYaQQ follow-up cancelled")
-            for filter_status in (3, 1):
+            for filter_status in (1, 4, 3):
                 payload = client.get_my_work_list(filter_by_status=filter_status)
                 work = self._find_work_by_vid(payload, vid)
                 if not work:
                     continue
                 last_work = work
-                work_status = _as_int(work.get("work_status"), 0)
-                if work_status == 1 or (filter_status == 3 and work_status == 0):
+                work_status = self._published_work_status(work, filter_status=filter_status)
+                if work_status == 1:
                     return work
                 if work_status in {4, 5}:
                     raise RuntimeError(f"LingYaQQ published work did not pass audit: {work}")
@@ -1119,6 +1199,7 @@ class LingYaQQPlatform(BasePlatform):
         highlight_segment: dict[str, int] | None = None,
         creation_process_text: str = DEFAULT_CREATION_PROCESS_TEXT,
         creation_tool: dict[str, Any] | None = None,
+        tag_infos: list[dict[str, Any]] | None = None,
         background_color: str = "",
         title_color: str = "",
         ai_content_types: list[int] | None = None,
@@ -1146,6 +1227,7 @@ class LingYaQQPlatform(BasePlatform):
                         "start_ms": max(_as_int(segment.get("start_ms"), 0), 0),
                         "end_ms": _as_int(segment.get("end_ms"), 0),
                     },
+                    "key_frame_images": [],
                     "prompt": prompt,
                     "main_tool": [tool],
                     "extra_params": [],
@@ -1179,7 +1261,7 @@ class LingYaQQPlatform(BasePlatform):
                 "background_color": background_color,
                 "title_color": title_color,
             },
-            "related_info": {"tag_infos": [], "activity_infos": []},
+            "related_info": {"tag_infos": list(tag_infos or []), "activity_infos": []},
             "creation_tools": creation_tools,
             "highlight_scenes": highlight_scenes,
             "creation_processes": creation_processes,
@@ -1277,13 +1359,17 @@ class LingYaQQPlatform(BasePlatform):
             _first_value(params.get("timeout"), self._runtime_value(source, params, "lingya_qq_publish_timeout", 7200)),
             7200,
         )
+        credit_timeout = _as_int(
+            _first_value(params.get("credit_timeout"), self._runtime_value(source, params, "lingya_qq_publish_credit_timeout", 1800)),
+            1800,
+        )
+        credit_poll_interval = _as_int(
+            _first_value(params.get("credit_poll_interval"), self._runtime_value(source, params, "lingya_qq_publish_credit_poll_interval", 30)),
+            30,
+        )
         cancel_check = params.get("_cancel_check") if callable(params.get("_cancel_check")) else None
         defaults = {
             "cover_url": self._runtime_value(source, params, "lingya_qq_publish_cover_url", ""),
-            "title": self._runtime_value(source, params, "lingya_qq_publish_title", ""),
-            "description": self._runtime_value(source, params, "lingya_qq_publish_description", ""),
-            "intro": self._runtime_value(source, params, "lingya_qq_publish_intro", ""),
-            "prompt": _first_value(params.get("prompt"), self._runtime_value(source, params, "lingya_qq_publish_prompt", "")),
             "creation_process_text": _creation_process_text(
                 _first_value(
                     params.get("creation_process_text"),
@@ -1295,8 +1381,6 @@ class LingYaQQPlatform(BasePlatform):
                     ),
                 )
             ),
-            "duration": self._runtime_value(source, params, "lingya_qq_publish_duration", 10),
-            "cover_ratio": self._runtime_value(source, params, "lingya_qq_publish_cover_ratio", 0.75),
         }
         publish_defaults = {
             "lingya_qq_publish_source_url": source_url,
@@ -1307,15 +1391,25 @@ class LingYaQQPlatform(BasePlatform):
             "lingya_qq_publish_timeout": publish_timeout,
             "lingya_qq_publish_generation_timeout": generation_timeout,
             "lingya_qq_publish_generation_poll_interval": generation_poll_interval,
+            "lingya_qq_publish_credit_timeout": credit_timeout,
+            "lingya_qq_publish_credit_poll_interval": credit_poll_interval,
             "lingya_qq_video_upload_service_id": upload_service_id,
         }
         if defaults.get("cover_url"):
             publish_defaults["lingya_qq_publish_cover_url"] = defaults["cover_url"]
-        if defaults.get("prompt"):
-            publish_defaults["lingya_qq_publish_prompt"] = defaults["prompt"]
         if defaults.get("creation_process_text"):
             publish_defaults["lingya_qq_publish_creation_process_text"] = defaults["creation_process_text"]
         _set_global_config_values(publish_defaults)
+
+        self.log("LingYaQQ publish: preparing first-post credit context")
+        first_post_context = self._prepare_first_post_credit_context(client)
+        if first_post_context.get("refresh_session") and hasattr(client, "cookie_dict"):
+            cookie_fields = build_lingya_qq_account_fields(
+                {**source, **client.cookie_dict()},
+                vdevice_guid=str(cookie_fields.get("vdevice_guid") or source.get("vdevice_guid") or "").strip() or None,
+                video_appid=VIDEO_APPID,
+                video_platform=VVERSION_PLATFORM,
+            )
 
         self.log("LingYaQQ publish: fetching work asset from source URL by direct connection")
         asset = fetch_lingya_qq_publish_asset(
@@ -1370,12 +1464,36 @@ class LingYaQQPlatform(BasePlatform):
                 ),
             }
         publish_duration = self._duration_from_highlight_segments(highlight_list, asset.duration)
+        highlight_cover_url = cover_url
+        highlight_frame = self._highlight_frame_cover(highlight_list, vid)
+        if highlight_frame:
+            frame_bytes, frame_name, frame_type = highlight_frame
+            try:
+                frame_data_url = f"data:{frame_type};base64,{base64.b64encode(frame_bytes).decode('ascii')}"
+                highlight_cover_url = client.upload_image_data_url(frame_data_url, filename=frame_name)
+            except Exception as exc:
+                self.log(f"LingYaQQ publish: highlight frame cover upload skipped: {exc}")
 
-        review = client.content_security_review(asset.title)
-        review_data = review.get("data") if isinstance(review.get("data"), dict) else {}
-        review_result = _as_int(review_data.get("result"), 0)
-        if review_result != 1:
-            return {"ok": False, "error": f"LingYaQQ title security review failed: {review}"}
+        review_result = 1
+        review_payloads: list[dict[str, Any]] = []
+        review_texts = [
+            asset.title,
+            asset.description,
+            asset.prompt,
+            asset.creation_process_text,
+        ]
+        seen_review_texts: set[str] = set()
+        for review_text in review_texts:
+            text = str(review_text or "").strip()
+            if not text or text in seen_review_texts:
+                continue
+            seen_review_texts.add(text)
+            review = client.content_security_review(text)
+            review_payloads.append(review)
+            review_data = review.get("data") if isinstance(review.get("data"), dict) else {}
+            review_result = _as_int(review_data.get("result"), 0)
+            if review_result != 1:
+                return {"ok": False, "error": f"LingYaQQ content security review failed: {review}"}
 
         background_color = ""
         title_color = ""
@@ -1398,6 +1516,7 @@ class LingYaQQPlatform(BasePlatform):
             duration=publish_duration,
             cover_ratio=asset.cover_ratio,
             file_name=asset.video_filename,
+            tag_infos=asset.tag_infos,
         )
         final_payload = self._build_upload_work_payload(
             request_type=1,
@@ -1409,9 +1528,10 @@ class LingYaQQPlatform(BasePlatform):
             cover_ratio=asset.cover_ratio,
             file_name=asset.video_filename,
             highlight_prompt=asset.prompt,
-            highlight_cover_url=cover_url,
+            highlight_cover_url=highlight_cover_url,
             highlight_segment=highlight_segment,
-            creation_process_text=_creation_process_text(defaults.get("creation_process_text")),
+            creation_process_text=asset.creation_process_text,
+            tag_infos=asset.tag_infos,
             background_color=background_color,
             title_color=title_color,
             ai_content_types=[1, 2, 3],
@@ -1430,7 +1550,20 @@ class LingYaQQPlatform(BasePlatform):
             cancel_check=cancel_check,
         )
 
-        quota_overview = self._quota_overview_or_empty(client, context="after publish")
+        self.log("LingYaQQ publish: waiting for first-post credit quota")
+        quota = self._wait_first_post_credit_quota(
+            client,
+            timeout=credit_timeout,
+            poll_interval=credit_poll_interval,
+            cancel_check=cancel_check,
+        )
+        quota_overview = _quota_summary(quota) if quota else self._quota_overview_or_empty(client, context="after publish")
+        initial_credit_check = first_post_context.get("first_post_credit") if isinstance(first_post_context.get("first_post_credit"), dict) else {}
+        initial_credit_data = (
+            initial_credit_check.get("data")
+            if isinstance(initial_credit_check.get("data"), dict)
+            else {}
+        )
         return {
             "ok": True,
             "data": {
@@ -1443,6 +1576,9 @@ class LingYaQQPlatform(BasePlatform):
                 "last_publish_at": int(time.time()),
                 "last_publish_review_result": review_result,
                 "last_publish_generation_statuses": self._work_generation_statuses(generation),
+                "last_publish_initial_first_post_credit_granted": bool(initial_credit_data.get("is_granted")),
+                "last_publish_first_post_credit_granted": self._quota_has_balance(quota),
+                "last_publish_first_post_credit_text": initial_credit_data.get("text") or "",
                 **publish_defaults,
                 **quota_overview,
             },

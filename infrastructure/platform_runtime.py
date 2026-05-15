@@ -267,13 +267,14 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
                 "lingya_qq_publish_source_timeout",
                 "lingya_qq_publish_source_retries",
                 "lingya_qq_publish_cover_url",
-                "lingya_qq_publish_prompt",
                 "lingya_qq_publish_creation_process_text",
                 "lingya_qq_publish_initial_delay",
                 "lingya_qq_publish_poll_interval",
                 "lingya_qq_publish_timeout",
                 "lingya_qq_publish_generation_timeout",
                 "lingya_qq_publish_generation_poll_interval",
+                "lingya_qq_publish_credit_timeout",
+                "lingya_qq_publish_credit_poll_interval",
                 "lingya_qq_video_upload_service_id",
             )
             if data.get(key) not in (None, "")

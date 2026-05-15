@@ -57,8 +57,7 @@ Useful extra fields:
   failure fails the registration task
 - `lingya_qq_publish_source_url`: third-party GET API returning work material
 - `lingya_qq_publish_cover_url`: fallback cover URL for raw video sources
-- `lingya_qq_publish_prompt`: fallback first highlight-scene prompt
-- `lingya_qq_publish_creation_process_text`: defaults to `Seedance 2.0 Tool`
+- `lingya_qq_publish_creation_process_text`: defaults to `Seedance 2.0 全能参考`
 - `lingya_qq_publish_source_timeout`: defaults to `60`
 - `lingya_qq_publish_source_retries`: defaults to `3`
 - `lingya_qq_video_upload_service_id`: defaults to
@@ -67,10 +66,16 @@ Useful extra fields:
 - `lingya_qq_publish_initial_delay`: defaults to `600`
 - `lingya_qq_publish_poll_interval`: defaults to `60`
 - `lingya_qq_publish_timeout`: defaults to `7200`
+- `lingya_qq_publish_credit_timeout`: defaults to `1800`, waits for the first-post 500-credit grant
+- `lingya_qq_publish_credit_poll_interval`: defaults to `30`
 
 The third-party publish source URL is fetched by direct connection. Account
 proxy settings are still used for Lingya account requests and uploads, but they
 are not applied to the external material source.
+When the source returns JSON, content fields are taken from that response only;
+stored fallback content settings are not applied. `creation_process_text` falls
+back to `Seedance 2.0 全能参考` when the source omits it. `lingya_qq_publish_cover_url`
+is only used when the source itself returns raw video bytes.
 
 The publish source may return JSON such as:
 
@@ -79,15 +84,17 @@ The publish source may return JSON such as:
   "title": "example title",
   "intro": "example intro",
   "prompt": "first highlight scene prompt",
+  "creation_process_text": "Seedance 2.0 全能参考",
   "video_url": "https://example.com/video.mp4",
   "cover_url": "https://example.com/cover.jpg",
-  "duration": 16,
-  "cover_ratio": 0.75
+  "tag_infos": [{"id": "tag_2QCVIf1DjL", "title": "玄幻", "alias": ""}]
 }
 ```
 
 `video_base64` and `cover_base64` are also accepted. If the source returns raw
 video bytes directly, configure `lingya_qq_publish_cover_url`.
+`creationProcessText`, `creation_process`, `creationProcess`, `process_text`,
+and `processText` are accepted as aliases for `creation_process_text`.
 
 `lingya_qq_auto_send_sms` is disabled by default because Lingya requires the
 human CAPTCHA step before SMS delivery in current testing.
