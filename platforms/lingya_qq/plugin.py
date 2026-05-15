@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -26,6 +27,14 @@ from platforms.lingya_qq.publish import fetch_lingya_qq_publish_asset
 
 LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS = 300
 LINGYA_QQ_SESSION_RETRY_CODES = {20447, 20409, 20433, 20431, 20411}
+DEFAULT_CREATION_TOOL = {
+    "id": "tag_8Hy4Gy2MCZ",
+    "title": "Seedance 2.0",
+    "alias": "tag_8Hy4Gy2MCZ",
+    "model_type": "video",
+}
+DEFAULT_CREATION_PROCESS_TEXT = "Seedance 2.0 Tool"
+LEGACY_CREATION_PROCESS_TEXTS = {"sora2 tool", "sora 2 tool"}
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -43,6 +52,11 @@ def _log_sms_code(log_fn, code: Any, *, context: str) -> None:
     text = str(code or "").strip()
     if callable(log_fn):
         log_fn(f"LingYaQQ {context} SMS code received: {text} (len={len(text)})")
+
+
+def _is_lingya_sms_code(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text.isdigit() and 4 <= len(text) <= 8
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -111,6 +125,13 @@ def _first_value(*values: Any, default: Any = "") -> Any:
         if value not in (None, ""):
             return value
     return default
+
+
+def _creation_process_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in LEGACY_CREATION_PROCESS_TEXTS:
+        return DEFAULT_CREATION_PROCESS_TEXT
+    return text
 
 
 def _normalize_sms_provider_key(value: Any) -> str:
@@ -476,6 +497,8 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "source_timeout", "label": "内容接口超时秒数", "type": "number"},
                     {"key": "source_retries", "label": "内容接口重试次数", "type": "number"},
                     {"key": "upload_service_id", "label": "视频上传 serviceId", "type": "text"},
+                    {"key": "prompt", "label": "第一段分镜提示词", "type": "text"},
+                    {"key": "creation_process_text", "label": "创作过程文本", "type": "text"},
                     {"key": "initial_delay", "label": "审核初始等待秒数", "type": "number"},
                     {"key": "poll_interval", "label": "审核轮询间隔秒数", "type": "number"},
                     {"key": "timeout", "label": "审核超时秒数", "type": "number"},
@@ -532,6 +555,8 @@ class LingYaQQPlatform(BasePlatform):
             code = provider.get_code(activation.activation_id, timeout=timeout)
             if not code:
                 raise RuntimeError("LingYaQQ SMS verification code was not received")
+            if not _is_lingya_sms_code(code):
+                raise RuntimeError(f"LingYaQQ SMS verification code is invalid: {str(code).strip()!r}")
             _log_sms_code(self.log, code, context="register")
 
             client = self._client()
@@ -706,6 +731,8 @@ class LingYaQQPlatform(BasePlatform):
                 code = provider.get_code(activation.activation_id, timeout=timeout)
             if not code:
                 raise RuntimeError("LingYaQQ relogin SMS verification code was not received")
+            if not _is_lingya_sms_code(code):
+                raise RuntimeError(f"LingYaQQ relogin SMS verification code is invalid: {str(code).strip()!r}")
             _log_sms_code(self.log, code, context="relogin")
 
             account_cookies = extract_lingya_qq_cookies(account_source)
@@ -953,6 +980,22 @@ class LingYaQQPlatform(BasePlatform):
                 raise TimeoutError(f"LingYaQQ work generation timed out: {last_payload}")
             self._sleep_with_cancel(min(max(poll_interval, 1), max(0, deadline - time.time())), cancel_check)
 
+    def _first_highlight_segment(self, payload: dict[str, Any]) -> dict[str, int]:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        segments = data.get("highlight_segments") if isinstance(data, dict) else None
+        if not isinstance(segments, list) or not segments:
+            return {}
+        first = segments[0]
+        if not isinstance(first, dict):
+            return {}
+        if first.get("end_ms") in (None, ""):
+            return {}
+        start_ms = max(_as_int(first.get("start_ms"), 0), 0)
+        end_ms = _as_int(first.get("end_ms"), 0)
+        if end_ms <= start_ms:
+            return {}
+        return {"start_ms": start_ms, "end_ms": end_ms}
+
     def _work_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         if not isinstance(data, dict):
@@ -1058,10 +1101,58 @@ class LingYaQQPlatform(BasePlatform):
         duration: int,
         cover_ratio: float,
         file_name: str,
+        highlight_prompt: str = "",
+        highlight_cover_url: str = "",
+        highlight_segment: dict[str, int] | None = None,
+        creation_process_text: str = DEFAULT_CREATION_PROCESS_TEXT,
+        creation_tool: dict[str, Any] | None = None,
         background_color: str = "",
         title_color: str = "",
         ai_content_types: list[int] | None = None,
     ) -> dict[str, Any]:
+        include_creation_metadata = int(request_type) == 1
+        tool = dict(creation_tool or DEFAULT_CREATION_TOOL)
+        segment = dict(highlight_segment or {})
+        prompt = str(highlight_prompt or description or title or "").strip()
+        scene_cover = str(highlight_cover_url or cover_url or "").strip()
+        process_text = _creation_process_text(creation_process_text)
+        creation_tools = [
+            {"id": "", "category": 1, "tools": []},
+            {"id": "", "category": 2, "tools": []},
+            {"id": "", "category": 3, "tools": [tool] if include_creation_metadata else []},
+            {"id": "", "category": 4, "tools": []},
+        ]
+        highlight_scenes = []
+        if include_creation_metadata and prompt and segment:
+            highlight_scenes.append(
+                {
+                    "id": "",
+                    "server_id": "",
+                    "cover": scene_cover,
+                    "video_segments": {
+                        "start_ms": max(_as_int(segment.get("start_ms"), 0), 0),
+                        "end_ms": _as_int(segment.get("end_ms"), 0),
+                    },
+                    "prompt": prompt,
+                    "main_tool": [tool],
+                    "extra_params": [],
+                    "description": "",
+                    "is_pin_to_top": False,
+                }
+            )
+        creation_processes = []
+        if include_creation_metadata and process_text:
+            creation_processes.append(
+                {
+                    "type": 1,
+                    "extra": json.dumps(
+                        {"type": "text", "data": {"text": process_text, "pureText": True}},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    "id": "",
+                }
+            )
         return {
             "request_type": int(request_type),
             "vid": vid,
@@ -1076,20 +1167,16 @@ class LingYaQQPlatform(BasePlatform):
                 "title_color": title_color,
             },
             "related_info": {"tag_infos": [], "activity_infos": []},
-            "creation_tools": [
-                {"id": "", "category": 1, "tools": []},
-                {"id": "", "category": 2, "tools": []},
-                {"id": "", "category": 3, "tools": []},
-                {"id": "", "category": 4, "tools": []},
-            ],
-            "highlight_scenes": [],
-            "creation_processes": [],
+            "creation_tools": creation_tools,
+            "highlight_scenes": highlight_scenes,
+            "creation_processes": creation_processes,
             "biz_params": {},
             "playback_medium_id": vid,
             "ai_content_types": list(ai_content_types or []),
             "external_account_types": [],
             "is_scheduled_publish": False,
             "scheduled_publish_time": 0,
+            "only_self_visible": False,
             "is_campus_zone": False,
         }
 
@@ -1182,6 +1269,19 @@ class LingYaQQPlatform(BasePlatform):
             "cover_url": self._runtime_value(source, params, "lingya_qq_publish_cover_url", ""),
             "title": self._runtime_value(source, params, "lingya_qq_publish_title", ""),
             "description": self._runtime_value(source, params, "lingya_qq_publish_description", ""),
+            "intro": self._runtime_value(source, params, "lingya_qq_publish_intro", ""),
+            "prompt": _first_value(params.get("prompt"), self._runtime_value(source, params, "lingya_qq_publish_prompt", "")),
+            "creation_process_text": _creation_process_text(
+                _first_value(
+                    params.get("creation_process_text"),
+                    self._runtime_value(
+                        source,
+                        params,
+                        "lingya_qq_publish_creation_process_text",
+                        DEFAULT_CREATION_PROCESS_TEXT,
+                    ),
+                )
+            ),
             "duration": self._runtime_value(source, params, "lingya_qq_publish_duration", 10),
             "cover_ratio": self._runtime_value(source, params, "lingya_qq_publish_cover_ratio", 0.75),
         }
@@ -1198,6 +1298,10 @@ class LingYaQQPlatform(BasePlatform):
         }
         if defaults.get("cover_url"):
             publish_defaults["lingya_qq_publish_cover_url"] = defaults["cover_url"]
+        if defaults.get("prompt"):
+            publish_defaults["lingya_qq_publish_prompt"] = defaults["prompt"]
+        if defaults.get("creation_process_text"):
+            publish_defaults["lingya_qq_publish_creation_process_text"] = defaults["creation_process_text"]
         _set_global_config_values(publish_defaults)
 
         self.log("LingYaQQ publish: fetching work asset from source URL by direct connection")
@@ -1237,6 +1341,21 @@ class LingYaQQPlatform(BasePlatform):
             timeout=generation_timeout,
             cancel_check=cancel_check,
         )
+        if callable(cancel_check) and cancel_check():
+            raise RuntimeError("LingYaQQ follow-up cancelled")
+        self.log("LingYaQQ publish: fetching highlight scene list")
+        highlight_list = client.get_highlight_scene_list(vid)
+        highlight_segment = self._first_highlight_segment(highlight_list)
+        if not highlight_segment:
+            highlight_data = highlight_list.get("data") if isinstance(highlight_list.get("data"), dict) else highlight_list
+            highlight_keys = sorted(highlight_data.keys()) if isinstance(highlight_data, dict) else []
+            return {
+                "ok": False,
+                "error": (
+                    "LingYaQQ GetHighlightSceneList did not return data.highlight_segments[0].start_ms/end_ms; "
+                    f"cannot submit final UploadWork without automatic segmentation result. highlight_keys={highlight_keys[:30]}"
+                ),
+            }
 
         review = client.content_security_review(asset.title)
         review_data = review.get("data") if isinstance(review.get("data"), dict) else {}
@@ -1275,6 +1394,10 @@ class LingYaQQPlatform(BasePlatform):
             duration=asset.duration,
             cover_ratio=asset.cover_ratio,
             file_name=asset.video_filename,
+            highlight_prompt=asset.prompt,
+            highlight_cover_url=cover_url,
+            highlight_segment=highlight_segment,
+            creation_process_text=_creation_process_text(defaults.get("creation_process_text")),
             background_color=background_color,
             title_color=title_color,
             ai_content_types=[1, 2, 3],

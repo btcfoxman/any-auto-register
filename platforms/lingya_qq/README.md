@@ -57,6 +57,8 @@ Useful extra fields:
   failure fails the registration task
 - `lingya_qq_publish_source_url`: third-party GET API returning work material
 - `lingya_qq_publish_cover_url`: fallback cover URL for raw video sources
+- `lingya_qq_publish_prompt`: fallback first highlight-scene prompt
+- `lingya_qq_publish_creation_process_text`: defaults to `Seedance 2.0 Tool`
 - `lingya_qq_publish_source_timeout`: defaults to `60`
 - `lingya_qq_publish_source_retries`: defaults to `3`
 - `lingya_qq_video_upload_service_id`: defaults to
@@ -75,7 +77,8 @@ The publish source may return JSON such as:
 ```json
 {
   "title": "example title",
-  "description": "",
+  "intro": "example intro",
+  "prompt": "first highlight scene prompt",
   "video_url": "https://example.com/video.mp4",
   "cover_url": "https://example.com/cover.jpg",
   "duration": 16,

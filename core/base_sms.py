@@ -185,7 +185,12 @@ class SmsActivateProvider(BaseSmsProvider):
         while time.time() < deadline:
             result = self._request("getStatus", id=activation_id)
             if result.startswith("STATUS_OK:"):
-                return result.split(":")[1]
+                code = result.split(":", 1)[1].strip()
+                if _is_valid_sms_code(code):
+                    return code
+                logger.warning("SMS-Activate returned invalid SMS code for %s: %s", activation_id, code)
+                time.sleep(3)
+                continue
             if result == "STATUS_WAIT_CODE":
                 time.sleep(3)
                 continue
@@ -274,10 +279,17 @@ def _parse_hero_status_text(text: str) -> dict:
     if text == "STATUS_WAIT_RESEND":
         return {"status": "wait_resend"}
     if text.startswith("STATUS_OK:"):
-        return {"status": "ok", "code": text.split(":", 1)[1]}
+        code = text.split(":", 1)[1].strip()
+        if _is_valid_sms_code(code):
+            return {"status": "ok", "code": code}
+        return {"status": "wait_code", "raw": text}
     if text == "STATUS_CANCEL":
         return {"status": "cancel"}
     return {"status": "unknown", "raw": text}
+
+
+def _is_valid_sms_code(code: Any) -> bool:
+    return bool(re.fullmatch(r"\d{4,8}", str(code or "").strip()))
 
 
 def _canonical_sms_event_fields(event_fields: dict | None) -> dict:
@@ -330,7 +342,7 @@ def _sms_event_key(activation_id: str, code: str, event_fields: dict | None) -> 
 
 def _make_sms_candidate(activation_id: str, source: str, code, event_fields: dict | None = None) -> dict | None:
     code = str(code or "").strip()
-    if not code or code in {"null", "None"}:
+    if not _is_valid_sms_code(code):
         return None
     canonical = _canonical_sms_event_fields(event_fields)
     sms_key = _sms_event_key(activation_id, code, event_fields) if event_fields else ""

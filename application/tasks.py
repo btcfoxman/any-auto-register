@@ -551,6 +551,8 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
         "lingya_qq_publish_source_timeout",
         "lingya_qq_publish_source_retries",
         "lingya_qq_publish_cover_url",
+        "lingya_qq_publish_prompt",
+        "lingya_qq_publish_creation_process_text",
         "lingya_qq_publish_initial_delay",
         "lingya_qq_publish_poll_interval",
         "lingya_qq_publish_timeout",

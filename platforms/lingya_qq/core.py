@@ -497,6 +497,14 @@ class LingYaQQClient:
         _raise_for_ret(data, "LingYaQQ GetWorkGenerationStatus")
         return data
 
+    def get_highlight_scene_list(self, vid: str) -> dict[str, Any]:
+        data = self._post_pbaccess(
+            "/trpc.caotai.publish.FramesService/GetHighlightSceneList",
+            {"vid": str(vid or "")},
+        )
+        _raise_for_ret(data, "LingYaQQ GetHighlightSceneList")
+        return data
+
     def content_security_review(self, text: str) -> dict[str, Any]:
         data = self._post_pbaccess(
             "/trpc.caotai.publish.PublishService/ContentSecurityReview",

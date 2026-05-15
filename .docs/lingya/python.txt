@@ -1,0 +1,8 @@
+写一个python脚本，读取当前目录的所有 application (n).octet-stream 文件 或 application (n).mp4 文件（实际是mp4视频文件，子目录longs/shorts不用扫描），通过当前 gpt-5.4-mini 模型理解分析视频文件，分析后仅输出返回标题、简介、第一段分镜提示词、3个字段的JSON格式内容（最终返回限制格式为{"title":"xxx","intro":"yyy","prompt":"zzz"}），写入与视频文件同名的json文件，如 application (n).octet-stream.json ，要求返回: 标题（含标点不能超过50字，不能有特殊符号，不能出现名人品牌词等），简介（含标点不能超过300字，不能有特殊符号，不能出现名人品牌词等），第一段分镜提示词（含标点不能超过300字，不能有特殊符号，不能出现名人品牌词等）
+
+
+写一个python脚本，提供对外http访问接口，类似 C:\Users\imzha\Pictures\register_publish6666.py ，但读取的是当前目录的 application (n).octet-stream 或 application (n).mp4 文件 （实际mp4视频文件） 以及 .json 和 .jpg 文件，对外仍然提供 title/intro/prompt/video_url/cover_url 5个字段，其中 title/intro/prompt 读取 .json得到， video_url/cover_url 为当前主机局域网IP端口可访问路径便于局域网接口访问下载
+
+
+根据该视频内容仅输出返回标题、简介、第一段分镜提示词3个字段的JSON格式内容（最终返回限制格式为{"title":"xxx","intro":"yyy","prompt":"zzz"}），要求返回仅英文，标题（含标点不能超过50字，不能有特殊符号），简介（含标点不能超过300字，不能有特殊符号），第一段分镜提示词（含标点不能超过300字，不能有特殊符号）
+

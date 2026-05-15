@@ -34,6 +34,12 @@ class TestSmsActivateCountryMapping:
     def test_ru_maps_to_0(self):
         assert SMS_ACTIVATE_COUNTRIES["ru"] == "0"
 
+
+def test_sms_candidate_rejects_single_digit_placeholder_code():
+    assert sms_module._make_sms_candidate("act_1", "test", "0") is None
+    assert sms_module._parse_hero_status_text("STATUS_OK:0")["status"] == "wait_code"
+    assert sms_module._parse_hero_status_text("STATUS_OK:123456") == {"status": "ok", "code": "123456"}
+
     def test_th_maps_to_52(self):
         assert SMS_ACTIVATE_COUNTRIES["th"] == "52"
 

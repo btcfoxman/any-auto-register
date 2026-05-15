@@ -6,7 +6,7 @@ from core.registry import get, load_all
 from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS, _build_account_overview
 from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES, build_lingya_qq_account_fields
 from platforms.lingya_qq.core import DEFAULT_VIDEO_UPLOAD_SERVICE_ID, LingYaQQClient
-from platforms.lingya_qq.plugin import LingYaQQPlatform, _resolve_sms_runtime, _sms_timeout
+from platforms.lingya_qq.plugin import LingYaQQPlatform, _is_lingya_sms_code, _resolve_sms_runtime, _sms_timeout
 from platforms.lingya_qq.publish import LingYaQQPublishAsset
 
 
@@ -40,7 +40,17 @@ def test_lingya_qq_exposes_relogin_sms_action():
     assert any(item["id"] == "publish_work" for item in actions)
     publish_action = next(item for item in actions if item["id"] == "publish_work")
     publish_param_keys = {item["key"] for item in publish_action["params"]}
-    assert {"source_url", "source_timeout", "source_retries", "upload_service_id", "initial_delay", "poll_interval", "timeout"} <= publish_param_keys
+    assert {
+        "source_url",
+        "source_timeout",
+        "source_retries",
+        "upload_service_id",
+        "prompt",
+        "creation_process_text",
+        "initial_delay",
+        "poll_interval",
+        "timeout",
+    } <= publish_param_keys
     assert "relogin_sms" in STATEFUL_ACTION_IDS
     assert "keepalive_sync" in STATEFUL_ACTION_IDS
     assert "sync_lingya2api" in STATEFUL_ACTION_IDS
@@ -53,6 +63,12 @@ def test_lingya_qq_exposes_relogin_sms_action():
 def test_lingya_qq_sms_timeout_is_capped_at_300_seconds():
     assert _sms_timeout("600") == 300
     assert _sms_timeout("12") == 12
+
+
+def test_lingya_qq_sms_code_validation_rejects_placeholders():
+    assert _is_lingya_sms_code("123456") is True
+    assert _is_lingya_sms_code("0") is False
+    assert _is_lingya_sms_code("abc123") is False
     assert _sms_timeout("") == 300
 
 
@@ -1229,6 +1245,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     events = []
     fetch_calls = []
     saved_defaults = []
+    upload_payloads = []
 
     class FakeClient:
         def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
@@ -1255,6 +1272,20 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
                 },
             }
 
+        def get_highlight_scene_list(self, vid: str):
+            events.append(("highlight_scene_list", vid))
+            return {
+                "ret": 0,
+                "msg": "",
+                "data": {
+                    "highlight_segments": [
+                        {"start_ms": 0, "end_ms": 1600},
+                        {"start_ms": 1600, "end_ms": 3680},
+                    ],
+                    "highlight_frames_file_data": None,
+                },
+            }
+
         def content_security_review(self, text: str):
             events.append(("review", text))
             return {"ret": 0, "data": {"result": 1}}
@@ -1264,6 +1295,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             return {"ret": 0, "data": {"background_color": "#877f72", "title_color": "#FFFFFF"}}
 
         def upload_work(self, payload):
+            upload_payloads.append(payload)
             events.append(("upload_work", payload["request_type"], payload["vid"], payload["base_info"]["title"]))
             return {"ret": 0, "data": {}}
 
@@ -1280,7 +1312,8 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
         fetch_calls.append((args, kwargs))
         return LingYaQQPublishAsset(
             title="publish title",
-            description="",
+            description="publish intro",
+            prompt="first scene prompt",
             video_bytes=b"video-bytes",
             video_filename="video.mp4",
             video_content_type="video/mp4",
@@ -1343,8 +1376,41 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert fetch_calls[0][1]["retries"] == 4
     assert ("client_proxy", "http://account-proxy.example:8080") in events
     assert ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID) in events
+    assert ("highlight_scene_list", "vid123") in events
     assert ("upload_work", 2, "vid123", "publish title") in events
     assert ("upload_work", 1, "vid123", "publish title") in events
+    final_payload = upload_payloads[-1]
+    assert final_payload["base_info"]["description"] == "publish intro"
+    assert final_payload["creation_tools"][2]["tools"][0]["title"] == "Seedance 2.0"
+    assert final_payload["creation_tools"][2]["tools"][0]["id"] == "tag_8Hy4Gy2MCZ"
+    assert final_payload["creation_processes"][0]["extra"] == '{"type":"text","data":{"text":"Seedance 2.0 Tool","pureText":true}}'
+    assert final_payload["highlight_scenes"][0]["prompt"] == "first scene prompt"
+    assert final_payload["highlight_scenes"][0]["server_id"] == ""
+    assert final_payload["highlight_scenes"][0]["cover"] == "https://filecdn.lumio.qq.com/image/cover.jpg"
+    assert final_payload["highlight_scenes"][0]["video_segments"] == {"start_ms": 0, "end_ms": 1600}
+    assert "key_frame_images" not in final_payload["highlight_scenes"][0]
+    assert final_payload["highlight_scenes"][0]["main_tool"][0]["id"] == "tag_8Hy4Gy2MCZ"
+    assert final_payload["highlight_scenes"][0]["main_tool"][0]["title"] == "Seedance 2.0"
+    assert final_payload["only_self_visible"] is False
+
+
+def test_lingya_qq_extracts_first_highlight_segment_from_scene_list():
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+
+    segment = platform._first_highlight_segment(
+        {
+            "ret": 0,
+            "data": {
+                "highlight_segments": [
+                    {"start_ms": 0, "end_ms": 1600},
+                    {"start_ms": 1600, "end_ms": 3680},
+                ],
+                "highlight_frames_file_data": None,
+            },
+        }
+    )
+
+    assert segment == {"start_ms": 0, "end_ms": 1600}
 
 
 def test_lingya_qq_publish_skips_when_local_released(monkeypatch):

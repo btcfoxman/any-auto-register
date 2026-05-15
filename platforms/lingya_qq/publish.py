@@ -47,6 +47,7 @@ COVER_LIST_KEYS = ("cover_urls", "coverUrls", "images")
 class LingYaQQPublishAsset:
     title: str
     description: str
+    prompt: str
     video_bytes: bytes
     video_filename: str
     video_content_type: str
@@ -210,6 +211,30 @@ def _title_from_payload(payload: Any, defaults: dict[str, Any]) -> str:
     return (title or "LingYaQQ Auto Publish")[:80]
 
 
+def _prompt_from_payload(payload: Any, defaults: dict[str, Any], *, title: str = "", description: str = "") -> str:
+    prompt = str(
+        _pick(
+            payload,
+            (
+                "prompt",
+                "highlight_prompt",
+                "highlightPrompt",
+                "scene_prompt",
+                "scenePrompt",
+                "first_scene_prompt",
+                "firstScenePrompt",
+                "intro",
+            ),
+        )
+        or defaults.get("prompt")
+        or defaults.get("highlight_prompt")
+        or description
+        or title
+        or ""
+    ).strip()
+    return prompt[:1200]
+
+
 def fetch_lingya_qq_publish_asset(
     source_url: str,
     *,
@@ -247,8 +272,9 @@ def fetch_lingya_qq_publish_asset(
         cover_bytes, cover_filename, cover_type = _download_bytes(cover_url, timeout=timeout, proxy=proxy, retries=retries)
         filename = _filename_from_url(source_url, "video.mp4", content_type)
         return LingYaQQPublishAsset(
-            title=_title_from_payload({}, defaults),
-            description=str(defaults.get("description") or ""),
+            title=(title := _title_from_payload({}, defaults)),
+            description=(description := str(defaults.get("description") or defaults.get("intro") or "")),
+            prompt=_prompt_from_payload({}, defaults, title=title, description=description),
             video_bytes=response.content,
             video_filename=filename,
             video_content_type=content_type or "video/mp4",
@@ -287,9 +313,12 @@ def fetch_lingya_qq_publish_asset(
     if not cover_filename:
         cover_filename = "cover.jpg"
 
+    title = _title_from_payload(payload, defaults)
+    description = str(_pick(payload, ("description", "intro", "desc", "summary")) or defaults.get("description") or defaults.get("intro") or "")
     return LingYaQQPublishAsset(
-        title=_title_from_payload(payload, defaults),
-        description=str(_pick(payload, ("description", "desc", "summary")) or defaults.get("description") or ""),
+        title=title,
+        description=description,
+        prompt=_prompt_from_payload(payload, defaults, title=title, description=description),
         video_bytes=video_bytes,
         video_filename=video_filename,
         video_content_type=video_content_type or "video/mp4",

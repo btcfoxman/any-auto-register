@@ -48,6 +48,7 @@ def test_publish_asset_retries_when_source_connection_is_aborted(monkeypatch):
     asset = fetch_lingya_qq_publish_asset("https://source.example/work", retries=3)
 
     assert asset.title == "retry ok"
+    assert asset.prompt == "retry ok"
     assert asset.video_bytes == b"video"
     assert asset.cover_bytes == b"cover"
     assert calls == ["https://source.example/work", "https://source.example/work"]
@@ -77,3 +78,23 @@ def test_publish_asset_retries_media_download_after_5xx(monkeypatch):
 
     assert asset.video_bytes == b"video"
     assert calls.count("https://source.example/video.mp4") == 2
+
+
+def test_publish_asset_reads_intro_and_prompt_aliases(monkeypatch):
+    def fake_get(url, timeout=5, proxies=None):
+        return FakeResponse(
+            {
+                "title": "title",
+                "intro": "intro text",
+                "highlight_prompt": "scene prompt",
+                "video_base64": _b64(b"video"),
+                "cover_base64": _b64(b"cover"),
+            }
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+
+    asset = fetch_lingya_qq_publish_asset("https://source.example/work")
+
+    assert asset.description == "intro text"
+    assert asset.prompt == "scene prompt"

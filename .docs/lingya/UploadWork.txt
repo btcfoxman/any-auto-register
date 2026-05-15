@@ -1,0 +1,27 @@
+可以取下述 tags
+"id": "tag_8Hy4Gy2MCZ",
+"title": "Seedance 2.0",
+或
+"id": "tag_3gEwf8hGWR",
+"title": "Sora 2",
+
+由于lingya发布作品时要求完善更多作品内容，包括标题title、简介intro、第一段分镜提示词prompt（由上传视频自动分镜之后选择的）、创作过程creation_processes如下述 Sora2 Tool、创作工具creation_tools如下述 id=tag_3gEwf8hGWR/title=Sora 2，接口示例如下，因此内容发布流程代码需修改，是否能直接修改？需要我导出har文件分析之后再实现代码吗？
+fetch("https://pbaccess.lingya.qq.com/trpc.caotai.publish.PublishService/UploadWork?video_appid=3000116&vversion_platform=2&vdevice_guid=f21a169238abeed6", {
+  "headers": {
+    "accept": "application/json",
+    "accept-language": "en-SG,en;q=0.9",
+    "content-type": "application/json",
+    "sec-ch-ua": "\"Google Chrome\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site"
+  },
+  "referrer": "https://lingya.qq.com/",
+  "body": "{\"request_type\":1,\"vid\":\"g1268i0wfem\",\"base_info\":{\"title\":\"Elegant Reading Glasses for Crystal Clear Vision\",\"description\":\"Experience style and clarity with these lightweight reading glasses. Designed with a soft rose and gold frame, they feel like jewelry while making even the smallest text on books and phones pop into focus. Say goodbye to squinting and headaches with this stylish beauty must have accessory.\",\"cover_url\":\"https://filecdn.lumio.qq.com/image/caotai_image_dd70a4-0_926217869_1778863384839597\",\"duration\":73,\"cover_ratio\":0.75,\"file_name\":\"output.mp4\",\"background_color\":\"#877f71\",\"title_color\":\"#FFFFFF\"},\"related_info\":{\"tag_infos\":[],\"activity_infos\":[]},\"creation_tools\":[{\"id\":\"\",\"category\":1,\"tools\":[]},{\"id\":\"\",\"category\":2,\"tools\":[]},{\"id\":\"\",\"category\":3,\"tools\":[{\"id\":\"tag_3gEwf8hGWR\",\"title\":\"Sora 2\",\"alias\":\"tag_3gEwf8hGWR\",\"model_type\":\"video\"}]},{\"id\":\"\",\"category\":4,\"tools\":[]}],\"highlight_scenes\":[{\"id\":\"\",\"server_id\":\"\",\"cover\":\"https://filecdn.lumio.qq.com/image/caotai_image_dd70a4-0_987150342_1778864611937046\",\"video_segments\":{\"start_ms\":0,\"end_ms\":80},\"key_frame_images\":[],\"prompt\":\"A close up shot of a smiling woman outdoors during sunset. She is putting on a pair of elegant rose tinted glasses with gold detailing. The lighting is warm and golden, highlighting her face and the intricate design of the eyewear as she prepares to read a book in a scenic island setting.\",\"main_tool\":[{\"id\":\"tag_3gEwf8hGWR\",\"title\":\"Sora 2\",\"alias\":\"tag_3gEwf8hGWR\",\"model_type\":\"video\"}],\"extra_params\":[],\"description\":\"\",\"is_pin_to_top\":false}],\"creation_processes\":[{\"type\":1,\"extra\":\"{\\\"type\\\":\\\"text\\\",\\\"data\\\":{\\\"text\\\":\\\"Sora2 Tool\\\",\\\"pureText\\\":true}}\",\"id\":\"\"}],\"biz_params\":{},\"playback_medium_id\":\"g1268i0wfem\",\"ai_content_types\":[1,2,3],\"external_account_types\":[],\"is_scheduled_publish\":false,\"scheduled_publish_time\":0,\"only_self_visible\":false,\"is_campus_zone\":false}",
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "include"
+});
+响应体 {"data":{},"ret":0,"msg":""}

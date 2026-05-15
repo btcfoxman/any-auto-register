@@ -1,0 +1,177 @@
+经我手动分析得到，在上传视频完成后，会调用下述接口获取分镜解析
+fetch("https://pbaccess.lingya.qq.com/trpc.caotai.publish.FramesService/GetHighlightSceneList?video_appid=3000116&vversion_platform=2&vdevice_guid=351e125e7fc9086c", {
+  "headers": {
+    "accept": "application/json",
+    "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "content-type": "application/json",
+    "sec-ch-ua": "\"Chromium\";v=\"148\", \"Google Chrome\";v=\"148\", \"Not/A)Brand\";v=\"99\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site"
+  },
+  "referrer": "https://lingya.qq.com/",
+  "body": "{\"vid\":\"w12683fag1o\"}",
+  "method": "POST",
+  "mode": "cors",
+  "credentials": "include"
+});
+response:
+{
+    "data": {
+        "highlight_segments": [
+            {
+                "start_ms": 0,
+                "end_ms": 1600
+            },
+            {
+                "start_ms": 1600,
+                "end_ms": 3680
+            },
+            {
+                "start_ms": 3680,
+                "end_ms": 4920
+            },
+            {
+                "start_ms": 4920,
+                "end_ms": 5760
+            },
+            {
+                "start_ms": 5760,
+                "end_ms": 7120
+            },
+            {
+                "start_ms": 7120,
+                "end_ms": 8640
+            },
+            {
+                "start_ms": 8640,
+                "end_ms": 10080
+            },
+            {
+                "start_ms": 10080,
+                "end_ms": 11680
+            },
+            {
+                "start_ms": 11680,
+                "end_ms": 16239
+            },
+            {
+                "start_ms": 16239,
+                "end_ms": 20560
+            },
+            {
+                "start_ms": 20560,
+                "end_ms": 23760
+            },
+            {
+                "start_ms": 23760,
+                "end_ms": 26680
+            },
+            {
+                "start_ms": 26680,
+                "end_ms": 32240
+            },
+            {
+                "start_ms": 32240,
+                "end_ms": 33160
+            },
+            {
+                "start_ms": 33160,
+                "end_ms": 34360
+            },
+            {
+                "start_ms": 34360,
+                "end_ms": 35400
+            },
+            {
+                "start_ms": 35400,
+                "end_ms": 36320
+            },
+            {
+                "start_ms": 36320,
+                "end_ms": 37360
+            },
+            {
+                "start_ms": 37360,
+                "end_ms": 38320
+            },
+            {
+                "start_ms": 38320,
+                "end_ms": 39280
+            },
+            {
+                "start_ms": 39280,
+                "end_ms": 40480
+            },
+            {
+                "start_ms": 40480,
+                "end_ms": 41720
+            },
+            {
+                "start_ms": 41720,
+                "end_ms": 42400
+            },
+            {
+                "start_ms": 42400,
+                "end_ms": 43760
+            },
+            {
+                "start_ms": 43760,
+                "end_ms": 45320
+            },
+            {
+                "start_ms": 45320,
+                "end_ms": 47120
+            },
+            {
+                "start_ms": 47120,
+                "end_ms": 48200
+            },
+            {
+                "start_ms": 48200,
+                "end_ms": 48840
+            },
+            {
+                "start_ms": 48840,
+                "end_ms": 50360
+            },
+            {
+                "start_ms": 50360,
+                "end_ms": 51920
+            },
+            {
+                "start_ms": 51920,
+                "end_ms": 53760
+            },
+            {
+                "start_ms": 53760,
+                "end_ms": 55840
+            },
+            {
+                "start_ms": 55840,
+                "end_ms": 57200
+            },
+            {
+                "start_ms": 57200,
+                "end_ms": 60440
+            },
+            {
+                "start_ms": 60440,
+                "end_ms": 64760
+            },
+            {
+                "start_ms": 64760,
+                "end_ms": 69400
+            },
+            {
+                "start_ms": 69400,
+                "end_ms": 73440
+            }
+        ],
+        "highlight_frames_file_data": null
+    },
+    "ret": 0,
+    "msg": ""
+}
