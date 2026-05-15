@@ -82,6 +82,60 @@ def _to_float(value: Any, default: float) -> float:
         return default
 
 
+def _image_size_from_bytes(data: bytes) -> tuple[int, int] | None:
+    if not data:
+        return None
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data.startswith(b"\xff\xd8"):
+        index = 2
+        while index + 8 < len(data):
+            while index < len(data) and data[index] == 0xFF:
+                index += 1
+            if index >= len(data):
+                break
+            marker = data[index]
+            index += 1
+            if marker in {0x01, *range(0xD0, 0xD8)}:
+                continue
+            if index + 2 > len(data):
+                break
+            length = int.from_bytes(data[index:index + 2], "big")
+            if length < 2 or index + length > len(data):
+                break
+            if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF} and length >= 7:
+                height = int.from_bytes(data[index + 3:index + 5], "big")
+                width = int.from_bytes(data[index + 5:index + 7], "big")
+                return width, height
+            index += length
+    if data.startswith(b"RIFF") and len(data) >= 30 and data[8:12] == b"WEBP":
+        chunk = data[12:16]
+        if chunk == b"VP8X" and len(data) >= 30:
+            width = int.from_bytes(data[24:27] + b"\x00", "little") + 1
+            height = int.from_bytes(data[27:30] + b"\x00", "little") + 1
+            return width, height
+        if chunk == b"VP8 " and len(data) >= 30 and data[23:26] == b"\x9d\x01\x2a":
+            width = int.from_bytes(data[26:28], "little") & 0x3FFF
+            height = int.from_bytes(data[28:30], "little") & 0x3FFF
+            return width, height
+        if chunk == b"VP8L" and len(data) >= 25 and data[20] == 0x2F:
+            bits = int.from_bytes(data[21:25], "little")
+            width = (bits & 0x3FFF) + 1
+            height = ((bits >> 14) & 0x3FFF) + 1
+            return width, height
+    return None
+
+
+def _cover_ratio_from_image_bytes(data: bytes, default: float) -> float:
+    size = _image_size_from_bytes(data)
+    if not size:
+        return default
+    width, height = size
+    if width <= 0 or height <= 0:
+        return default
+    return round(width / height, 6)
+
+
 def _unwrap_payload(data: Any) -> Any:
     current = data
     for _ in range(4):
@@ -282,7 +336,7 @@ def fetch_lingya_qq_publish_asset(
             cover_filename=cover_filename,
             cover_content_type=cover_type or "image/jpeg",
             duration=_to_int(defaults.get("duration"), 10),
-            cover_ratio=_to_float(defaults.get("cover_ratio"), 0.75),
+            cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, _to_float(defaults.get("cover_ratio"), 0.75)),
         )
 
     video_base64 = _pick(payload, ("video_base64", "videoBase64", "video_data", "videoData"))
@@ -315,6 +369,7 @@ def fetch_lingya_qq_publish_asset(
 
     title = _title_from_payload(payload, defaults)
     description = str(_pick(payload, ("description", "intro", "desc", "summary")) or defaults.get("description") or defaults.get("intro") or "")
+    fallback_cover_ratio = _to_float(_pick(payload, ("cover_ratio", "coverRatio")), _to_float(defaults.get("cover_ratio"), 0.75))
     return LingYaQQPublishAsset(
         title=title,
         description=description,
@@ -326,5 +381,5 @@ def fetch_lingya_qq_publish_asset(
         cover_filename=cover_filename,
         cover_content_type=cover_content_type or "image/jpeg",
         duration=max(_to_int(_pick(payload, ("duration", "duration_seconds", "durationSeconds")), _to_int(defaults.get("duration"), 10)), 1),
-        cover_ratio=_to_float(_pick(payload, ("cover_ratio", "coverRatio")), _to_float(defaults.get("cover_ratio"), 0.75)),
+        cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, fallback_cover_ratio),
     )

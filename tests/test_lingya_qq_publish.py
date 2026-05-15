@@ -27,6 +27,18 @@ def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
 
 
+def _png_header(width: int, height: int) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + b"\x08\x02\x00\x00\x00"
+        + b"\x00\x00\x00\x00"
+    )
+
+
 def test_publish_asset_retries_when_source_connection_is_aborted(monkeypatch):
     calls = []
 
@@ -98,3 +110,21 @@ def test_publish_asset_reads_intro_and_prompt_aliases(monkeypatch):
 
     assert asset.description == "intro text"
     assert asset.prompt == "scene prompt"
+
+
+def test_publish_asset_calculates_cover_ratio_from_cover_image(monkeypatch):
+    def fake_get(url, timeout=5, proxies=None):
+        return FakeResponse(
+            {
+                "title": "ratio title",
+                "video_base64": _b64(b"video"),
+                "cover_base64": _b64(_png_header(300, 400)),
+                "cover_ratio": 1.0,
+            }
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+
+    asset = fetch_lingya_qq_publish_asset("https://source.example/work")
+
+    assert asset.cover_ratio == 0.75

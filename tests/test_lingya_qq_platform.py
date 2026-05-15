@@ -1280,7 +1280,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
                 "data": {
                     "highlight_segments": [
                         {"start_ms": 0, "end_ms": 1600},
-                        {"start_ms": 1600, "end_ms": 3680},
+                        {"start_ms": 1600, "end_ms": 16239},
                     ],
                     "highlight_frames_file_data": None,
                 },
@@ -1320,7 +1320,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             cover_bytes=b"cover-bytes",
             cover_filename="cover.jpg",
             cover_content_type="image/jpeg",
-            duration=16,
+            duration=99,
             cover_ratio=0.75,
         )
 
@@ -1381,6 +1381,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert ("upload_work", 1, "vid123", "publish title") in events
     final_payload = upload_payloads[-1]
     assert final_payload["base_info"]["description"] == "publish intro"
+    assert final_payload["base_info"]["duration"] == 16
     assert final_payload["creation_tools"][2]["tools"][0]["title"] == "Seedance 2.0"
     assert final_payload["creation_tools"][2]["tools"][0]["id"] == "tag_8Hy4Gy2MCZ"
     assert final_payload["creation_processes"][0]["extra"] == '{"type":"text","data":{"text":"Seedance 2.0 Tool","pureText":true}}'
@@ -1403,7 +1404,7 @@ def test_lingya_qq_extracts_first_highlight_segment_from_scene_list():
             "data": {
                 "highlight_segments": [
                     {"start_ms": 0, "end_ms": 1600},
-                    {"start_ms": 1600, "end_ms": 3680},
+                    {"start_ms": 1600, "end_ms": 16239},
                 ],
                 "highlight_frames_file_data": None,
             },
@@ -1411,6 +1412,18 @@ def test_lingya_qq_extracts_first_highlight_segment_from_scene_list():
     )
 
     assert segment == {"start_ms": 0, "end_ms": 1600}
+    assert platform._duration_from_highlight_segments(
+        {
+            "ret": 0,
+            "data": {
+                "highlight_segments": [
+                    {"start_ms": 0, "end_ms": 1600},
+                    {"start_ms": 1600, "end_ms": 16239},
+                ],
+            },
+        },
+        99,
+    ) == 16
 
 
 def test_lingya_qq_publish_skips_when_local_released(monkeypatch):

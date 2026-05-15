@@ -980,21 +980,34 @@ class LingYaQQPlatform(BasePlatform):
                 raise TimeoutError(f"LingYaQQ work generation timed out: {last_payload}")
             self._sleep_with_cancel(min(max(poll_interval, 1), max(0, deadline - time.time())), cancel_check)
 
-    def _first_highlight_segment(self, payload: dict[str, Any]) -> dict[str, int]:
+    def _highlight_segments(self, payload: dict[str, Any]) -> list[dict[str, int]]:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         segments = data.get("highlight_segments") if isinstance(data, dict) else None
         if not isinstance(segments, list) or not segments:
-            return {}
-        first = segments[0]
-        if not isinstance(first, dict):
-            return {}
-        if first.get("end_ms") in (None, ""):
-            return {}
-        start_ms = max(_as_int(first.get("start_ms"), 0), 0)
-        end_ms = _as_int(first.get("end_ms"), 0)
-        if end_ms <= start_ms:
-            return {}
-        return {"start_ms": start_ms, "end_ms": end_ms}
+            return []
+        normalized: list[dict[str, int]] = []
+        for item in segments:
+            if not isinstance(item, dict):
+                continue
+            if item.get("end_ms") in (None, ""):
+                continue
+            start_ms = max(_as_int(item.get("start_ms"), 0), 0)
+            end_ms = _as_int(item.get("end_ms"), 0)
+            if end_ms <= start_ms:
+                continue
+            normalized.append({"start_ms": start_ms, "end_ms": end_ms})
+        return normalized
+
+    def _first_highlight_segment(self, payload: dict[str, Any]) -> dict[str, int]:
+        segments = self._highlight_segments(payload)
+        return segments[0] if segments else {}
+
+    def _duration_from_highlight_segments(self, payload: dict[str, Any], default: int) -> int:
+        segments = self._highlight_segments(payload)
+        if not segments:
+            return max(_as_int(default, 1), 1)
+        end_ms = segments[-1]["end_ms"]
+        return max(end_ms // 1000, 1)
 
     def _work_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
@@ -1356,6 +1369,7 @@ class LingYaQQPlatform(BasePlatform):
                     f"cannot submit final UploadWork without automatic segmentation result. highlight_keys={highlight_keys[:30]}"
                 ),
             }
+        publish_duration = self._duration_from_highlight_segments(highlight_list, asset.duration)
 
         review = client.content_security_review(asset.title)
         review_data = review.get("data") if isinstance(review.get("data"), dict) else {}
@@ -1381,7 +1395,7 @@ class LingYaQQPlatform(BasePlatform):
             title=asset.title,
             description=asset.description,
             cover_url=cover_url,
-            duration=asset.duration,
+            duration=publish_duration,
             cover_ratio=asset.cover_ratio,
             file_name=asset.video_filename,
         )
@@ -1391,7 +1405,7 @@ class LingYaQQPlatform(BasePlatform):
             title=asset.title,
             description=asset.description,
             cover_url=cover_url,
-            duration=asset.duration,
+            duration=publish_duration,
             cover_ratio=asset.cover_ratio,
             file_name=asset.video_filename,
             highlight_prompt=asset.prompt,
