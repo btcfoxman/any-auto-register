@@ -122,6 +122,9 @@ def test_lingya_followup_syncs_lingya2api_after_publish_success(monkeypatch):
                 "last_publish_vid": "vid123",
                 "quota_balance": 9,
                 "quota_sum": 10,
+                "nick": "赵二果",
+                "avatar": "https://filecdn.lumio.qq.com/image/cover.jpg",
+                "profile_updated": True,
                 "lingya_qq_publish_source_url": "https://example.com/work",
             },
         }
@@ -146,6 +149,11 @@ def test_lingya_followup_syncs_lingya2api_after_publish_success(monkeypatch):
     assert saved_accounts == [account]
     assert synced_accounts == [account]
     assert account.extra["last_publish_status"] == "released"
+    assert account.extra["nick"] == "赵二果"
+    assert account.extra["avatar"] == "https://filecdn.lumio.qq.com/image/cover.jpg"
+    assert account.extra["profile_updated"] is True
     assert account.extra["account_overview"]["last_publish_vid"] == "vid123"
     assert account.extra["account_overview"]["quota_balance"] == 9
+    assert account.extra["account_overview"]["nick"] == "赵二果"
+    assert account.extra["account_overview"]["avatar"] == "https://filecdn.lumio.qq.com/image/cover.jpg"
     assert any("发布完成后再次同步" in message for message, _ in logger.entries)

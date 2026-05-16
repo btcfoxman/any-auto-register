@@ -3,6 +3,7 @@
 import base64
 import io
 import json
+import random
 import time
 from typing import Any
 import zipfile
@@ -37,6 +38,13 @@ DEFAULT_CREATION_TOOL = {
     "model_type": "video",
 }
 LEGACY_CREATION_PROCESS_TEXTS = {"sora2 tool", "sora 2 tool", "seedance 2.0 tool"}
+BAIJIA_XING = tuple(
+    "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜"
+    "戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐"
+    "费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟"
+    "平黄和穆萧尹"
+)
+PROFILE_NICKNAME_MIDDLE_CHARS = ("", "大", "小", "二", "三", "六", "四", "十", "千")
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -134,6 +142,21 @@ def _creation_process_text(value: Any) -> str:
     if not text or text.lower() in LEGACY_CREATION_PROCESS_TEXTS:
         return DEFAULT_CREATION_PROCESS_TEXT
     return text
+
+
+def _chinese_chars(value: Any) -> list[str]:
+    return [char for char in str(value or "") if "\u4e00" <= char <= "\u9fff"]
+
+
+def _generate_lingya_profile_nickname(*texts: Any) -> str:
+    name_chars: list[str] = []
+    for text in texts:
+        name_chars = _chinese_chars(text)
+        if name_chars:
+            break
+    if not name_chars:
+        return ""
+    return f"{random.choice(BAIJIA_XING)}{random.choice(PROFILE_NICKNAME_MIDDLE_CHARS)}{random.choice(name_chars)}"[:20]
 
 
 def _normalize_sms_provider_key(value: Any) -> str:
@@ -1097,6 +1120,37 @@ class LingYaQQPlatform(BasePlatform):
             self.log(f"LingYaQQ quota refresh skipped {context}: {exc}")
             return {}
 
+    def _update_profile_for_publish(
+        self,
+        client: LingYaQQClient,
+        *,
+        avatar_url: str,
+        title: str,
+        description: str,
+        prompt: str,
+    ) -> dict[str, Any]:
+        avatar = str(avatar_url or "").strip()
+        if not avatar:
+            return {"profile_updated": False, "profile_update_error": "missing avatar url"}
+        nickname = _generate_lingya_profile_nickname(title, description, prompt)
+        if not nickname:
+            self.log("LingYaQQ publish: profile nickname skipped because title/intro/prompt has no Chinese character")
+        try:
+            client.edit_user_profile(avatar=avatar, nickname=nickname)
+            result: dict[str, Any] = {
+                "profile_updated": True,
+                "avatar": avatar,
+            }
+            if nickname:
+                result["nick"] = nickname
+            return result
+        except Exception as exc:
+            self.log(f"LingYaQQ publish: profile update skipped: {exc}")
+            return {
+                "profile_updated": False,
+                "profile_update_error": str(exc),
+            }
+
     def _quota_has_balance(self, quota: dict[str, Any]) -> bool:
         return _as_int(quota.get("quota_balance"), 0) > 0 or _as_int(quota.get("quota_sum"), 0) > 0
 
@@ -1429,6 +1483,13 @@ class LingYaQQPlatform(BasePlatform):
             filename=asset.cover_filename,
             content_type=asset.cover_content_type,
         )
+        profile_update = self._update_profile_for_publish(
+            client,
+            avatar_url=cover_url,
+            title=asset.title,
+            description=asset.description,
+            prompt=asset.prompt,
+        )
         self.log("LingYaQQ publish: uploading video")
         video_info = client.upload_video_bytes(
             asset.video_bytes,
@@ -1579,6 +1640,7 @@ class LingYaQQPlatform(BasePlatform):
                 "last_publish_initial_first_post_credit_granted": bool(initial_credit_data.get("is_granted")),
                 "last_publish_first_post_credit_granted": self._quota_has_balance(quota),
                 "last_publish_first_post_credit_text": initial_credit_data.get("text") or "",
+                **profile_update,
                 **publish_defaults,
                 **quota_overview,
             },

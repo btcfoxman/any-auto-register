@@ -95,6 +95,10 @@ The publish source may return JSON such as:
 video bytes directly, configure `lingya_qq_publish_cover_url`.
 `creationProcessText`, `creation_process`, `creationProcess`, `process_text`,
 and `processText` are accepted as aliases for `creation_process_text`.
+Before publishing, LingYaQQ updates the account avatar to the uploaded cover
+image. The nickname is generated as a short Chinese name from a random
+Baijiaxing surname plus one Chinese character from title, intro, or prompt; if
+no Chinese character is available, only the avatar is updated.
 
 `lingya_qq_auto_send_sms` is disabled by default because Lingya requires the
 human CAPTCHA step before SMS delivery in current testing.

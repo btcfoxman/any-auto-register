@@ -6,7 +6,13 @@ from core.registry import get, load_all
 from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS, _build_account_overview
 from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES, build_lingya_qq_account_fields
 from platforms.lingya_qq.core import DEFAULT_VIDEO_UPLOAD_SERVICE_ID, LingYaQQClient
-from platforms.lingya_qq.plugin import LingYaQQPlatform, _is_lingya_sms_code, _resolve_sms_runtime, _sms_timeout
+from platforms.lingya_qq.plugin import (
+    LingYaQQPlatform,
+    _generate_lingya_profile_nickname,
+    _is_lingya_sms_code,
+    _resolve_sms_runtime,
+    _sms_timeout,
+)
 from platforms.lingya_qq.publish import LingYaQQPublishAsset
 
 
@@ -71,6 +77,43 @@ def test_lingya_qq_sms_code_validation_rejects_placeholders():
     assert _is_lingya_sms_code("0") is False
     assert _is_lingya_sms_code("abc123") is False
     assert _sms_timeout("") == 300
+
+
+def test_lingya_qq_profile_nickname_uses_baijiaxing_and_content_char(monkeypatch):
+    choices = iter(["赵", "二", "果"])
+    monkeypatch.setattr("platforms.lingya_qq.plugin.random.choice", lambda values: next(choices))
+
+    assert _generate_lingya_profile_nickname("清透苹果眼镜", "ignored", "ignored") == "赵二果"
+
+
+def test_lingya_qq_profile_nickname_falls_back_to_intro_and_prompt(monkeypatch):
+    choices = iter(["李", "", "月"])
+    monkeypatch.setattr("platforms.lingya_qq.plugin.random.choice", lambda values: next(choices))
+
+    assert _generate_lingya_profile_nickname("Elegant Glasses", "warm island 月光", "ignored") == "李月"
+    assert _generate_lingya_profile_nickname("Elegant Glasses", "plain intro", "plain prompt") == ""
+
+
+def test_lingya_qq_profile_update_failure_is_non_blocking():
+    messages = []
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    platform.set_logger(lambda message: messages.append(message))
+
+    class FakeClient:
+        def edit_user_profile(self, *, avatar: str, nickname: str = ""):
+            raise RuntimeError("profile service unavailable")
+
+    result = platform._update_profile_for_publish(
+        FakeClient(),
+        avatar_url="https://filecdn.lumio.qq.com/image/cover.jpg",
+        title="清透果",
+        description="",
+        prompt="",
+    )
+
+    assert result["profile_updated"] is False
+    assert result["profile_update_error"] == "profile service unavailable"
+    assert any("profile update skipped" in message for message in messages)
 
 
 def test_lingya_qq_cookie_header_expands_to_account_fields():
@@ -1182,6 +1225,8 @@ def test_lingya_qq_sign_in_endpoints_match_observed_flow():
     client.check_first_post_credit()
     client.check_credits_first_register()
     client.get_user_events()
+    client.edit_user_profile(avatar="https://filecdn.lumio.qq.com/image/avatar.png", nickname="赵二果")
+    client.edit_user_profile(avatar="https://filecdn.lumio.qq.com/image/avatar-only.png")
 
     assert calls[0][0].endswith("/trpc.caotai.task_adapter.TaskAdapter/GetCreditsPanel")
     assert calls[0][1]["json"] == {"is_first_register": False}
@@ -1194,6 +1239,14 @@ def test_lingya_qq_sign_in_endpoints_match_observed_flow():
     assert "json" not in calls[3][1]
     assert calls[4][0].endswith("/trpc.caotai.account.UserEventService/GetUserEvents")
     assert "json" not in calls[4][1]
+    assert calls[5][0].endswith("/trpc.caotai.account.UserProfileService/EditUserProfile")
+    assert calls[5][1]["json"]["avatar"] == "https://filecdn.lumio.qq.com/image/avatar.png"
+    assert calls[5][1]["json"]["nickname"] == "赵二果"
+    assert calls[5][1]["json"]["fields_to_update"] == ["avatar", "nickname"]
+    assert calls[6][0].endswith("/trpc.caotai.account.UserProfileService/EditUserProfile")
+    assert calls[6][1]["json"]["avatar"] == "https://filecdn.lumio.qq.com/image/avatar-only.png"
+    assert "nickname" not in calls[6][1]["json"]
+    assert calls[6][1]["json"]["fields_to_update"] == ["avatar"]
 
 
 def test_lingya_qq_video_upload_uses_observed_service_id_and_sdk_headers(monkeypatch):
@@ -1286,6 +1339,10 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             events.append(("cover", filename, content_type, image_bytes))
             return "https://filecdn.lumio.qq.com/image/cover.jpg"
 
+        def edit_user_profile(self, *, avatar: str, nickname: str = ""):
+            events.append(("profile", avatar, nickname))
+            return {"ret": 0, "data": {}}
+
         def upload_video_bytes(self, video_bytes, *, filename="video.mp4", vuid, seq=None, service_id=None, chunk_size=1024 * 1024):
             events.append(("video", filename, vuid, video_bytes, service_id))
             return {"vid": "vid123", "file_name": filename}
@@ -1338,11 +1395,14 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
             return {"quota_balance": "300", "quota_sum": "300"}
 
     monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    nickname_choices = iter(["赵", "二", "果"])
+    monkeypatch.setattr("platforms.lingya_qq.plugin.random.choice", lambda values: next(nickname_choices))
+
     def fake_fetch_asset(*args, **kwargs):
         fetch_calls.append((args, kwargs))
         return LingYaQQPublishAsset(
             title="publish title",
-            description="publish intro",
+            description="publish intro 果",
             prompt="first scene prompt",
             video_bytes=b"video-bytes",
             video_filename="video.mp4",
@@ -1396,6 +1456,9 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     data = result["data"]
     assert data["last_publish_vid"] == "vid123"
     assert data["last_publish_status"] == "released"
+    assert data["profile_updated"] is True
+    assert data["avatar"] == "https://filecdn.lumio.qq.com/image/cover.jpg"
+    assert data["nick"] == "赵二果"
     assert data["quota_balance"] == "300"
     assert data["lingya_qq_publish_source_url"] == "https://example.com/work"
     assert data["lingya_qq_publish_source_timeout"] == 12
@@ -1416,12 +1479,16 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     ]
     assert ("first_post_credit",) in events
     assert events.count(("first_post_credit",)) == 1
+    assert ("profile", "https://filecdn.lumio.qq.com/image/cover.jpg", "赵二果") in events
+    assert events.index(("profile", "https://filecdn.lumio.qq.com/image/cover.jpg", "赵二果")) < events.index(
+        ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID)
+    )
     assert ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID) in events
     assert ("highlight_scene_list", "vid123") in events
     assert ("upload_work", 2, "vid123", "publish title") in events
     assert ("upload_work", 1, "vid123", "publish title") in events
     final_payload = upload_payloads[-1]
-    assert final_payload["base_info"]["description"] == "publish intro"
+    assert final_payload["base_info"]["description"] == "publish intro 果"
     assert final_payload["base_info"]["duration"] == 16
     assert final_payload["creation_tools"][2]["tools"][0]["title"] == "Seedance 2.0"
     assert final_payload["creation_tools"][2]["tools"][0]["id"] == "tag_8Hy4Gy2MCZ"

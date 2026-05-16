@@ -542,6 +542,10 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
         "last_publish_first_post_credit_text",
         "publish_skipped",
         "publish_skip_reason",
+        "nick",
+        "avatar",
+        "profile_updated",
+        "profile_update_error",
         "quota_balance",
         "quota_sum",
     }

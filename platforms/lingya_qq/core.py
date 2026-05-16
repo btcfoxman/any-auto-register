@@ -370,6 +370,26 @@ class LingYaQQClient:
             raise RuntimeError(f"LingYaQQ image data-url upload did not return url: {data}")
         return url
 
+    def edit_user_profile(self, *, avatar: str, nickname: str = "") -> dict[str, Any]:
+        fields_to_update = ["avatar"]
+        payload: dict[str, Any] = {
+            "avatar": str(avatar or "").strip(),
+            "personal_intro": "",
+            "visible_setting": 0,
+            "bg_url": "https://filecdn.lumio.qq.com/image/default-person-bg.png",
+            "fields_to_update": fields_to_update,
+        }
+        nickname = str(nickname or "").strip()
+        if nickname:
+            payload["nickname"] = nickname[:20]
+            fields_to_update.append("nickname")
+        data = self._post_pbaccess(
+            "/trpc.caotai.account.UserProfileService/EditUserProfile",
+            payload,
+        )
+        _raise_for_ret(data, "LingYaQQ EditUserProfile")
+        return data
+
     def _post_video_json(
         self,
         host: str,
