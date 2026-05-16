@@ -41,6 +41,8 @@ def test_lingya_qq_exposes_relogin_sms_action():
 
     assert any(item["id"] == "relogin_sms" for item in actions)
     assert any(item["id"] == "keepalive_sync" for item in actions)
+    assert any(item["id"] == "stop_keepalive" for item in actions)
+    assert any(item["id"] == "resume_keepalive" for item in actions)
     assert any(item["id"] == "sync_lingya2api" for item in actions)
     assert any(item["id"] == "daily_sign_in" for item in actions)
     assert any(item["id"] == "publish_work" for item in actions)
@@ -60,11 +62,32 @@ def test_lingya_qq_exposes_relogin_sms_action():
     } <= publish_param_keys
     assert "relogin_sms" in STATEFUL_ACTION_IDS
     assert "keepalive_sync" in STATEFUL_ACTION_IDS
+    assert "stop_keepalive" in STATEFUL_ACTION_IDS
+    assert "resume_keepalive" in STATEFUL_ACTION_IDS
     assert "sync_lingya2api" in STATEFUL_ACTION_IDS
     assert "daily_sign_in" in STATEFUL_ACTION_IDS
     assert "publish_work" in STATEFUL_ACTION_IDS
     assert {"vusession", "vurefresh", "vuid", "vdevice_guid"} <= PERSISTED_ACTION_DATA_KEYS
     assert {"v_vusession", "v_vurefresh", "v_vuserid", "vqq_vusession", "vdevice_guid"} <= PERSISTED_ACTION_DATA_KEYS
+
+
+def test_lingya_qq_keepalive_preference_actions_update_overview():
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(platform="lingya_qq", email="phone", password="", extra={})
+
+    stop_result = platform.execute_action("stop_keepalive", account, {"reason": "manual review"})
+    assert stop_result["ok"] is True
+    stop_overview = _build_account_overview("lingya_qq", stop_result["data"])
+    assert stop_overview["lingya_keepalive_disabled"] is True
+    assert stop_overview["lingya_keepalive_state"] == "disabled"
+    assert stop_overview["lingya_keepalive_disabled_reason"] == "manual review"
+
+    resume_result = platform.execute_action("resume_keepalive", account, {})
+    assert resume_result["ok"] is True
+    resume_overview = _build_account_overview("lingya_qq", resume_result["data"])
+    assert resume_overview["lingya_keepalive_disabled"] is False
+    assert resume_overview["lingya_keepalive_state"] == "enabled"
+    assert resume_overview["lingya_keepalive_disabled_reason"] == ""
 
 
 def test_lingya_qq_sms_timeout_is_capped_at_300_seconds():

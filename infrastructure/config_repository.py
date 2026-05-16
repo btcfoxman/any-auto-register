@@ -14,6 +14,8 @@ class ConfigRepository:
         "any2api_url", "any2api_password",
         "lingya2api_url", "lingya2api_api_key", "lingya2api_max_concurrency",
         "lingya_qq_keepalive_enabled", "lingya_qq_heartbeat_interval_seconds", "lingya_qq_balance_interval_seconds",
+        "lingya_qq_keepalive_retire_enabled", "lingya_qq_keepalive_retire_quota_threshold",
+        "lingya_qq_keepalive_retire_after_hours",
         "lingya_qq_auto_daily_sign_in", "lingya_qq_auto_publish_after_register", "lingya_qq_publish_required",
         "lingya_qq_publish_source_url", "lingya_qq_publish_cover_url",
         "lingya_qq_publish_creation_process_text",

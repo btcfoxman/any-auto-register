@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlmodel import Session, select
 
-from core.account_graph import load_account_graphs
+from core.account_graph import load_account_graphs, patch_account_graph
+from core.base_platform import AccountStatus
 from core.db import AccountModel, engine
 from domain.actions import ActionExecutionCommand
 from infrastructure.platform_runtime import PlatformRuntime
@@ -16,6 +18,8 @@ from infrastructure.platform_runtime import PlatformRuntime
 ACTIVE_LIFECYCLE_STATUSES = {"registered", "trial", "subscribed"}
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 300
 DEFAULT_BALANCE_INTERVAL_SECONDS = 60
+DEFAULT_RETIRE_QUOTA_THRESHOLD = 57
+DEFAULT_RETIRE_AFTER_HOURS = 24
 
 
 class LingYaKeepaliveWorker:
@@ -92,10 +96,26 @@ class LingYaKeepaliveWorker:
             return {}
 
     def _target_account_ids(self, *, refresh_quota: bool = False) -> list[int]:
+        config = self._config()
+        retire_enabled = _as_bool(config.get("lingya_qq_keepalive_retire_enabled"), True)
+        retire_quota_threshold = _bounded_int(
+            config.get("lingya_qq_keepalive_retire_quota_threshold"),
+            0,
+            1_000_000,
+            DEFAULT_RETIRE_QUOTA_THRESHOLD,
+        )
+        retire_after_hours = _bounded_int(
+            config.get("lingya_qq_keepalive_retire_after_hours"),
+            0,
+            24 * 365 * 10,
+            DEFAULT_RETIRE_AFTER_HOURS,
+        )
+        now = datetime.now(timezone.utc)
         with Session(engine) as session:
             accounts = session.exec(select(AccountModel).where(AccountModel.platform == "lingya_qq")).all()
             graphs = load_account_graphs(session, [int(item.id or 0) for item in accounts if item.id])
             ids: list[int] = []
+            retired_count = 0
             for account in accounts:
                 account_id = int(account.id or 0)
                 if account_id <= 0:
@@ -105,12 +125,83 @@ class LingYaKeepaliveWorker:
                 lifecycle = str(graph.get("lifecycle_status") or overview.get("lifecycle_status") or "registered")
                 if lifecycle not in ACTIVE_LIFECYCLE_STATUSES:
                     continue
+                if _as_bool(overview.get("lingya_keepalive_disabled"), False):
+                    continue
+                if retire_enabled and self._should_retire_low_quota(
+                    account=account,
+                    overview=overview,
+                    now=now,
+                    quota_threshold=retire_quota_threshold,
+                    after_hours=retire_after_hours,
+                ):
+                    self._retire_low_quota_account(
+                        session=session,
+                        account=account,
+                        overview=overview,
+                        now=now,
+                        quota_threshold=retire_quota_threshold,
+                        after_hours=retire_after_hours,
+                    )
+                    retired_count += 1
+                    continue
                 if refresh_quota:
                     validity = str(graph.get("validity_status") or overview.get("validity_status") or "").lower()
                     if validity == "invalid" or overview.get("valid") is False:
                         continue
                 ids.append(account_id)
+            if retired_count:
+                session.commit()
             return ids
+
+    def _should_retire_low_quota(
+        self,
+        *,
+        account: AccountModel,
+        overview: dict[str, Any],
+        now: datetime,
+        quota_threshold: int,
+        after_hours: int,
+    ) -> bool:
+        quota_balance = _optional_int(overview.get("quota_balance"))
+        if quota_balance is None:
+            return False
+        if quota_balance >= quota_threshold:
+            return False
+        age_hours = _account_age_hours(account, now)
+        return age_hours is not None and age_hours >= after_hours
+
+    def _retire_low_quota_account(
+        self,
+        *,
+        session: Session,
+        account: AccountModel,
+        overview: dict[str, Any],
+        now: datetime,
+        quota_threshold: int,
+        after_hours: int,
+    ) -> None:
+        quota_balance = _optional_int(overview.get("quota_balance"))
+        account.updated_at = now
+        patch_account_graph(
+            session,
+            account,
+            lifecycle_status=AccountStatus.EXPIRED.value,
+            summary_updates={
+                "lingya_keepalive_retired": True,
+                "lingya_keepalive_retire_reason": "low_quota_after_age",
+                "lingya_keepalive_retire_quota_balance": quota_balance,
+                "lingya_keepalive_retire_quota_threshold": quota_threshold,
+                "lingya_keepalive_retire_after_hours": after_hours,
+                "lingya_keepalive_retired_at": _isoformat_z(now),
+                "status_note": f"low quota below {quota_threshold} after {after_hours}h",
+            },
+        )
+        session.add(account)
+        print(
+            "[LingYaKeepalive] account "
+            f"{int(account.id or 0)} retired: quota={quota_balance}, "
+            f"threshold={quota_threshold}, age>={after_hours}h"
+        )
 
     def _run_for_accounts(self, *, refresh_quota: bool, run_hello: bool = True) -> None:
         runtime = PlatformRuntime()
@@ -162,6 +253,30 @@ def _bounded_int(value: Any, minimum: int, maximum: int, fallback: int) -> int:
     except (TypeError, ValueError):
         parsed = fallback
     return max(minimum, min(maximum, parsed))
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _account_age_hours(account: AccountModel, now: datetime) -> float | None:
+    created_at = getattr(account, "created_at", None)
+    if not isinstance(created_at, datetime):
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - created_at.astimezone(timezone.utc)).total_seconds() / 3600)
+
+
+def _isoformat_z(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 lingya_keepalive_worker = LingYaKeepaliveWorker()

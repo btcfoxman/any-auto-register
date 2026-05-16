@@ -19,6 +19,8 @@ manual-assisted.
 8. The `keepalive_sync` action runs `Space/Hello`, refreshes the session with
    `WebRefresh` when the cookie schedule is due, and syncs the latest cookie
    header to a configured lingya2api instance.
+   Per-account automatic keepalive can be disabled with the
+   `stop_keepalive` action and later re-enabled with `resume_keepalive`.
 9. Optional post-register automation can run the daily credits sign-in, publish
    one work from a third-party GET source, wait for the released status, refresh
    quota, and then sync the updated account state.
@@ -50,6 +52,10 @@ Useful extra fields:
 - `lingya2api_url`: optional lingya2api service URL
 - `lingya2api_api_key`: optional API key for `x-api-key`
 - `lingya2api_max_concurrency`: pushed to lingya2api account metadata
+- `lingya_qq_keepalive_retire_enabled`: defaults to enabled; stops keepalive
+  for low-quota old accounts by marking them expired
+- `lingya_qq_keepalive_retire_quota_threshold`: defaults to `57`
+- `lingya_qq_keepalive_retire_after_hours`: defaults to `24`
 - `lingya_qq_auto_daily_sign_in`: defaults to enabled
 - `lingya_qq_auto_publish_after_register`: defaults to enabled when
   `lingya_qq_publish_source_url` is set

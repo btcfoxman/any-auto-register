@@ -68,6 +68,8 @@ STATEFUL_ACTION_IDS = {
     "sync_lingya2api",
     "daily_sign_in",
     "publish_work",
+    "stop_keepalive",
+    "resume_keepalive",
 }
 CASHIER_URL_ACTION_IDS = {
     "payment_link",
@@ -263,6 +265,16 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
         ):
             if data.get(key) not in (None, ""):
                 overview[key] = data.get(key)
+        if "lingya_keepalive_disabled" in data:
+            overview["lingya_keepalive_disabled"] = bool(data.get("lingya_keepalive_disabled"))
+        for key in (
+            "lingya_keepalive_state",
+            "lingya_keepalive_disabled_reason",
+            "lingya_keepalive_disabled_at",
+            "lingya_keepalive_resumed_at",
+        ):
+            if key in data:
+                overview[key] = data.get(key) or ""
         publish_config = {
             key: data.get(key)
             for key in (
@@ -292,6 +304,11 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             overview["chips"].append(f"额度 {data.get('quota_balance', '-')}/{data.get('quota_sum', '-')}")
         if data.get("session_refreshed"):
             overview["chips"].append("会话已刷新")
+
+        if data.get("lingya_keepalive_disabled") is True:
+            overview["chips"].append("自动保活已停止")
+        elif data.get("lingya_keepalive_disabled") is False:
+            overview["chips"].append("自动保活已恢复")
 
         if data.get("daily_sign_in_status"):
             overview["chips"].append(f"Sign-in {data.get('daily_sign_in_status')}")

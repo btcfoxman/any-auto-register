@@ -280,6 +280,9 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'lingya_qq_keepalive_enabled', label: '启用本地保活', placeholder: 'true' },
         { key: 'lingya_qq_heartbeat_interval_seconds', label: '心跳间隔秒数', placeholder: '300' },
         { key: 'lingya_qq_balance_interval_seconds', label: '额度刷新间隔秒数', placeholder: '60' },
+        { key: 'lingya_qq_keepalive_retire_enabled', label: '低额度自动停保活', placeholder: 'true' },
+        { key: 'lingya_qq_keepalive_retire_quota_threshold', label: '停保活额度阈值', placeholder: '57' },
+        { key: 'lingya_qq_keepalive_retire_after_hours', label: '停保活账号年龄小时', placeholder: '24' },
       ],
     }, {
       section: '注册后自动化',

@@ -496,6 +496,24 @@ class LingYaQQPlatform(BasePlatform):
         )
         actions.append(
             {
+                "id": "stop_keepalive",
+                "label": "停止 LingYaQQ 自动保活",
+                "sync": True,
+                "params": [
+                    {"key": "reason", "label": "停止原因（可选）", "type": "text"},
+                ],
+            }
+        )
+        actions.append(
+            {
+                "id": "resume_keepalive",
+                "label": "恢复 LingYaQQ 自动保活",
+                "sync": True,
+                "params": [],
+            }
+        )
+        actions.append(
+            {
                 "id": "sync_lingya2api",
                 "label": "同步到 lingya2api",
                 "sync": False,
@@ -1819,11 +1837,38 @@ class LingYaQQPlatform(BasePlatform):
     def get_quota(self, account: Account) -> dict:
         return self._load_state(account).get("summary", {})
 
+    def _handle_keepalive_preference(self, account: Account, params: dict | None = None, *, disabled: bool) -> dict:
+        now = int(time.time())
+        reason = str((params or {}).get("reason") or "").strip() or "manual"
+        if disabled:
+            data = {
+                "message": "LingYaQQ 自动保活已停止",
+                "lingya_keepalive_disabled": True,
+                "lingya_keepalive_state": "disabled",
+                "lingya_keepalive_disabled_reason": reason,
+                "lingya_keepalive_disabled_at": now,
+                "lingya_keepalive_resumed_at": "",
+            }
+        else:
+            data = {
+                "message": "LingYaQQ 自动保活已恢复",
+                "lingya_keepalive_disabled": False,
+                "lingya_keepalive_state": "enabled",
+                "lingya_keepalive_disabled_reason": "",
+                "lingya_keepalive_disabled_at": "",
+                "lingya_keepalive_resumed_at": now,
+            }
+        return {"ok": True, "data": data}
+
     def execute_action(self, action_id: str, account: Account, params: dict) -> dict:
         if action_id == "relogin_sms":
             return self._handle_relogin_sms(account, params or {})
         if action_id == "keepalive_sync":
             return self._handle_keepalive_sync(account, params or {})
+        if action_id == "stop_keepalive":
+            return self._handle_keepalive_preference(account, params or {}, disabled=True)
+        if action_id == "resume_keepalive":
+            return self._handle_keepalive_preference(account, params or {}, disabled=False)
         if action_id == "sync_lingya2api":
             return self._handle_sync_lingya2api(account, params or {})
         if action_id == "daily_sign_in":
