@@ -473,6 +473,42 @@ _BUILTIN_DEFINITIONS: list[dict] = [
     },
     # ── proxy ────────────────────────────────────────────────────────
     {
+        "provider_type": "sms",
+        "provider_key": "feihumsg_api",
+        "label": "FeiHuMsg",
+        "description": "飞狐接码平台，使用 API 账号密码登录获取 Token，通过项目 ID 取号并按订单号取码",
+        "driver_type": "feihumsg_api",
+        "default_auth_mode": "password",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [
+            {"value": "password", "label": "账号密码"},
+        ],
+        "fields": [
+            {"key": "feihumsg_user", "label": "API 账号", "category": "auth"},
+            {"key": "feihumsg_password", "label": "API 密码", "secret": True, "category": "auth"},
+            {"key": "feihumsg_pid", "label": "项目 ID", "placeholder": "1001", "category": "identity", "hint": "支持多个项目 ID，用逗号、空格或换行分隔；取号时按从左到右顺序优先尝试。"},
+            {"key": "feihumsg_province", "label": "省份枚举（可选）", "placeholder": "19", "category": "connection"},
+            {"key": "feihumsg_isp", "label": "运营商枚举（可选）", "placeholder": "1", "category": "connection"},
+            {
+                "key": "feihumsg_card_type",
+                "label": "卡类型",
+                "type": "select",
+                "category": "connection",
+                "options": [
+                    {"value": "", "label": "全部"},
+                    {"value": "1", "label": "实卡"},
+                    {"value": "2", "label": "虚卡"},
+                ],
+            },
+            {"key": "feihumsg_phone", "label": "指定号码（可选）", "placeholder": "13800138000", "category": "identity"},
+            {"key": "feihumsg_include", "label": "包含号段（可选）", "placeholder": "138|139", "category": "connection"},
+            {"key": "feihumsg_exclude", "label": "排除号段（可选）", "placeholder": "170|171", "category": "connection"},
+            {"key": "feihumsg_author", "label": "号码作者（可选）", "category": "connection"},
+            {"key": "feihumsg_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "10", "category": "connection", "hint": "飞狐文档建议轮询间隔不低于 10 秒。"},
+        ],
+    },
+    {
         "provider_type": "proxy",
         "provider_key": "api_extract",
         "label": "API 提取代理",
@@ -511,6 +547,7 @@ _LEGACY_PROVIDER_ALIASES = {
     ("sms", "smsbower"): "smsbower_api",
     ("sms", "uomsg"): "uomsg_api",
     ("sms", "eomsg"): "eomsg_api",
+    ("sms", "feihumsg"): "feihumsg_api",
     ("sms", "haozhuma"): "haozhuma_api",
 }
 

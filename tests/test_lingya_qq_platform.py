@@ -35,6 +35,18 @@ def test_lingya_qq_resolves_eomsg_inline_token():
     assert settings["eomsg_token"] == "tok123"
 
 
+def test_lingya_qq_resolves_feihumsg_inline_auth():
+    provider_key, settings = _resolve_sms_runtime({
+        "feihumsg_user": "user1",
+        "feihumsg_password": "pass1",
+        "feihumsg_pid": "1001",
+    })
+
+    assert provider_key == "feihumsg_api"
+    assert settings["feihumsg_user"] == "user1"
+    assert settings["feihumsg_pid"] == "1001"
+
+
 def test_lingya_qq_normalizes_haozhuma_provider_alias():
     provider_key, settings = _resolve_sms_runtime({"sms_provider": "HaoZhuMa", "haozhuma_sid": "1000"})
 

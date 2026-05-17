@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from core.base_sms import (
     EOMsgProvider,
+    FeiHuMsgProvider,
     HERO_SMS_DEFAULT_COUNTRY,
     HERO_SMS_DEFAULT_SERVICE,
     HaoZhuMaProvider,
@@ -305,6 +306,53 @@ def eomsg_balance(body: EOMsgQueryRequest | None = None):
     provider = _eomsg_from_payload(body)
     if not provider.token:
         raise HTTPException(400, "EOMsg API Token 未配置")
+    try:
+        return {"balance": provider.get_balance()}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+# ── FeiHuMsg endpoints ──────────────────────────────────────────────────────
+
+class FeiHuMsgQueryRequest(BaseModel):
+    user: str = ""
+    password: str = ""
+    pid: str = ""
+    proxy: str = ""
+
+
+def _saved_feihumsg_config() -> dict:
+    return ProviderSettingsRepository().resolve_runtime_settings("sms", "feihumsg_api", {})
+
+
+def _feihumsg_from_payload(payload: FeiHuMsgQueryRequest | None = None) -> FeiHuMsgProvider:
+    payload = payload or FeiHuMsgQueryRequest()
+    saved = _saved_feihumsg_config()
+    inline_auth = bool(str(payload.user or "").strip() or str(payload.password or "").strip())
+
+    def _store_token(token: str) -> None:
+        if inline_auth:
+            return
+        ProviderSettingsRepository().update_auth_values("sms", "feihumsg_api", {"feihumsg_cached_token": token})
+
+    return FeiHuMsgProvider(
+        token=str(saved.get("feihumsg_cached_token") or saved.get("feihumsg_token") or "").strip(),
+        user=str(payload.user or saved.get("feihumsg_user") or saved.get("feihumsg_username") or "").strip(),
+        password=str(payload.password or saved.get("feihumsg_password") or "").strip(),
+        pid=str(payload.pid or saved.get("feihumsg_pid") or saved.get("sms_service") or "").strip(),
+        proxy=str(payload.proxy or saved.get("sms_proxy") or saved.get("proxy") or "") or None,
+        base_url=str(saved.get("feihumsg_base_url") or "").strip(),
+        poll_interval=_safe_int(saved.get("feihumsg_poll_interval"), 10),
+        token_store=_store_token,
+    )
+
+
+@router.post("/feihumsg/balance")
+def feihumsg_balance(body: FeiHuMsgQueryRequest | None = None):
+    body = body or FeiHuMsgQueryRequest()
+    provider = _feihumsg_from_payload(body)
+    if (not provider.user or not provider.password) and not provider.token:
+        raise HTTPException(400, "FeiHuMsg API 账号密码未配置")
     try:
         return {"balance": provider.get_balance()}
     except Exception as exc:

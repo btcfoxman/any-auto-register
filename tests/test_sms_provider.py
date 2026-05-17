@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from core.base_sms import (
     EOMsgProvider,
+    FeiHuMsgProvider,
     HeroSmsProvider,
     HaoZhuMaProvider,
     SmsActivation,
@@ -100,6 +101,20 @@ class TestCreateSmsProvider:
     def test_eomsg_missing_token(self):
         with pytest.raises(RuntimeError, match="EOMsg 未配置"):
             create_sms_provider("eomsg_api", {})
+
+    def test_feihumsg(self):
+        provider = create_sms_provider(
+            "feihumsg_api",
+            {"feihumsg_user": "user1", "feihumsg_password": "pass1", "feihumsg_pid": "1001"},
+        )
+        assert isinstance(provider, FeiHuMsgProvider)
+        assert provider.user == "user1"
+        assert provider.password == "pass1"
+        assert provider.pid == "1001"
+
+    def test_feihumsg_missing_auth(self):
+        with pytest.raises(RuntimeError, match="FeiHuMsg 未配置"):
+            create_sms_provider("feihumsg_api", {"feihumsg_pid": "1001"})
 
     def test_haozhuma(self):
         provider = create_sms_provider(
@@ -334,6 +349,125 @@ class TestEOMsgProvider:
 
         provider.cancel(activation.activation_id)
         assert calls[1][1] == {"code": "release", "token": "tok", "phone": "16512345678"}
+
+
+class TestFeiHuMsgProvider:
+    def test_get_number_get_code_release_and_blacklist(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            path = url.rsplit("api/sms/", 1)[-1]
+            if path == "login":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"token": "tok123"}})
+            if path == "getPhone":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"pid": 1001, "phone": "16512345678", "order_id": "order-1", "province": "广东"}})
+            if path == "getMessage":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"order_id": "order-1", "phone": "16512345678", "code": "654321", "message": "验证码 654321", "status": 3}})
+            if path in {"cancelRecv", "addBlackList"}:
+                return FakeResponse({"code": 200, "msg": "OK", "data": {}})
+            raise AssertionError(f"unexpected path: {path}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        stored_tokens = []
+        provider = FeiHuMsgProvider(
+            user="user1",
+            password="pass1",
+            pid="1001",
+            province="19",
+            poll_interval=10,
+            token_store=stored_tokens.append,
+        )
+        activation = provider.get_number(service="qq")
+
+        assert activation.activation_id == "order-1"
+        assert activation.phone_number == "16512345678"
+        assert activation.metadata["pid"] == "1001"
+        assert provider.get_code(activation.activation_id, timeout=5) == "654321"
+        assert provider.report_success(activation.activation_id) is True
+        assert calls[0][1] == {"user": "user1", "pass": "pass1"}
+        assert calls[1][1] == {"token": "tok123", "pid": "1001", "province": "19"}
+        assert calls[2][1] == {"token": "tok123", "order_id": "order-1"}
+        assert calls[3][1] == {"token": "tok123", "order_id": "order-1"}
+        assert calls[4][1] == {"token": "tok123", "order_id": "order-1"}
+        assert stored_tokens == ["tok123"]
+
+    def test_get_number_tries_multiple_pids_in_order(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            payload = dict(params or {})
+            calls.append(payload)
+            path = url.rsplit("api/sms/", 1)[-1]
+            if path == "getPhone" and payload.get("pid") == "1000":
+                return FakeResponse({"code": 500, "msg": "NO_NUMBERS", "data": {}})
+            if path == "getPhone" and payload.get("pid") == "1001":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"pid": 1001, "phone": "16533333333", "order_id": "order-2"}})
+            if path == "cancelRecv":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {}})
+            raise AssertionError(f"unexpected path: {path}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = FeiHuMsgProvider(token="tok123", pid="1000,1001")
+        activation = provider.get_number(service="qq")
+
+        assert activation.activation_id == "order-2"
+        assert activation.phone_number == "16533333333"
+        assert [call["pid"] for call in calls if "pid" in call] == ["1000", "1001"]
+
+        provider.cancel(activation.activation_id)
+
+    def test_get_code_ignores_single_digit_placeholder_code(self, monkeypatch):
+        responses = [
+            {"code": 200, "msg": "OK", "data": {"status": 1, "code": "0", "message": ""}},
+            {"code": 200, "msg": "OK", "data": {"status": 3, "code": "112233", "message": "验证码 112233"}},
+        ]
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            return FakeResponse(responses.pop(0))
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = FeiHuMsgProvider(token="tok123", pid="1001", poll_interval=10)
+        provider._activations["order-1"] = {"pid": "1001", "phone": "16512345678", "order_id": "order-1"}
+
+        assert provider.get_code("order-1", timeout=5) == "112233"
 
 
 class TestHaoZhuMaProvider:

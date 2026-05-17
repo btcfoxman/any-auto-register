@@ -47,6 +47,18 @@ def test_config_options_include_haozhuma_provider(client):
     assert any(field["key"] == "haozhuma_batch_size" for field in haozhuma["fields"])
 
 
+def test_config_options_include_feihumsg_provider(client):
+    resp = client.get("/api/config/options")
+    assert resp.status_code == 200
+    data = resp.json()
+    providers = data["sms_providers"]
+    feihumsg = next(item for item in providers if item["value"] == "feihumsg_api")
+    assert feihumsg["label"] == "FeiHuMsg"
+    assert any(field["key"] == "feihumsg_user" for field in feihumsg["fields"])
+    assert any(field["key"] == "feihumsg_password" for field in feihumsg["fields"])
+    assert any(field["key"] == "feihumsg_pid" for field in feihumsg["fields"])
+
+
 def test_herosms_balance_endpoint_accepts_inline_api_key(client, monkeypatch):
     monkeypatch.setattr("core.base_sms.HeroSmsProvider.get_balance", lambda self: 12.345)
 
@@ -112,3 +124,22 @@ def test_haozhuma_balance_endpoint_requires_auth(client):
 
     assert resp.status_code == 400
     assert "HaoZhuMa API 账号密码" in resp.json()["detail"]
+
+
+def test_feihumsg_balance_endpoint_accepts_inline_credentials(client, monkeypatch):
+    monkeypatch.setattr("core.base_sms.FeiHuMsgProvider.get_balance", lambda self: 28.5)
+
+    resp = client.post(
+        "/api/sms/feihumsg/balance",
+        json={"user": "user1", "password": "pass1", "pid": "1001"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"balance": 28.5}
+
+
+def test_feihumsg_balance_endpoint_requires_auth(client):
+    resp = client.post("/api/sms/feihumsg/balance", json={})
+
+    assert resp.status_code == 400
+    assert "FeiHuMsg API 账号密码" in resp.json()["detail"]

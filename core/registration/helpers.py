@@ -125,6 +125,7 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
         or merged.get("smsbower_country")
         or merged.get("smsbower_default_country")
         or merged.get("eomsg_province")
+        or merged.get("feihumsg_province")
         or merged.get("haozhuma_province")
         or ""
     ).strip()
@@ -134,6 +135,7 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
         or merged.get("herosms_default_service")
         or merged.get("smsbower_service")
         or merged.get("smsbower_default_service")
+        or merged.get("feihumsg_pid")
         or merged.get("haozhuma_sid")
         or merged.get("sms_activate_service")
         or merged.get("sms_activate_default_service")

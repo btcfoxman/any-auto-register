@@ -1279,6 +1279,293 @@ class EOMsgProvider(UOMsgProvider):
 
 
 HAOZHUMA_DEFAULT_BASE_URL = "https://api.haozhuyun.com/sms/"
+FEIHUMSG_DEFAULT_BASE_URL = "http://api.feihu2026.com"
+
+
+class FeiHuMsgProvider(BaseSmsProvider):
+    """FeiHuMsg provider (api.feihu2026.com)."""
+
+    BASE_URL = FEIHUMSG_DEFAULT_BASE_URL
+    PROVIDER_KEY = "feihumsg"
+
+    def __init__(
+        self,
+        *,
+        user: str = "",
+        password: str = "",
+        token: str = "",
+        pid: str = "",
+        phone: str = "",
+        isp: str = "",
+        province: str = "",
+        card_type: str = "",
+        include: str = "",
+        exclude: str = "",
+        author: str = "",
+        poll_interval: int = 10,
+        proxy: str | None = None,
+        base_url: str = "",
+        token_store: Callable[[str], None] | None = None,
+    ):
+        self.token = str(token or "").strip()
+        self.user = str(user or "").strip()
+        self.password = str(password or "").strip()
+        self.pid = str(pid or "").strip()
+        self.phone = str(phone or "").strip()
+        self.isp = str(isp or "").strip()
+        self.province = str(province or "").strip()
+        self.card_type = str(card_type or "").strip()
+        self.include = str(include or "").strip()
+        self.exclude = str(exclude or "").strip()
+        self.author = str(author or "").strip()
+        self.poll_interval = max(10, _safe_int(poll_interval, 10))
+        self.base_url = str(base_url or self.BASE_URL).strip().rstrip("/") or self.BASE_URL
+        self.proxies = {"http": proxy, "https": proxy} if proxy else None
+        self._token_store = token_store
+        self._activations: dict[str, dict[str, str]] = {}
+        self._closed_activations: set[str] = set()
+
+    def _send_request(self, path: str, payload: dict[str, str]) -> dict:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        resp = requests.get(url, params=payload, timeout=20, proxies=self.proxies)
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise RuntimeError(f"FeiHuMsg {path} returned invalid JSON: {resp.text[:200]}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"FeiHuMsg {path} returned unexpected response: {data!r}")
+        return data
+
+    def _request(self, path: str, *, needs_token: bool = True, **params) -> dict:
+        payload: dict[str, str] = {}
+        used_cached_token = bool(self.token)
+        if needs_token:
+            payload["token"] = self._token()
+        for key, value in params.items():
+            if value not in (None, ""):
+                payload[key] = str(value)
+        data = self._send_request(path, payload)
+        code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"} and needs_token and used_cached_token and self.user and self.password:
+            self.token = ""
+            payload["token"] = self._token()
+            data = self._send_request(path, payload)
+            code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"}:
+            raise RuntimeError(f"FeiHuMsg {path} failed: {data.get('msg') or data}")
+        body = data.get("data")
+        return body if isinstance(body, dict) else {}
+
+    def _token(self) -> str:
+        if self.token:
+            return self.token
+        if not self.user or not self.password:
+            raise RuntimeError("FeiHuMsg 未配置 API 账号密码")
+        data = self._request("/api/sms/login", needs_token=False, user=self.user, **{"pass": self.password})
+        self.token = str(data.get("token") or "").strip()
+        if not self.token:
+            raise RuntimeError(f"FeiHuMsg login did not return token: {data}")
+        if self._token_store:
+            try:
+                self._token_store(self.token)
+            except Exception as exc:
+                logger.warning("FeiHuMsg cached token store failed: %s", exc)
+        return self.token
+
+    def _pid(self, service: str = "") -> str:
+        return self._pid_candidates(service)[0]
+
+    def _pid_candidates(self, service: str = "") -> list[str]:
+        raw = str(self.pid or service or "").strip()
+        pids: list[str] = []
+        for part in re.split(r"[\s,，;；|]+", raw):
+            pid = part.strip()
+            if pid and pid not in pids:
+                pids.append(pid)
+        if not pids:
+            raise RuntimeError("FeiHuMsg 需要配置项目 ID(feihumsg_pid)")
+        return pids
+
+    def get_balance(self):
+        data = self._request("/api/sms/userInfo")
+        value = data.get("money")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+
+    def get_number(self, *, service: str, country: str = "") -> SmsActivation:
+        pids = self._pid_candidates(service)
+        data: dict[str, Any] = {}
+        phone = ""
+        activation_id = ""
+        selected_pid = ""
+        errors: list[str] = []
+        for pid in pids:
+            data = {}
+            for attempt in range(2):
+                try:
+                    data = self._request(
+                        "/api/sms/getPhone",
+                        pid=pid,
+                        phone=self.phone,
+                        isp=self.isp,
+                        province=country or self.province,
+                        cardType=self.card_type,
+                        include=self.include,
+                        exclude=self.exclude,
+                        author=self.author,
+                    )
+                except RuntimeError as exc:
+                    errors.append(f"{pid}: {exc}")
+                    logger.warning("FeiHuMsg getPhone failed for pid %s; trying next project ID: %s", pid, exc)
+                    break
+                candidate = str(data.get("phone") or "").strip()
+                if candidate and _reserve_sms_number(self.PROVIDER_KEY, candidate):
+                    phone = candidate
+                    selected_pid = str(data.get("pid") or pid).strip() or pid
+                    activation_id = str(data.get("order_id") or "").strip() or phone
+                    break
+                if candidate:
+                    logger.warning("FeiHuMsg getPhone returned duplicate active phone %s; retrying", candidate)
+            if phone:
+                break
+            if data:
+                errors.append(f"{pid}: no usable phone in response {data}")
+                logger.warning("FeiHuMsg getPhone returned no usable phone for pid %s; trying next project ID", pid)
+        if not phone:
+            detail = "; ".join(errors[-5:]) if errors else str(data)
+            raise RuntimeError(f"FeiHuMsg getPhone 未返回可用手机号: {detail}")
+        self._activations[activation_id] = {
+            "pid": selected_pid,
+            "phone": phone,
+            "order_id": str(data.get("order_id") or "").strip(),
+        }
+        return SmsActivation(
+            activation_id=activation_id,
+            phone_number=phone,
+            country=country or self.province or str(data.get("province") or ""),
+            metadata={"pid": selected_pid, "order_id": self._activations[activation_id]["order_id"], "provider": "feihumsg", "raw": data},
+        )
+
+    def _activation_meta(self, activation_id: str) -> dict[str, str]:
+        key = str(activation_id or "").strip()
+        if key in self._activations:
+            return self._activations[key]
+        return {"pid": self._pid(""), "phone": key, "order_id": ""}
+
+    def _message_request(self, meta: dict[str, str]) -> dict:
+        order_id = str(meta.get("order_id") or "").strip()
+        if order_id:
+            return self._request("/api/sms/getMessage", order_id=order_id)
+        return self._request("/api/sms/getMessageByPhone", pid=meta.get("pid"), phone=meta.get("phone"))
+
+    def get_message_text(self, activation_id: str) -> str:
+        if not str(activation_id or "").strip():
+            return ""
+        data = self._message_request(self._activation_meta(activation_id))
+        return str(data.get("message") or "")
+
+    def get_code(self, activation_id: str, *, timeout: int = 120) -> str:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key:
+            return ""
+        meta = self._activation_meta(activation_key)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                data = self._message_request(meta)
+            except requests.RequestException as exc:
+                logger.warning("FeiHuMsg getMessage transient request error for %s: %s", activation_key, exc)
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
+            status = _safe_int(data.get("status"), 0)
+            code = str(data.get("code") or "").strip()
+            if re.fullmatch(r"\d{4,8}", code):
+                return code
+            fallback = _extract_uomsg_code(str(data.get("message") or ""))
+            if fallback:
+                return fallback
+            if status == 1 or not status:
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
+            if status in {4, 5, 6}:
+                raise RuntimeError(f"FeiHuMsg getMessage failed: status={status} data={data}")
+            time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+        self._release_and_blacklist(activation_key)
+        return ""
+
+    def _cancel_recv(self, meta: dict[str, str]) -> bool:
+        order_id = str(meta.get("order_id") or "").strip()
+        if order_id:
+            self._request("/api/sms/cancelRecv", order_id=order_id)
+        else:
+            self._request("/api/sms/cancelRecvByPhone", pid=meta.get("pid"), phone=meta.get("phone"))
+        return True
+
+    def _add_blacklist(self, meta: dict[str, str]) -> bool:
+        order_id = str(meta.get("order_id") or "").strip()
+        if order_id:
+            self._request("/api/sms/addBlackList", order_id=order_id)
+        else:
+            self._request("/api/sms/addBlackListByPhone", pid=meta.get("pid"), phone=meta.get("phone"))
+        return True
+
+    def _release_and_blacklist(self, activation_id: str) -> bool:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key or activation_key in self._closed_activations:
+            return False
+        meta = self._activation_meta(activation_key)
+        ok = True
+        try:
+            self._cancel_recv(meta)
+        except Exception as exc:
+            ok = False
+            logger.warning("FeiHuMsg cancelRecv failed for %s: %s", activation_key, exc)
+        try:
+            self._add_blacklist(meta)
+        except Exception as exc:
+            ok = False
+            logger.warning("FeiHuMsg addBlackList failed for %s: %s", activation_key, exc)
+        self._closed_activations.add(activation_key)
+        _release_sms_number(self.PROVIDER_KEY, meta.get("phone") or activation_key)
+        self._activations.pop(activation_key, None)
+        return ok
+
+    def cancel(self, activation_id: str) -> bool:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key:
+            return False
+        meta = self._activation_meta(activation_key)
+        try:
+            self._cancel_recv(meta)
+            return True
+        finally:
+            self._closed_activations.add(activation_key)
+            _release_sms_number(self.PROVIDER_KEY, meta.get("phone") or activation_key)
+            self._activations.pop(activation_key, None)
+
+    def report_success(self, activation_id: str) -> bool:
+        return self._release_and_blacklist(activation_id)
+
+    def block(self, activation_id: str) -> bool:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key:
+            return False
+        meta = self._activation_meta(activation_key)
+        try:
+            self._add_blacklist(meta)
+            return True
+        finally:
+            _release_sms_number(self.PROVIDER_KEY, meta.get("phone") or activation_key)
+            self._activations.pop(activation_key, None)
+
+    def mark_code_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
+
+    def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
 
 
 class HaoZhuMaProvider(BaseSmsProvider):
@@ -1608,6 +1895,28 @@ def _haozhuma_token_store(provider_key: str) -> Callable[[str], None]:
     return _store
 
 
+def _feihumsg_token_store(provider_key: str) -> Callable[[str], None]:
+    keys = [provider_key]
+    if provider_key != "feihumsg_api":
+        keys.append("feihumsg_api")
+
+    def _store(token: str) -> None:
+        cached_token = str(token or "").strip()
+        if not cached_token:
+            return
+        try:
+            from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+            repo = ProviderSettingsRepository()
+            for key in keys:
+                if repo.update_auth_values("sms", key, {"feihumsg_cached_token": cached_token}):
+                    return
+        except Exception as exc:
+            logger.warning("FeiHuMsg cached token persistence failed: %s", exc)
+
+    return _store
+
+
 # ---------------------------------------------------------------------------
 # Factory and browser callback adapter
 # ---------------------------------------------------------------------------
@@ -1676,6 +1985,29 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             poll_interval=_safe_int(config.get("eomsg_poll_interval"), 3),
             proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
             base_url=str(config.get("eomsg_base_url") or "").strip(),
+        )
+    if provider_key in ("feihumsg", "feihumsg_api"):
+        user = str(config.get("feihumsg_user") or config.get("feihumsg_username") or "").strip()
+        password = str(config.get("feihumsg_password") or "").strip()
+        token = str(config.get("feihumsg_cached_token") or config.get("feihumsg_token") or config.get("token") or "").strip()
+        if (not user or not password) and not token:
+            raise RuntimeError("FeiHuMsg 未配置 API 账号密码")
+        return FeiHuMsgProvider(
+            user=user,
+            password=password,
+            token=token,
+            pid=str(config.get("feihumsg_pid") or config.get("sms_service") or "").strip(),
+            phone=str(config.get("feihumsg_phone") or "").strip(),
+            isp=str(config.get("feihumsg_isp") or "").strip(),
+            province=str(config.get("feihumsg_province") or config.get("sms_country") or "").strip(),
+            card_type=str(config.get("feihumsg_card_type") or "").strip(),
+            include=str(config.get("feihumsg_include") or "").strip(),
+            exclude=str(config.get("feihumsg_exclude") or "").strip(),
+            author=str(config.get("feihumsg_author") or "").strip(),
+            poll_interval=_safe_int(config.get("feihumsg_poll_interval"), 10),
+            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            base_url=str(config.get("feihumsg_base_url") or "").strip(),
+            token_store=_feihumsg_token_store(provider_key),
         )
     if provider_key in ("haozhuma", "haozhuma_api"):
         user = str(config.get("haozhuma_user") or config.get("haozhuma_username") or "").strip()

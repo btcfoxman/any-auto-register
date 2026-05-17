@@ -167,6 +167,10 @@ def _normalize_sms_provider_key(value: Any) -> str:
         "uomsg_api": "uomsg_api",
         "eomsg": "eomsg_api",
         "eomsg_api": "eomsg_api",
+        "feihumsg": "feihumsg_api",
+        "feihumsg_api": "feihumsg_api",
+        "fei_hu_msg": "feihumsg_api",
+        "飞狐": "feihumsg_api",
         "haozhuma": "haozhuma_api",
         "haozhuma_api": "haozhuma_api",
         "haozhuyun": "haozhuma_api",
@@ -201,6 +205,14 @@ def _sms_provider_from_provider_fields(source: dict[str, Any]) -> str:
     )):
         return "eomsg_api"
     if any(source.get(key) not in (None, "") for key in (
+        "feihumsg_pid",
+        "feihumsg_user",
+        "feihumsg_password",
+        "feihumsg_cached_token",
+        "feihumsg_phone",
+    )):
+        return "feihumsg_api"
+    if any(source.get(key) not in (None, "") for key in (
         "uomsg_token",
         "uomsg_keyword",
         "uomsg_phone",
@@ -229,6 +241,8 @@ def _resolve_sms_runtime(extra: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             provider_key = "herosms_api"
         elif extra.get("smsbower_api_key"):
             provider_key = "smsbower_api"
+        elif (extra.get("feihumsg_user") and extra.get("feihumsg_password")) or extra.get("feihumsg_cached_token"):
+            provider_key = "feihumsg_api"
         elif extra.get("haozhuma_user") and extra.get("haozhuma_password"):
             provider_key = "haozhuma_api"
     provider_key = _normalize_sms_provider_key(provider_key)
@@ -247,6 +261,7 @@ def _resolve_sms_service(settings: dict[str, Any], extra: dict[str, Any]) -> str
         "herosms_default_service",
         "smsbower_service",
         "smsbower_default_service",
+        "feihumsg_pid",
         "haozhuma_sid",
         "sms_activate_service",
         "sms_activate_default_service",
@@ -262,6 +277,7 @@ def _resolve_sms_country(settings: dict[str, Any], extra: dict[str, Any]) -> str
         "sms_country",
         "phone_country",
         "eomsg_province",
+        "feihumsg_province",
         "uomsg_province",
         "haozhuma_province",
         "herosms_country",
@@ -347,6 +363,8 @@ def _sms_provider_label(provider_key: str) -> str:
         return "HaoZhuMa"
     if normalized == "eomsg_api":
         return "EOMsg"
+    if normalized == "feihumsg_api":
+        return "FeiHuMsg"
     if normalized == "uomsg_api":
         return "UOMsg"
     return provider_key or "SMS provider"
@@ -493,6 +511,8 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "uomsg_province", "label": "UOMsg province (optional)", "type": "text"},
                     {"key": "eomsg_keyword", "label": "EOMsg keyword (optional)", "type": "text"},
                     {"key": "eomsg_province", "label": "EOMsg province (optional)", "type": "text"},
+                    {"key": "feihumsg_pid", "label": "FeiHuMsg project ID (optional)", "type": "text"},
+                    {"key": "feihumsg_province", "label": "FeiHuMsg province enum (optional)", "type": "text"},
                     {"key": "haozhuma_province", "label": "HaoZhuMa province (optional)", "type": "text"},
                     {"key": "haozhuma_sid", "label": "HaoZhuMa project ID (optional)", "type": "text"},
                 ],
@@ -746,6 +766,10 @@ class LingYaQQPlatform(BasePlatform):
             sms_extra["eomsg_keyword"] = params.get("eomsg_keyword")
         if params.get("eomsg_province"):
             sms_extra["eomsg_province"] = params.get("eomsg_province")
+        if params.get("feihumsg_pid"):
+            sms_extra["feihumsg_pid"] = params.get("feihumsg_pid")
+        if params.get("feihumsg_province"):
+            sms_extra["feihumsg_province"] = params.get("feihumsg_province")
         if params.get("haozhuma_province"):
             sms_extra["haozhuma_province"] = params.get("haozhuma_province")
         if params.get("haozhuma_sid"):
@@ -757,10 +781,12 @@ class LingYaQQPlatform(BasePlatform):
             sms_settings["uomsg_phone"] = phone
         elif provider_key == "eomsg_api":
             sms_settings["eomsg_phone"] = phone
+        elif provider_key == "feihumsg_api":
+            sms_settings["feihumsg_phone"] = phone
         elif provider_key == "haozhuma_api":
             sms_settings["haozhuma_phone"] = phone
         else:
-            return {"ok": False, "error": f"SMS relogin currently supports only UOMsg, EOMsg and HaoZhuMa for existing phone numbers. Resolved provider: {provider_key or '-'}"}
+            return {"ok": False, "error": f"SMS relogin currently supports only UOMsg, EOMsg, FeiHuMsg and HaoZhuMa for existing phone numbers. Resolved provider: {provider_key or '-'}"}
         if self.config and self.config.proxy and not str(sms_settings.get("sms_proxy") or sms_settings.get("proxy") or "").strip():
             sms_settings["sms_proxy"] = self.config.proxy
 
