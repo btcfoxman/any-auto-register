@@ -165,6 +165,8 @@ def _normalize_sms_provider_key(value: Any) -> str:
     aliases = {
         "uomsg": "uomsg_api",
         "uomsg_api": "uomsg_api",
+        "eomsg": "eomsg_api",
+        "eomsg_api": "eomsg_api",
         "haozhuma": "haozhuma_api",
         "haozhuma_api": "haozhuma_api",
         "haozhuyun": "haozhuma_api",
@@ -193,6 +195,12 @@ def _sms_provider_from_provider_fields(source: dict[str, Any]) -> str:
     )):
         return "haozhuma_api"
     if any(source.get(key) not in (None, "") for key in (
+        "eomsg_token",
+        "eomsg_keyword",
+        "eomsg_phone",
+    )):
+        return "eomsg_api"
+    if any(source.get(key) not in (None, "") for key in (
         "uomsg_token",
         "uomsg_keyword",
         "uomsg_phone",
@@ -211,7 +219,9 @@ def _resolve_sms_runtime(extra: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         or ""
     )
     if not provider_key:
-        if extra.get("uomsg_token") or extra.get("token"):
+        if extra.get("eomsg_token"):
+            provider_key = "eomsg_api"
+        elif extra.get("uomsg_token") or extra.get("token"):
             provider_key = "uomsg_api"
         elif extra.get("sms_activate_api_key"):
             provider_key = "sms_activate_api"
@@ -251,6 +261,7 @@ def _resolve_sms_country(settings: dict[str, Any], extra: dict[str, Any]) -> str
     for key in (
         "sms_country",
         "phone_country",
+        "eomsg_province",
         "uomsg_province",
         "haozhuma_province",
         "herosms_country",
@@ -334,6 +345,8 @@ def _sms_provider_label(provider_key: str) -> str:
     normalized = _normalize_sms_provider_key(provider_key)
     if normalized == "haozhuma_api":
         return "HaoZhuMa"
+    if normalized == "eomsg_api":
+        return "EOMsg"
     if normalized == "uomsg_api":
         return "UOMsg"
     return provider_key or "SMS provider"
@@ -478,6 +491,8 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "sms_timeout", "label": "SMS timeout seconds", "type": "number"},
                     {"key": "uomsg_keyword", "label": "SMS keyword (optional)", "type": "text"},
                     {"key": "uomsg_province", "label": "UOMsg province (optional)", "type": "text"},
+                    {"key": "eomsg_keyword", "label": "EOMsg keyword (optional)", "type": "text"},
+                    {"key": "eomsg_province", "label": "EOMsg province (optional)", "type": "text"},
                     {"key": "haozhuma_province", "label": "HaoZhuMa province (optional)", "type": "text"},
                     {"key": "haozhuma_sid", "label": "HaoZhuMa project ID (optional)", "type": "text"},
                 ],
@@ -727,6 +742,10 @@ class LingYaQQPlatform(BasePlatform):
             sms_extra["uomsg_keyword"] = params.get("uomsg_keyword")
         if params.get("uomsg_province"):
             sms_extra["uomsg_province"] = params.get("uomsg_province")
+        if params.get("eomsg_keyword"):
+            sms_extra["eomsg_keyword"] = params.get("eomsg_keyword")
+        if params.get("eomsg_province"):
+            sms_extra["eomsg_province"] = params.get("eomsg_province")
         if params.get("haozhuma_province"):
             sms_extra["haozhuma_province"] = params.get("haozhuma_province")
         if params.get("haozhuma_sid"):
@@ -736,10 +755,12 @@ class LingYaQQPlatform(BasePlatform):
         provider_key = _normalize_sms_provider_key(provider_key)
         if provider_key == "uomsg_api":
             sms_settings["uomsg_phone"] = phone
+        elif provider_key == "eomsg_api":
+            sms_settings["eomsg_phone"] = phone
         elif provider_key == "haozhuma_api":
             sms_settings["haozhuma_phone"] = phone
         else:
-            return {"ok": False, "error": f"SMS relogin currently supports only UOMsg and HaoZhuMa for existing phone numbers. Resolved provider: {provider_key or '-'}"}
+            return {"ok": False, "error": f"SMS relogin currently supports only UOMsg, EOMsg and HaoZhuMa for existing phone numbers. Resolved provider: {provider_key or '-'}"}
         if self.config and self.config.proxy and not str(sms_settings.get("sms_proxy") or sms_settings.get("proxy") or "").strip():
             sms_settings["sms_proxy"] = self.config.proxy
 

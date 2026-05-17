@@ -28,6 +28,13 @@ def test_lingya_qq_resolves_uomsg_inline_token():
     assert settings["uomsg_token"] == "tok123"
 
 
+def test_lingya_qq_resolves_eomsg_inline_token():
+    provider_key, settings = _resolve_sms_runtime({"eomsg_token": "tok123"})
+
+    assert provider_key == "eomsg_api"
+    assert settings["eomsg_token"] == "tok123"
+
+
 def test_lingya_qq_normalizes_haozhuma_provider_alias():
     provider_key, settings = _resolve_sms_runtime({"sms_provider": "HaoZhuMa", "haozhuma_sid": "1000"})
 

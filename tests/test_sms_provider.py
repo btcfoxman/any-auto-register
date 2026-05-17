@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 from core.base_sms import (
+    EOMsgProvider,
     HeroSmsProvider,
     HaoZhuMaProvider,
     SmsActivation,
@@ -88,6 +89,17 @@ class TestCreateSmsProvider:
     def test_uomsg_missing_token(self):
         with pytest.raises(RuntimeError, match="UOMsg 未配置"):
             create_sms_provider("uomsg_api", {})
+
+    def test_eomsg(self):
+        provider = create_sms_provider("eomsg_api", {"eomsg_token": "tok123", "eomsg_keyword": "腾讯"})
+        assert isinstance(provider, EOMsgProvider)
+        assert provider.token == "tok123"
+        assert provider.default_keyword == "腾讯"
+        assert provider.base_url == "http://api.eomsg.com/zc/data.php"
+
+    def test_eomsg_missing_token(self):
+        with pytest.raises(RuntimeError, match="EOMsg 未配置"):
+            create_sms_provider("eomsg_api", {})
 
     def test_haozhuma(self):
         provider = create_sms_provider(
@@ -290,6 +302,40 @@ class TestUOMsgProvider:
         assert provider.get_code_after("16512345678", timeout=5) == "444444"
 
 
+class TestEOMsgProvider:
+    def test_get_number_uses_eomsg_endpoint_and_provider_key(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            code = (params or {}).get("code")
+            if code == "getPhone":
+                return FakeResponse("16512345678")
+            if code == "release":
+                return FakeResponse("释放成功")
+            raise AssertionError(f"unexpected code: {code}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = EOMsgProvider("tok", default_keyword="腾讯")
+        activation = provider.get_number(service="qq")
+
+        assert activation.activation_id == "16512345678"
+        assert activation.metadata["provider"] == "eomsg"
+        assert calls[0][0] == "http://api.eomsg.com/zc/data.php"
+        assert calls[0][1]["keyWord"] == "腾讯"
+
+        provider.cancel(activation.activation_id)
+        assert calls[1][1] == {"code": "release", "token": "tok", "phone": "16512345678"}
+
+
 class TestHaoZhuMaProvider:
     def test_get_number_get_code_release_and_blacklist(self, monkeypatch):
         calls = []
@@ -386,6 +432,42 @@ class TestHaoZhuMaProvider:
 
         provider_a.cancel(activation_a.activation_id)
         provider_b.cancel(activation_b.activation_id)
+
+    def test_get_number_tries_multiple_sids_in_order(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            payload = dict(params or {})
+            calls.append(payload)
+            if payload.get("api") == "getPhone" and payload.get("sid") == "1000":
+                return FakeResponse({"code": "-1", "msg": "NO_NUMBERS"})
+            if payload.get("api") == "getPhone" and payload.get("sid") == "1001":
+                return FakeResponse({"code": "0", "sid": "1001", "phone": "16533333333"})
+            if payload.get("api") in {"cancelRecv", "addBlacklist"}:
+                return FakeResponse({"code": "0", "msg": "ok"})
+            raise AssertionError(f"unexpected payload: {payload}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = HaoZhuMaProvider(token="tok123", sid="1000, 1001")
+        activation = provider.get_number(service="qq")
+
+        assert activation.phone_number == "16533333333"
+        assert activation.metadata["sid"] == "1001"
+        assert [call["sid"] for call in calls if call["api"] == "getPhone"] == ["1000", "1001"]
+
+        provider.cancel(activation.activation_id)
 
     def test_cached_token_is_refreshed_once_when_rejected(self, monkeypatch):
         calls = []

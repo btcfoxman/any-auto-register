@@ -418,6 +418,35 @@ _BUILTIN_DEFINITIONS: list[dict] = [
     },
     {
         "provider_type": "sms",
+        "provider_key": "eomsg_api",
+        "label": "EOMsg",
+        "description": "EOMsg 接码平台，使用 API Token 直接按短信关键词取号和取码，无需项目 ID",
+        "driver_type": "eomsg_api",
+        "default_auth_mode": "token",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [{"value": "token", "label": "API Token"}],
+        "fields": [
+            {"key": "eomsg_token", "label": "API Token", "secret": True, "category": "auth"},
+            {"key": "eomsg_keyword", "label": "短信关键词", "placeholder": "腾讯", "category": "identity", "hint": "取码必须按短信关键词过滤；LingYaQQ 可填“腾讯”或实际短信签名里的关键词。"},
+            {"key": "eomsg_province", "label": "省份（可选）", "placeholder": "广东", "category": "connection"},
+            {
+                "key": "eomsg_card_type",
+                "label": "卡类型",
+                "type": "select",
+                "category": "connection",
+                "options": [
+                    {"value": "全部", "label": "全部"},
+                    {"value": "实卡", "label": "实卡"},
+                    {"value": "虚卡", "label": "虚卡"},
+                ],
+            },
+            {"key": "eomsg_phone", "label": "指定号码（可选）", "placeholder": "130xxxxxxxx", "category": "identity"},
+            {"key": "eomsg_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "3", "category": "connection"},
+        ],
+    },
+    {
+        "provider_type": "sms",
         "provider_key": "haozhuma_api",
         "label": "HaoZhuMa",
         "description": "HaoZhuMa 接码平台，使用项目 ID 取号取码；号码使用后自动释放并拉黑",
@@ -431,7 +460,7 @@ _BUILTIN_DEFINITIONS: list[dict] = [
         "fields": [
             {"key": "haozhuma_user", "label": "API 账号", "category": "auth"},
             {"key": "haozhuma_password", "label": "API 密码", "secret": True, "category": "auth"},
-            {"key": "haozhuma_sid", "label": "项目 ID", "placeholder": "1000", "category": "identity"},
+            {"key": "haozhuma_sid", "label": "项目 ID", "placeholder": "1000,1001", "category": "identity", "hint": "支持多个项目 ID，用逗号、空格或换行分隔；取号时按从左到右顺序优先尝试。"},
             {"key": "haozhuma_province", "label": "省份代码（可选）", "placeholder": "44", "category": "connection"},
             {"key": "haozhuma_isp", "label": "运营商（可选）", "placeholder": "1", "category": "connection"},
             {"key": "haozhuma_ascription", "label": "号码类型（可选）", "placeholder": "1虚拟 / 2实卡", "category": "connection"},
@@ -481,6 +510,7 @@ _LEGACY_PROVIDER_ALIASES = {
     ("sms", "herosms"): "herosms_api",
     ("sms", "smsbower"): "smsbower_api",
     ("sms", "uomsg"): "uomsg_api",
+    ("sms", "eomsg"): "eomsg_api",
     ("sms", "haozhuma"): "haozhuma_api",
 }
 

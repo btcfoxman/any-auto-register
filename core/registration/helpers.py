@@ -124,6 +124,7 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
         or merged.get("herosms_default_country")
         or merged.get("smsbower_country")
         or merged.get("smsbower_default_country")
+        or merged.get("eomsg_province")
         or merged.get("haozhuma_province")
         or ""
     ).strip()

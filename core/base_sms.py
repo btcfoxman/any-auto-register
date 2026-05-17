@@ -1074,6 +1074,7 @@ class SmsBowerProvider(HeroSmsProvider):
 
 
 UOMSG_DEFAULT_BASE_URL = "http://api.uomsg.com/zc/data.php"
+EOMSG_DEFAULT_BASE_URL = "http://api.eomsg.com/zc/data.php"
 UOMSG_SERVICE_KEYWORDS = {
     "qq": "腾讯",
     "lingya_qq": "腾讯",
@@ -1098,6 +1099,7 @@ class UOMsgProvider(BaseSmsProvider):
 
     BASE_URL = UOMSG_DEFAULT_BASE_URL
     PROVIDER_KEY = "uomsg"
+    DISPLAY_NAME = "UOMsg"
 
     def __init__(
         self,
@@ -1133,7 +1135,7 @@ class UOMsgProvider(BaseSmsProvider):
         resp.raise_for_status()
         text = resp.text.strip()
         if text.upper().startswith("ERROR:"):
-            raise RuntimeError(f"UOMsg {code} failed: {text}")
+            raise RuntimeError(f"{self.DISPLAY_NAME} {code} failed: {text}")
         return text
 
     def _keyword_for(self, service: str = "") -> str:
@@ -1152,7 +1154,7 @@ class UOMsgProvider(BaseSmsProvider):
     def get_number(self, *, service: str, country: str = "") -> SmsActivation:
         keyword = self._keyword_for(service)
         if not keyword:
-            raise RuntimeError("UOMsg 需要配置短信关键词(uomsg_keyword)，否则无法按关键词读取短信")
+            raise RuntimeError(f"{self.DISPLAY_NAME} 需要配置短信关键词({self.PROVIDER_KEY}_keyword)，否则无法按关键词读取短信")
         phone = ""
         for attempt in range(2):
             phone = self._request(
@@ -1163,19 +1165,19 @@ class UOMsgProvider(BaseSmsProvider):
                 cardType=self.card_type,
             ).strip()
             if not phone:
-                raise RuntimeError("UOMsg getPhone 未返回手机号")
+                raise RuntimeError(f"{self.DISPLAY_NAME} getPhone 未返回手机号")
             if _reserve_sms_number(self.PROVIDER_KEY, phone):
                 break
-            logger.warning("UOMsg getPhone returned duplicate active phone %s; retrying once", phone)
+            logger.warning("%s getPhone returned duplicate active phone %s; retrying once", self.DISPLAY_NAME, phone)
             phone = ""
         if not phone:
-            raise RuntimeError("UOMsg getPhone 连续返回已占用手机号，已放弃本次取号")
+            raise RuntimeError(f"{self.DISPLAY_NAME} getPhone 连续返回已占用手机号，已放弃本次取号")
         self._activation_keywords[phone] = keyword
         return SmsActivation(
             activation_id=phone,
             phone_number=phone,
             country=country or self.province,
-            metadata={"keyword": keyword, "provider": "uomsg"},
+            metadata={"keyword": keyword, "provider": self.PROVIDER_KEY},
         )
 
     def get_code(self, activation_id: str, *, timeout: int = 120) -> str:
@@ -1184,7 +1186,7 @@ class UOMsgProvider(BaseSmsProvider):
         if not phone:
             return ""
         if not keyword:
-            raise RuntimeError("UOMsg 需要配置短信关键词(uomsg_keyword)，否则无法按关键词读取短信")
+            raise RuntimeError(f"{self.DISPLAY_NAME} 需要配置短信关键词({self.PROVIDER_KEY}_keyword)，否则无法按关键词读取短信")
         return self.get_code_after(phone, timeout=timeout)
 
     def get_message_text(self, activation_id: str) -> str:
@@ -1200,14 +1202,14 @@ class UOMsgProvider(BaseSmsProvider):
         if not phone:
             return ""
         if not keyword:
-            raise RuntimeError("UOMsg 需要配置短信关键词(uomsg_keyword)，否则无法按关键词读取短信")
+            raise RuntimeError(f"{self.DISPLAY_NAME} 需要配置短信关键词({self.PROVIDER_KEY}_keyword)，否则无法按关键词读取短信")
         ignored = str(ignore_text or "").strip()
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
                 text = self._request("getMsg", phone=phone, keyWord=keyword)
             except requests.RequestException as exc:
-                logger.warning("UOMsg getMsg transient request error for %s: %s", phone, exc)
+                logger.warning("%s getMsg transient request error for %s: %s", self.DISPLAY_NAME, phone, exc)
                 time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
                 continue
             if "[尚未收到]" in text or "尚未收到" in text:
@@ -1219,7 +1221,7 @@ class UOMsgProvider(BaseSmsProvider):
             code = _extract_uomsg_code(text)
             if code:
                 return code
-            logger.warning("UOMsg received an unparsable SMS for %s; waiting for a newer SMS: %s", phone, text[:200])
+            logger.warning("%s received an unparsable SMS for %s; waiting for a newer SMS: %s", self.DISPLAY_NAME, phone, text[:200])
             ignored = text.strip()
             time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
         return ""
@@ -1266,6 +1268,14 @@ class UOMsgProvider(BaseSmsProvider):
 
     def query_used(self) -> str:
         return self._request("queryUsed")
+
+
+class EOMsgProvider(UOMsgProvider):
+    """EOMsg provider (api.eomsg.com)."""
+
+    BASE_URL = EOMSG_DEFAULT_BASE_URL
+    PROVIDER_KEY = "eomsg"
+    DISPLAY_NAME = "EOMsg"
 
 
 HAOZHUMA_DEFAULT_BASE_URL = "https://api.haozhuyun.com/sms/"
@@ -1369,10 +1379,18 @@ class HaoZhuMaProvider(BaseSmsProvider):
         return self.token
 
     def _sid(self, service: str = "") -> str:
-        sid = str(self.sid or service or "").strip()
-        if not sid:
+        return self._sid_candidates(service)[0]
+
+    def _sid_candidates(self, service: str = "") -> list[str]:
+        raw = str(self.sid or service or "").strip()
+        sids: list[str] = []
+        for part in re.split(r"[\s,，;；|]+", raw):
+            sid = part.strip()
+            if sid and sid not in sids:
+                sids.append(sid)
+        if not sids:
             raise RuntimeError("HaoZhuMa 需要配置项目 ID(haozhuma_sid)")
-        return sid
+        return sids
 
     def get_balance(self):
         data = self._request("getSummary")
@@ -1383,36 +1401,52 @@ class HaoZhuMaProvider(BaseSmsProvider):
             return value
 
     def get_number(self, *, service: str, country: str = "") -> SmsActivation:
-        sid = self._sid(service)
+        sids = self._sid_candidates(service)
         data: dict[str, Any] = {}
         phone = ""
-        for attempt in range(2):
-            extra_params = {}
-            if self.batch_size > 1 and not self.phone:
-                extra_params[self.batch_param] = str(self.batch_size)
-            data = self._request(
-                "getPhone",
-                sid=sid,
-                phone=self.phone,
-                isp=self.isp,
-                Province=country or self.province,
-                ascription=self.ascription,
-                paragraph=self.paragraph,
-                exclude=self.exclude,
-                uid=self.uid,
-                author=self.author,
-                **extra_params,
-            )
-            for candidate in self._phone_candidates(data):
-                if _reserve_sms_number(self.PROVIDER_KEY, candidate):
-                    phone = candidate
+        selected_sid = ""
+        errors: list[str] = []
+        for sid in sids:
+            data = {}
+            for attempt in range(2):
+                extra_params = {}
+                if self.batch_size > 1 and not self.phone:
+                    extra_params[self.batch_param] = str(self.batch_size)
+                try:
+                    data = self._request(
+                        "getPhone",
+                        sid=sid,
+                        phone=self.phone,
+                        isp=self.isp,
+                        Province=country or self.province,
+                        ascription=self.ascription,
+                        paragraph=self.paragraph,
+                        exclude=self.exclude,
+                        uid=self.uid,
+                        author=self.author,
+                        **extra_params,
+                    )
+                except RuntimeError as exc:
+                    errors.append(f"{sid}: {exc}")
+                    logger.warning("HaoZhuMa getPhone failed for sid %s; trying next project ID: %s", sid, exc)
                     break
-                logger.warning("HaoZhuMa getPhone returned duplicate active phone %s; trying another candidate", candidate)
+                for candidate in self._phone_candidates(data):
+                    if _reserve_sms_number(self.PROVIDER_KEY, candidate):
+                        phone = candidate
+                        selected_sid = sid
+                        break
+                    logger.warning("HaoZhuMa getPhone returned duplicate active phone %s; trying another candidate", candidate)
+                if phone:
+                    break
             if phone:
                 break
+            if data:
+                errors.append(f"{sid}: no usable phone in response {data}")
+                logger.warning("HaoZhuMa getPhone returned no usable phone for sid %s; trying next project ID", sid)
         if not phone:
-            raise RuntimeError(f"HaoZhuMa getPhone 未返回可用手机号: {data}")
-        self._activation_sids[phone] = str(data.get("sid") or sid).strip() or sid
+            detail = "; ".join(errors[-5:]) if errors else str(data)
+            raise RuntimeError(f"HaoZhuMa getPhone 未返回可用手机号: {detail}")
+        self._activation_sids[phone] = str(data.get("sid") or selected_sid).strip() or selected_sid
         return SmsActivation(
             activation_id=phone,
             phone_number=phone,
@@ -1628,6 +1662,20 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             poll_interval=_safe_int(config.get("uomsg_poll_interval"), 3),
             proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
             base_url=str(config.get("uomsg_base_url") or "").strip(),
+        )
+    if provider_key in ("eomsg", "eomsg_api"):
+        token = str(config.get("eomsg_token") or config.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("EOMsg 未配置 API Token")
+        return EOMsgProvider(
+            token=token,
+            default_keyword=str(config.get("eomsg_keyword") or config.get("sms_keyword") or "").strip(),
+            province=str(config.get("eomsg_province") or config.get("sms_country") or "").strip(),
+            card_type=str(config.get("eomsg_card_type") or "全部").strip() or "全部",
+            phone=str(config.get("eomsg_phone") or "").strip(),
+            poll_interval=_safe_int(config.get("eomsg_poll_interval"), 3),
+            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            base_url=str(config.get("eomsg_base_url") or "").strip(),
         )
     if provider_key in ("haozhuma", "haozhuma_api"):
         user = str(config.get("haozhuma_user") or config.get("haozhuma_username") or "").strip()

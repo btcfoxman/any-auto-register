@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from core.base_sms import (
+    EOMsgProvider,
     HERO_SMS_DEFAULT_COUNTRY,
     HERO_SMS_DEFAULT_SERVICE,
     HaoZhuMaProvider,
@@ -263,6 +264,47 @@ def uomsg_balance(body: UOMsgQueryRequest | None = None):
     provider = _uomsg_from_payload(body)
     if not provider.token:
         raise HTTPException(400, "UOMsg API Token 未配置")
+    try:
+        return {"balance": provider.get_balance()}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+# ── EOMsg endpoints ─────────────────────────────────────────────────────────
+
+class EOMsgQueryRequest(BaseModel):
+    token: str = ""
+    keyword: str = ""
+    province: str = ""
+    card_type: str = "全部"
+    phone: str = ""
+    proxy: str = ""
+
+
+def _saved_eomsg_config() -> dict:
+    return ProviderSettingsRepository().resolve_runtime_settings("sms", "eomsg_api", {})
+
+
+def _eomsg_from_payload(payload: EOMsgQueryRequest | None = None) -> EOMsgProvider:
+    payload = payload or EOMsgQueryRequest()
+    saved = _saved_eomsg_config()
+    token = str(payload.token or saved.get("eomsg_token") or saved.get("token") or "").strip()
+    return EOMsgProvider(
+        token=token,
+        default_keyword=str(payload.keyword or saved.get("eomsg_keyword") or saved.get("sms_keyword") or "").strip(),
+        province=str(payload.province or saved.get("eomsg_province") or "").strip(),
+        card_type=str(payload.card_type or saved.get("eomsg_card_type") or "全部").strip() or "全部",
+        phone=str(payload.phone or saved.get("eomsg_phone") or "").strip(),
+        proxy=str(payload.proxy or saved.get("sms_proxy") or saved.get("proxy") or "") or None,
+    )
+
+
+@router.post("/eomsg/balance")
+def eomsg_balance(body: EOMsgQueryRequest | None = None):
+    body = body or EOMsgQueryRequest()
+    provider = _eomsg_from_payload(body)
+    if not provider.token:
+        raise HTTPException(400, "EOMsg API Token 未配置")
     try:
         return {"balance": provider.get_balance()}
     except Exception as exc:
