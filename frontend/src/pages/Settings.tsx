@@ -309,6 +309,34 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
     }],
   },
   {
+    id: 'freebeat', label: 'Freebeat', icon: Shield,
+    sections: [{
+      section: '自动签到',
+      desc: '后台按动态时间区间扫描 Freebeat 账号，未签到时自动领取每日积分。',
+      items: [
+        { key: 'freebeat_daily_sign_in_enabled', label: '启用自动签到', placeholder: 'true' },
+        { key: 'freebeat_daily_sign_in_min_interval_seconds', label: '最小间隔秒数', placeholder: '1800' },
+        { key: 'freebeat_daily_sign_in_max_interval_seconds', label: '最大间隔秒数', placeholder: '7200' },
+      ],
+    }, {
+      section: '注册后自动化',
+      desc: 'Freebeat 邮箱验证码注册/登录完成后的自动领取动作。',
+      items: [
+        { key: 'freebeat_auto_questionnaire', label: '注册后自动问卷', placeholder: 'true' },
+        { key: 'freebeat_auto_daily_sign_in', label: '注册后自动签到', placeholder: 'true' },
+      ],
+    }, {
+      section: 'Freebeat2API',
+      desc: '将 Freebeat token 同步到 freebeat2api，并在注册、保活、签到后同步最新账号状态。',
+      items: [
+        { key: 'freebeat2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8788' },
+        { key: 'freebeat2api_api_key', label: '接口密钥', placeholder: 'sk-test-api-key', secret: true },
+        { key: 'freebeat2api_max_concurrency', label: '最大并发', placeholder: '1' },
+        { key: 'freebeat2api_enable_auto_maintenance', label: '启用远端维护', placeholder: 'false' },
+      ],
+    }],
+  },
+  {
     id: 'platform_caps', label: '高级：平台能力', icon: Sliders,
     sections: [],
   },

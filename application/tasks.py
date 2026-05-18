@@ -497,6 +497,24 @@ def _auto_sync_lingya2api(task_logger: TaskLogger, account) -> None:
         task_logger.log(f"  [Lingya2API] auto sync error: {exc}", level="warning")
 
 
+def _auto_sync_freebeat2api(task_logger: TaskLogger, account) -> None:
+    if getattr(account, "platform", "") != "freebeat":
+        return
+    try:
+        from core.freebeat2api_sync import is_freebeat2api_configured, sync_account_to_freebeat2api
+
+        result = sync_account_to_freebeat2api(account, log_fn=task_logger.log, balance=True)
+        if result:
+            task_logger.log("  [Freebeat2API] Freebeat account synced")
+        elif is_freebeat2api_configured():
+            task_logger.log(
+                "  [Freebeat2API] auto sync skipped or failed; check freebeat2api_url/API key and previous warning logs",
+                level="warning",
+            )
+    except Exception as exc:
+        task_logger.log(f"  [Freebeat2API] auto sync error: {exc}", level="warning")
+
+
 def _existing_account_id(platform: str, email: str) -> int | None:
     if not platform or not email:
         return None
@@ -1016,6 +1034,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 save_mode = "updated existing" if existing_account_id else "created"
                 logger.log(f"  [Accounts] saved account id={saved_account_id} ({save_mode})")
             _auto_sync_lingya2api(logger, account)
+            _auto_sync_freebeat2api(logger, account)
             _auto_followup_windsurf_payment(
                 platform_name=platform_name,
                 payload=payload,

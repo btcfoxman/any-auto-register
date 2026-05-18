@@ -3,6 +3,29 @@ import { useEffect, useRef, useState } from 'react'
 import { API_BASE, apiFetch } from '@/lib/utils'
 import { getTaskStatusText, isTerminalTaskStatus } from '@/lib/tasks'
 
+type TaskEventPayload = {
+  id?: number
+  line?: string
+  done?: boolean
+  status?: string
+}
+
+type TaskEventsResponse = {
+  items?: TaskEventPayload[]
+}
+
+type TaskSummary = {
+  status?: string
+  progress?: string
+  progress_detail?: {
+    current?: number | string
+    total?: number | string
+    label?: string
+  }
+  error?: string
+  errors?: string[]
+}
+
 export function TaskLogPanel({
   taskId,
   onDone,
@@ -11,7 +34,7 @@ export function TaskLogPanel({
   onDone: (status: string) => void
 }) {
   const [lines, setLines] = useState<string[]>([])
-  const [task, setTask] = useState<any | null>(null)
+  const [task, setTask] = useState<TaskSummary | null>(null)
   const [doneStatus, setDoneStatus] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const seenEventIdsRef = useRef<Set<number>>(new Set())
@@ -27,23 +50,28 @@ export function TaskLogPanel({
 
   useEffect(() => {
     if (!taskId) return
+    let disposed = false
     seenEventIdsRef.current = new Set()
     cursorRef.current = 0
     doneRef.current = false
     sseHealthyRef.current = false
-    setLines([])
-    setTask(null)
-    setDoneStatus(null)
+    queueMicrotask(() => {
+      if (disposed) return
+      setLines([])
+      setTask(null)
+      setDoneStatus(null)
+    })
 
-    const pushEvent = (payload: any) => {
+    const pushEvent = (payload: TaskEventPayload) => {
       const eventId = Number(payload?.id || 0)
       if (eventId && seenEventIdsRef.current.has(eventId)) return
       if (eventId) {
         seenEventIdsRef.current.add(eventId)
         cursorRef.current = Math.max(cursorRef.current, eventId)
       }
-      if (payload?.line) {
-        setLines(prev => [...prev, payload.line])
+      const line = payload?.line
+      if (line) {
+        setLines(prev => [...prev, line])
       }
       if (payload?.done && !doneRef.current) {
         doneRef.current = true
@@ -56,11 +84,24 @@ export function TaskLogPanel({
       }
     }
 
+    const fetchBacklog = async () => {
+      while (!doneRef.current) {
+        const data = await apiFetch(`/tasks/${taskId}/events?since=${cursorRef.current}&limit=500`) as TaskEventsResponse
+        const items = Array.isArray(data.items) ? data.items : []
+        for (const item of items) {
+          pushEvent(item)
+        }
+        if (items.length < 500) break
+      }
+    }
+
     const syncTask = async () => {
-      const latest = await apiFetch(`/tasks/${taskId}`)
+      const latest = await apiFetch(`/tasks/${taskId}`) as TaskSummary
       setTask(latest)
-      if (isTerminalTaskStatus(latest.status) && !doneRef.current) {
-        pushEvent({ done: true, status: latest.status })
+      const latestStatus = String(latest.status || '')
+      if (isTerminalTaskStatus(latestStatus) && !doneRef.current) {
+        await fetchBacklog()
+        pushEvent({ done: true, status: latestStatus })
       }
     }
 
@@ -100,6 +141,7 @@ export function TaskLogPanel({
     }, 1000)
 
     return () => {
+      disposed = true
       sseHealthyRef.current = false
       eventSourceRef.current?.close()
       eventSourceRef.current = null

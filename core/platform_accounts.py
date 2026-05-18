@@ -18,6 +18,7 @@ PLATFORM_TOKEN_KEY_PRIORITY: dict[str, list[str]] = {
     "blink": ["firebase_refresh_token", "legacy_token", "refresh_token", "access_token", "session_token"],
     "windsurf": ["session_token", "sessionToken", "legacy_token", "auth_token", "authToken"],
     "lingya_qq": ["vusession", "v_vusession", "vqq_vusession", "legacy_token", "vurefresh", "v_vurefresh"],
+    "freebeat": ["access_token", "accessToken", "legacy_token", "device_token", "deviceToken"],
 }
 
 

@@ -1,0 +1,6 @@
+请帮我启动一个 playwright 驱动的浏览器(使用http://127.0.0.1:10809代理)，临时文件放在当前 tmp 目录下，
+并进行listen 请求响应与cookie数据，存储在 tmp 目录下，可根据har等日志，生成分析请求可形成协议链路，以及汇总中文文档。
+
+当前项目执行： powershell -ExecutionPolicy Bypass -File tmp\playwright-capture\stop-capture.ps1
+
+已经采集完成，核心看这些接口相关，验证码注册登录/注册领积分/回答问题领积分/每日签到领积分/查看积分   制作视频/积分要求/任务轮询/下载链接

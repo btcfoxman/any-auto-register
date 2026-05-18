@@ -23,6 +23,11 @@ class ConfigRepository:
         "lingya_qq_publish_source_timeout", "lingya_qq_publish_generation_timeout",
         "lingya_qq_publish_generation_poll_interval", "lingya_qq_publish_initial_delay",
         "lingya_qq_publish_poll_interval", "lingya_qq_publish_timeout",
+        "freebeat_daily_sign_in_enabled", "freebeat_daily_sign_in_min_interval_seconds",
+        "freebeat_daily_sign_in_max_interval_seconds", "freebeat_auto_daily_sign_in",
+        "freebeat_auto_questionnaire",
+        "freebeat2api_url", "freebeat2api_api_key", "freebeat2api_max_concurrency",
+        "freebeat2api_enable_auto_maintenance",
     }
 
     def __init__(self, definitions: ProviderDefinitionsRepository | None = None):

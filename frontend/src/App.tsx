@@ -181,6 +181,7 @@ function Sidebar({
                 { label: '验证服务', hash: 'captcha' },
                 { label: '接码服务', hash: 'sms' },
                 { label: 'LingYaQQ', hash: 'lingya_qq' },
+                { label: 'Freebeat', hash: 'freebeat' },
                 { label: '代理资源', hash: 'proxies' },
                 { label: 'ChatGPT', hash: 'chatgpt' },
                 { label: '高级', hash: 'advanced' },

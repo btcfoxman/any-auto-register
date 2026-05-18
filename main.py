@@ -80,6 +80,8 @@ async def lifespan(app: FastAPI):
     task_runtime.start()
     from services.lingya_keepalive import lingya_keepalive_worker
     lingya_keepalive_worker.start()
+    from services.freebeat_daily_signin import freebeat_daily_signin_worker
+    freebeat_daily_signin_worker.start()
     from services.solver_manager import start_async
     start_async()
     from core.lifecycle import lifecycle_manager
@@ -93,6 +95,8 @@ async def lifespan(app: FastAPI):
     _task_runtime.stop()
     from services.lingya_keepalive import lingya_keepalive_worker as _lingya_keepalive_worker
     _lingya_keepalive_worker.stop()
+    from services.freebeat_daily_signin import freebeat_daily_signin_worker as _freebeat_daily_signin_worker
+    _freebeat_daily_signin_worker.stop()
     from services.solver_manager import stop
     stop()
 

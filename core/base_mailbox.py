@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import html
 import logging
 import re
+import requests
 from urllib.parse import urlencode, urlparse
 
 logger = logging.getLogger(__name__)
@@ -219,6 +220,17 @@ def _create_cfworker(extra: dict, proxy: str | None) -> 'BaseMailbox':
     )
 
 
+def _create_cloud_mail(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return CloudMailMailbox(
+        api_url=extra.get("cloud_mail_api_url", ""),
+        public_token=extra.get("cloud_mail_public_token", "") or extra.get("cloud_mail_token", ""),
+        domain=extra.get("cloud_mail_domain", ""),
+        prefix=extra.get("cloud_mail_prefix", ""),
+        password=extra.get("cloud_mail_password", ""),
+        proxy=proxy,
+    )
+
+
 def _create_testmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
     return TestmailMailbox(
         api_url=extra.get("testmail_api_url", ""),
@@ -269,6 +281,7 @@ MAILBOX_FACTORY_REGISTRY = {
     "freemail_api": _create_freemail,
     "moemail_api": _create_moemail,
     "cfworker_admin_api": _create_cfworker,
+    "cloud_mail_api": _create_cloud_mail,
     "testmail_api": _create_testmail,
     "local_ms_pool": _create_local_ms_pool,
     "laoudo_api": _create_laoudo,
@@ -280,6 +293,7 @@ MAILBOX_FACTORY_REGISTRY = {
     "freemail": _create_freemail,
     "moemail": _create_moemail,
     "cfworker": _create_cfworker,
+    "cloud_mail": _create_cloud_mail,
     "testmail": _create_testmail,
     "local_ms": _create_local_ms_pool,
     "laoudo": _create_laoudo,
@@ -1195,6 +1209,261 @@ class CFWorkerMailbox(BaseMailbox):
                 pass
             time.sleep(3)
         raise TimeoutError(f"等待验证链接超时 ({timeout}s)")
+
+
+class CloudMailMailbox(BaseMailbox):
+    """maillab/cloud-mail self-hosted mailbox service via public API."""
+
+    def __init__(
+        self,
+        api_url: str,
+        public_token: str,
+        domain: str,
+        prefix: str = "",
+        password: str = "",
+        proxy: str = None,
+    ):
+        self.api = _normalize_api_base_url(api_url, default="", label="Cloud Mail API URL")
+        self.public_token = str(public_token or "").strip()
+        self.domain = str(domain or "").strip().lstrip("@").lower()
+        self.prefix = str(prefix or "").strip().strip(".").lower()
+        self.password = str(password or "")
+        self.proxy = {"http": proxy, "https": proxy} if proxy else None
+
+    @classmethod
+    def from_config(cls, config: dict) -> 'CloudMailMailbox':
+        return cls(
+            api_url=config.get("cloud_mail_api_url", ""),
+            public_token=config.get("cloud_mail_public_token", "") or config.get("cloud_mail_token", ""),
+            domain=config.get("cloud_mail_domain", ""),
+            prefix=config.get("cloud_mail_prefix", ""),
+            password=config.get("cloud_mail_password", ""),
+        )
+
+    def _assert_ready(self) -> None:
+        if not self.public_token:
+            raise RuntimeError("Cloud Mail public token is not configured")
+        if not self.domain:
+            raise RuntimeError("Cloud Mail domain is not configured")
+
+    def _url(self, path: str) -> str:
+        base = self.api.rstrip("/")
+        if base.endswith("/api"):
+            return f"{base}{path}"
+        return f"{base}/api{path}"
+
+    def _headers(self) -> dict:
+        return {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "authorization": self.public_token,
+        }
+
+    def _post_json(self, path: str, body: dict, *, operation: str) -> object:
+        self._assert_ready()
+        with suppress_insecure_request_warning():
+            resp = requests.post(
+                self._url(path),
+                json=body,
+                headers=self._headers(),
+                proxies=self.proxy,
+                timeout=15,
+            )
+
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            message = str(getattr(resp, "text", ""))[:300]
+            raise RuntimeError(f"Cloud Mail {operation} returned non-JSON response: {message}") from exc
+
+        if resp.status_code >= 400:
+            message = payload.get("message") if isinstance(payload, dict) else str(payload)
+            raise RuntimeError(f"Cloud Mail {operation} failed: {message or f'HTTP {resp.status_code}'}")
+
+        if isinstance(payload, dict) and "code" in payload:
+            try:
+                code = int(payload.get("code") or 0)
+            except (TypeError, ValueError):
+                code = 0
+            if code != 200:
+                raise RuntimeError(f"Cloud Mail {operation} failed: {payload.get('message') or payload}")
+            return payload.get("data")
+
+        return payload
+
+    def _random_local_part(self) -> str:
+        import random
+        import string
+
+        cleaned_prefix = re.sub(r"[^a-z0-9._-]+", "", self.prefix).strip(".")
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
+        if cleaned_prefix:
+            return f"{cleaned_prefix}.{suffix}"
+        return f"cm.{suffix}"
+
+    @staticmethod
+    def _random_password() -> str:
+        import random
+        import string
+
+        chars = string.ascii_letters + string.digits
+        return "Cm" + "".join(random.choices(chars, k=14)) + "!"
+
+    @staticmethod
+    def _message_id(mail: dict) -> str:
+        return str(
+            mail.get("emailId")
+            or mail.get("id")
+            or mail.get("messageId")
+            or f"{mail.get('createTime', '')}:{mail.get('subject', '')}:{mail.get('sendEmail', '')}"
+        )
+
+    @staticmethod
+    def _message_text(mail: dict) -> str:
+        return " ".join(
+            str(mail.get(key, "") or "")
+            for key in (
+                "subject",
+                "content",
+                "text",
+                "sendEmail",
+                "sendName",
+                "toEmail",
+                "toName",
+            )
+        )
+
+    def _query_emails(self, account: MailboxAccount, *, limit: int = 20) -> list[dict]:
+        data = self._post_json(
+            "/public/emailList",
+            {
+                "toEmail": account.email,
+                "type": 0,
+                "isDel": 0,
+                "size": limit,
+                "num": 1,
+            },
+            operation="emailList",
+        )
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            items = data.get("list") or data.get("items") or data.get("data") or []
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
+
+    def get_email(self) -> MailboxAccount:
+        self._assert_ready()
+        email = f"{self._random_local_part()}@{self.domain}"
+        password = self.password or self._random_password()
+
+        self._post_json(
+            "/public/addUser",
+            {"list": [{"email": email, "password": password}]},
+            operation="addUser",
+        )
+        print(f"[CloudMail] created mailbox: {email}")
+        return MailboxAccount(
+            email=email,
+            account_id=email,
+            extra={
+                "provider_account": {
+                    "provider_type": "mailbox",
+                    "provider_name": "cloud_mail",
+                    "login_identifier": email,
+                    "display_name": email,
+                    "credentials": {
+                        "password": password,
+                    },
+                    "metadata": {
+                        "api_url": self.api,
+                        "domain": self.domain,
+                    },
+                },
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "cloud_mail",
+                    "resource_type": "mailbox",
+                    "resource_identifier": email,
+                    "handle": email,
+                    "display_name": email,
+                    "metadata": {
+                        "email": email,
+                        "api_url": self.api,
+                        "domain": self.domain,
+                    },
+                },
+            },
+        )
+
+    def get_current_ids(self, account: MailboxAccount) -> set:
+        try:
+            return {mid for mid in (self._message_id(mail) for mail in self._query_emails(account, limit=50)) if mid}
+        except Exception:
+            return set()
+
+    def wait_for_code(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+        code_pattern: str = None,
+    ) -> str:
+        import time
+
+        seen = set(before_ids or [])
+        start = time.time()
+        pattern = re.compile(code_pattern or r'(?<!#)(?<!\d)(\d{6})(?!\d)')
+        keyword_lower = str(keyword or "").lower()
+
+        while time.time() - start < timeout:
+            try:
+                for mail in self._query_emails(account, limit=20):
+                    mid = self._message_id(mail)
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    text = self._message_text(mail)
+                    if keyword_lower and keyword_lower not in text.lower():
+                        continue
+                    text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
+                    match = pattern.search(text)
+                    if match:
+                        return match.group(1) if match.groups() else match.group(0)
+            except Exception:
+                pass
+            time.sleep(3)
+
+        raise TimeoutError(f"Cloud Mail verification code wait timed out ({timeout}s)")
+
+    def wait_for_link(
+        self,
+        account: MailboxAccount,
+        keyword: str = "",
+        timeout: int = 120,
+        before_ids: set = None,
+    ) -> str:
+        import time
+
+        seen = set(before_ids or [])
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                for mail in self._query_emails(account, limit=20):
+                    mid = self._message_id(mail)
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    link = _extract_verification_link(self._message_text(mail), keyword)
+                    if link:
+                        return link
+            except Exception:
+                pass
+            time.sleep(3)
+
+        raise TimeoutError(f"Cloud Mail verification link wait timed out ({timeout}s)")
 
 
 class MoeMailMailbox(BaseMailbox):

@@ -35,10 +35,12 @@ PLATFORM_CREDENTIAL_TYPES: dict[str, str] = {
     "account_id": "identifier",
     "org_id": "identifier",
     "auth_token": "token",
+    "device_token": "token",
     "accessToken": "token",
     "refreshToken": "token",
     "sessionToken": "token",
     "idToken": "token",
+    "deviceToken": "token",
     "clientId": "identifier",
     "clientSecret": "secret",
     "workspaceId": "identifier",
@@ -66,6 +68,7 @@ PRIMARY_TOKEN_WRITE_KEYS: dict[str, str] = {
     "blink": "firebase_refresh_token",
     "openblocklabs": "wos_session",
     "lingya_qq": "vusession",
+    "freebeat": "access_token",
 }
 
 NON_LEGACY_EXTRA_KEYS = {

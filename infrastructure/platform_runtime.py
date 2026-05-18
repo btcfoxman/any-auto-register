@@ -42,6 +42,8 @@ PERSISTED_ACTION_DATA_KEYS = {
     "orgId",
     "auth_token",
     "authToken",
+    "device_token",
+    "deviceToken",
     "vusession",
     "vurefresh",
     "vuid",
@@ -66,7 +68,12 @@ STATEFUL_ACTION_IDS = {
     "relogin_sms",
     "keepalive_sync",
     "sync_lingya2api",
+    "sync_freebeat2api",
     "daily_sign_in",
+    "claim_questionnaire",
+    "refresh_session",
+    "stop_daily_sign_in",
+    "resume_daily_sign_in",
     "publish_work",
     "stop_keepalive",
     "resume_keepalive",
@@ -240,6 +247,65 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
 
     if data.get("quota_note"):
         overview["quota_note"] = data.get("quota_note")
+
+    if platform == "freebeat":
+        for key in (
+            "total_credits",
+            "free_credits",
+            "boost_credits",
+            "event_credits",
+            "membership_credits",
+            "user_subscription_type",
+            "signed_today",
+            "can_sign_in",
+            "next_refresh_at",
+            "next_refresh_at_iso",
+            "server_utc_date",
+            "token_expire_time_ms",
+            "token_expire_at",
+            "token_expire_in_days",
+            "last_keepalive_at",
+            "last_questionnaire_status",
+            "last_daily_sign_in_status",
+            "daily_sign_in_status",
+            "daily_sign_in_at",
+            "questionnaire_status",
+            "questionnaire_credits_granted",
+            "reward_amount",
+            "session_refreshed",
+            "freebeat2api_synced",
+            "freebeat_daily_sign_in_disabled",
+            "freebeat_daily_sign_in_state",
+            "freebeat_daily_sign_in_disabled_reason",
+            "freebeat_daily_sign_in_disabled_at",
+            "freebeat_daily_sign_in_resumed_at",
+        ):
+            if key in data and data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if isinstance(data.get("credits"), dict):
+            overview["credits"] = data.get("credits")
+        if isinstance(data.get("signin"), dict):
+            overview["signin"] = data.get("signin")
+        if data.get("email"):
+            overview["remote_email"] = str(data.get("email") or "")
+        total_credits = data.get("total_credits") if data.get("total_credits") not in (None, "") else data.get("remaining_credits")
+        if total_credits not in (None, ""):
+            overview["remaining_credits"] = str(total_credits)
+            overview["chips"].append(f"积分 {total_credits}")
+        if "signed_today" in data:
+            overview["chips"].append("今日已签到" if data.get("signed_today") else "今日未签到")
+        if data.get("last_questionnaire_status"):
+            overview["chips"].append(f"问卷 {data.get('last_questionnaire_status')}")
+        if data.get("daily_sign_in_status") or data.get("last_daily_sign_in_status"):
+            overview["chips"].append(f"签到 {data.get('daily_sign_in_status') or data.get('last_daily_sign_in_status')}")
+        if data.get("token_expire_in_days") is not None:
+            overview["chips"].append(f"Token {data.get('token_expire_in_days')}天")
+        if data.get("session_refreshed"):
+            overview["chips"].append("会话已续期")
+        if data.get("freebeat_daily_sign_in_disabled") is True:
+            overview["chips"].append("自动签到已停止")
+        elif data.get("freebeat_daily_sign_in_disabled") is False:
+            overview["chips"].append("自动签到已恢复")
 
     if platform == "lingya_qq":
         for key in (

@@ -73,6 +73,24 @@ _BUILTIN_DEFINITIONS: list[dict] = [
     },
     {
         "provider_type": "mailbox",
+        "provider_key": "cloud_mail_api",
+        "label": "Cloud Mail (self-hosted)",
+        "description": "Self-hosted maillab/cloud-mail service on Cloudflare Workers. Uses the public API token to create mailboxes and poll inbound mail.",
+        "driver_type": "cloud_mail_api",
+        "default_auth_mode": "token",
+        "enabled": True,
+        "category": "selfhost",
+        "auth_modes": [{"value": "token", "label": "Public Token"}],
+        "fields": [
+            {"key": "cloud_mail_api_url", "label": "API URL", "placeholder": "https://mail.example.com", "category": "connection"},
+            {"key": "cloud_mail_public_token", "label": "Public Token", "secret": True, "category": "auth"},
+            {"key": "cloud_mail_domain", "label": "Mailbox Domain", "placeholder": "example.com", "category": "identity"},
+            {"key": "cloud_mail_prefix", "label": "Email Prefix", "placeholder": "anyauto", "category": "identity"},
+            {"key": "cloud_mail_password", "label": "Mailbox Password", "placeholder": "optional", "secret": True, "category": "auth"},
+        ],
+    },
+    {
+        "provider_type": "mailbox",
         "provider_key": "moemail_api",
         "label": "MoeMail（sall.cc）",
         "description": "自部署临时邮箱，支持自动注册账号或手动登录已有账号",
@@ -543,6 +561,7 @@ _BUILTIN_DEFINITIONS: list[dict] = [
 
 
 _LEGACY_PROVIDER_ALIASES = {
+    ("mailbox", "cloud_mail"): "cloud_mail_api",
     ("sms", "herosms"): "herosms_api",
     ("sms", "smsbower"): "smsbower_api",
     ("sms", "uomsg"): "uomsg_api",
