@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from core.base_mailbox import BaseMailbox
+from core.base_mailbox import BaseMailbox, MailboxAccount, create_mailbox
 from core.base_platform import Account, AccountStatus, BasePlatform, RegisterConfig
 from core.freebeat2api_sync import sync_account_to_freebeat2api
 from core.registration import OtpSpec, ProtocolMailboxAdapter, RegistrationResult
@@ -203,12 +203,11 @@ class FreebeatPlatform(BasePlatform):
                     {"key": "sign_in", "label": "同步后签到(true/false)", "type": "text"},
                 ],
             },
-            {"id": "send_login_code", "label": "发送登录验证码", "params": []},
             {
                 "id": "relogin_email_code",
-                "label": "邮箱验证码重新登录并保活同步",
+                "label": "验证码重新自动登录并保活同步",
                 "params": [
-                    {"key": "code", "label": "邮箱验证码", "type": "text"},
+                    {"key": "code", "label": "邮箱验证码(留空自动读取)", "type": "text"},
                     {"key": "next_action", "label": "Next Action ID(可选)", "type": "text"},
                 ],
             },
@@ -221,14 +220,6 @@ class FreebeatPlatform(BasePlatform):
             },
             {"id": "resume_daily_sign_in", "label": "恢复自动签到", "params": []},
             {
-                "id": "refresh_session",
-                "label": "验证码登录续期",
-                "params": [
-                    {"key": "code", "label": "邮箱验证码", "type": "text"},
-                    {"key": "next_action", "label": "Next Action ID(可选)", "type": "text"},
-                ],
-            },
-            {
                 "id": "get_model_rule_config",
                 "label": "查询模型积分要求",
                 "params": [
@@ -238,15 +229,78 @@ class FreebeatPlatform(BasePlatform):
             },
         ]
 
+    def _mailbox_for_account(self, account: Account) -> tuple[BaseMailbox, MailboxAccount]:
+        extra = dict(account.extra or {})
+        resources = [
+            item
+            for item in list(extra.get("provider_resources") or [])
+            if isinstance(item, dict)
+            and str(item.get("provider_type") or "").strip() in {"", "mailbox"}
+            and str(item.get("resource_type") or "").strip() in {"", "mailbox"}
+        ]
+        account_email = str(account.email or "").strip().lower()
+        preferred = next(
+            (
+                item
+                for item in resources
+                if account_email
+                and str(item.get("handle") or item.get("display_name") or item.get("metadata", {}).get("email") or "").strip().lower() == account_email
+            ),
+            resources[0] if resources else None,
+        )
+        if not preferred:
+            raise RuntimeError("账号缺少注册邮箱 provider 记录，无法自动读取验证码；请在动作参数中手动填写 code")
+        provider = str(preferred.get("provider_name") or preferred.get("provider") or "").strip()
+        if not provider:
+            raise RuntimeError("账号邮箱 provider 记录缺少 provider_name，无法自动读取验证码；请在动作参数中手动填写 code")
+        metadata = dict(preferred.get("metadata") or {})
+        email = str(preferred.get("handle") or metadata.get("email") or account.email or "").strip()
+        account_id = str(preferred.get("resource_identifier") or metadata.get("account_id") or email).strip()
+        if not email:
+            raise RuntimeError("账号邮箱 provider 记录缺少邮箱地址，无法自动读取验证码；请在动作参数中手动填写 code")
+        mailbox = create_mailbox(provider=provider, extra=extra, proxy=self.config.proxy if self.config else None)
+        mailbox_account = MailboxAccount(
+            email=email,
+            account_id=account_id,
+            extra={"provider_resource": preferred},
+        )
+        return mailbox, mailbox_account
+
+    def _resolve_relogin_code(self, account: Account, params: dict, client: FreebeatClient, *, email: str) -> str:
+        manual_code = str(params.get("code") or "").strip()
+        if manual_code:
+            return manual_code
+        mailbox, mailbox_account = self._mailbox_for_account(account)
+        try:
+            timeout = int(str(params.get("otp_timeout") or "120").strip() or 120)
+        except ValueError:
+            timeout = 120
+        before_ids = mailbox.get_current_ids(mailbox_account)
+        self.log(f"Freebeat 重新登录: 发送邮箱验证码 {email}")
+        client.send_email_verify_code(
+            email,
+            verify_source=str(params.get("verify_source") or FREEBEAT_DEFAULT_VERIFY_SOURCE),
+        )
+        self.log("等待 Freebeat 邮箱验证码...")
+        code = mailbox.wait_for_code(
+            mailbox_account,
+            keyword=str(params.get("keyword") or "").strip(),
+            timeout=timeout,
+            before_ids=before_ids,
+            code_pattern=r"\b(\d{6})\b",
+        )
+        if not code:
+            raise RuntimeError("未读取到 Freebeat 邮箱验证码")
+        self.log(f"Freebeat 邮箱验证码: {str(code)[:2]}****")
+        return str(code).strip()
+
     def _relogin_with_email_code(self, account: Account, params: dict, *, message: str) -> dict:
         email = str(params.get("email") or account.email or "").strip()
-        code = str(params.get("code") or "").strip()
         if not email:
             return {"ok": False, "error": "缺少 Freebeat 邮箱地址"}
-        if not code:
-            return {"ok": False, "error": "缺少邮箱验证码"}
 
         client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
+        code = self._resolve_relogin_code(account, params, client, email=email)
         login = client.verify_email_code(
             email,
             code,

@@ -252,6 +252,86 @@ def test_freebeat_relogin_email_code_refreshes_and_syncs(monkeypatch):
     assert graph["overview"]["freebeat2api_synced"] is True
 
 
+def test_freebeat_relogin_email_code_can_send_and_read_otp(monkeypatch):
+    events: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def send_email_verify_code(self, email, *, verify_source):
+            events.append(("send", email))
+            return {"code": 0}
+
+        def verify_email_code(self, email, code, *, next_action=None, next_router_state_tree=None):
+            events.append(("login", email, code))
+            return {
+                "code": 0,
+                "data": {
+                    "token": "tok_auto",
+                    "accessToken": "tok_auto",
+                    "deviceToken": "dev_auto",
+                    "userId": "user_auto",
+                    "expireTime": 1781635058486,
+                },
+            }
+
+        def fetch_account_state(self, token):
+            events.append(("state", token))
+            return {
+                "token": token,
+                "credits": {"free": "700", "boost": "200", "event": "100", "membership": "0", "totalCredits": 1000},
+                "signin_status": {"signedToday": False, "canSignIn": True},
+                "last_keepalive_at": "2026-05-20T00:00:00Z",
+            }
+
+        def auth_state(self):
+            return {"cookies": "authToken=tok_auto; fb_session=sess_auto", "cookie_header": "authToken=tok_auto; fb_session=sess_auto"}
+
+    class FakeMailbox:
+        def get_current_ids(self, account):
+            events.append(("baseline", account.email, account.account_id))
+            return {"old"}
+
+        def wait_for_code(self, account, **kwargs):
+            events.append(("wait", account.email, kwargs.get("before_ids")))
+            return "778899"
+
+    monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
+    monkeypatch.setattr("platforms.freebeat.plugin.create_mailbox", lambda provider, extra, proxy=None: FakeMailbox())
+    monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", lambda *args, **kwargs: {"ok": True, "account": {"id": 7}})
+
+    platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
+    account = Account(
+        platform="freebeat",
+        email="user@example.com",
+        password="",
+        user_id="user_old",
+        token="tok_old",
+        extra={
+            "provider_resources": [
+                {
+                    "provider_type": "mailbox",
+                    "provider_name": "cloud_mail",
+                    "resource_type": "mailbox",
+                    "resource_identifier": "user@example.com",
+                    "handle": "user@example.com",
+                    "metadata": {"account_id": "user@example.com", "email": "user@example.com"},
+                }
+            ]
+        },
+    )
+
+    result = platform.execute_action("relogin_email_code", account, {})
+
+    assert result["ok"] is True
+    assert result["data"]["access_token"] == "tok_auto"
+    assert ("baseline", "user@example.com", "user@example.com") in events
+    assert ("send", "user@example.com") in events
+    assert ("wait", "user@example.com", {"old"}) in events
+    assert ("login", "user@example.com", "778899") in events
+
+
 def test_freebeat_platform_declares_protocol_mailbox_capability():
     platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
     actions = {item["id"] for item in platform.get_platform_actions()}
@@ -261,12 +341,13 @@ def test_freebeat_platform_declares_protocol_mailbox_capability():
     assert {
         "daily_sign_in",
         "claim_questionnaire",
-        "refresh_session",
         "relogin_email_code",
         "keepalive_sync",
         "stop_daily_sign_in",
         "resume_daily_sign_in",
     } <= actions
+    assert "send_login_code" not in actions
+    assert "refresh_session" not in actions
     assert "relogin_email_code" in STATEFUL_ACTION_IDS
 
 
