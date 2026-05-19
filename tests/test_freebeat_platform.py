@@ -93,6 +93,7 @@ def test_freebeat_api_retries_once_after_vercel_403():
     assert result["data"] is True
     assert [item["kind"] for item in calls] == ["request", "warmup", "request"]
     assert calls[0]["headers"]["x-platform-type"] == "web"
+    assert "x-platform-type" not in {key.lower(): value for key, value in calls[1]["headers"].items()}
     assert "origin" not in {key.lower(): value for key, value in calls[0]["headers"].items()}
 
 
@@ -293,6 +294,79 @@ def test_freebeat_relogin_email_code_refreshes_and_syncs(monkeypatch):
     assert graph["overview"]["freebeat2api_synced"] is True
 
 
+def test_freebeat_relogin_uses_saved_account_proxy(monkeypatch):
+    proxies: list[str | None] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            proxies.append(kwargs.get("proxy"))
+
+        def verify_email_code(self, email, code, *, next_action=None, next_router_state_tree=None):
+            return {
+                "code": 0,
+                "data": {
+                    "token": "tok_proxy",
+                    "accessToken": "tok_proxy",
+                    "deviceToken": "dev_proxy",
+                    "userId": "user_proxy",
+                    "expireTime": 1781635058486,
+                },
+            }
+
+        def fetch_account_state(self, token):
+            return {
+                "token": token,
+                "credits": {"free": "500", "boost": "0", "event": "0", "membership": "0", "totalCredits": 500},
+                "signin_status": {"signedToday": False, "canSignIn": True},
+                "last_keepalive_at": "2026-05-20T00:00:00Z",
+            }
+
+        def auth_state(self):
+            return {"cookies": "authToken=tok_proxy", "cookie_header": "authToken=tok_proxy"}
+
+    monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
+    monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", lambda *args, **kwargs: {"ok": True})
+
+    platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
+    account = Account(
+        platform="freebeat",
+        email="user@example.com",
+        password="",
+        user_id="user_old",
+        token="tok_old",
+        extra={
+            "account_overview": {
+                "legacy_extra": {
+                    "proxy_url": "http://proxy.example:8080",
+                }
+            }
+        },
+    )
+
+    result = platform.execute_action("relogin_email_code", account, {"code": "112233"})
+
+    assert result["ok"] is True
+    assert proxies == ["http://proxy.example:8080"]
+
+
+def test_freebeat_relogin_proxy_param_overrides_saved_proxy():
+    platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
+    account = Account(
+        platform="freebeat",
+        email="user@example.com",
+        password="",
+        extra={
+            "account_overview": {
+                "legacy_extra": {
+                    "proxy_url": "http://saved-proxy.example:8080",
+                }
+            }
+        },
+    )
+
+    assert platform._proxy_for_account(account, {"proxy": "http://override-proxy.example:8080"}) == "http://override-proxy.example:8080"
+
+
 def test_freebeat_relogin_email_code_can_send_and_read_otp(monkeypatch):
     events: list[tuple[str, object]] = []
 
@@ -339,7 +413,11 @@ def test_freebeat_relogin_email_code_can_send_and_read_otp(monkeypatch):
             return "778899"
 
     monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
-    monkeypatch.setattr("platforms.freebeat.plugin.create_mailbox", lambda provider, extra, proxy=None: FakeMailbox())
+    def fake_create_mailbox(provider, extra, proxy=None):
+        events.append(("mailbox_proxy", proxy))
+        return FakeMailbox()
+
+    monkeypatch.setattr("platforms.freebeat.plugin.create_mailbox", fake_create_mailbox)
     monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", lambda *args, **kwargs: {"ok": True, "account": {"id": 7}})
 
     platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
@@ -359,7 +437,8 @@ def test_freebeat_relogin_email_code_can_send_and_read_otp(monkeypatch):
                     "handle": "user@example.com",
                     "metadata": {"account_id": "user@example.com", "email": "user@example.com"},
                 }
-            ]
+            ],
+            "account_overview": {"legacy_extra": {"proxy_url": "http://proxy.example:8080"}},
         },
     )
 
@@ -367,6 +446,7 @@ def test_freebeat_relogin_email_code_can_send_and_read_otp(monkeypatch):
 
     assert result["ok"] is True
     assert result["data"]["access_token"] == "tok_auto"
+    assert ("mailbox_proxy", "http://proxy.example:8080") in events
     assert ("baseline", "user@example.com", "user@example.com", "cloud_mail") in events
     assert ("send", "user@example.com") in events
     assert ("wait", "user@example.com", "cloud_mail", {"old"}) in events

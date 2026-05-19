@@ -75,6 +75,27 @@ def _attach_auth_state(data: dict[str, Any], state: dict[str, Any]) -> dict[str,
     return data
 
 
+def _param_proxy_value(params: dict[str, Any] | None) -> str:
+    data = dict(params or {})
+    for key in ("freebeat_proxy_url", "proxy_url", "proxyUrl", "proxy"):
+        value = str(data.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _account_proxy_value(account: Account) -> str:
+    extra = dict(getattr(account, "extra", {}) or {})
+    overview = extra.get("account_overview") if isinstance(extra.get("account_overview"), dict) else {}
+    legacy_extra = overview.get("legacy_extra") if isinstance(overview.get("legacy_extra"), dict) else {}
+    for source in (extra, legacy_extra, overview):
+        for key in ("freebeat_proxy_url", "proxy_url", "proxyUrl", "resolved_proxy", "proxy"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
 @register
 class FreebeatPlatform(BasePlatform):
     name = "freebeat"
@@ -119,6 +140,13 @@ class FreebeatPlatform(BasePlatform):
                 "account_overview": overview,
             },
         )
+
+    def _proxy_for_account(self, account: Account, params: dict[str, Any] | None = None) -> str | None:
+        override = _param_proxy_value(params)
+        if override:
+            return override
+        configured = str(getattr(self.config, "proxy", "") or "").strip()
+        return configured or _account_proxy_value(account) or None
 
     def build_protocol_mailbox_adapter(self):
         def _build_worker(ctx, artifacts):
@@ -166,7 +194,7 @@ class FreebeatPlatform(BasePlatform):
     ) -> dict[str, Any]:
         return load_freebeat_account_state(
             account,
-            proxy=self.config.proxy if self.config else None,
+            proxy=self._proxy_for_account(account),
             log_fn=self.log,
             force_refresh=force_refresh,
             auto_sign_in=auto_sign_in,
@@ -209,6 +237,7 @@ class FreebeatPlatform(BasePlatform):
                 "params": [
                     {"key": "code", "label": "邮箱验证码(留空自动读取)", "type": "text"},
                     {"key": "next_action", "label": "Next Action ID(可选)", "type": "text"},
+                    {"key": "proxy", "label": "代理(可选，默认账号保存代理)", "type": "text"},
                 ],
             },
             {
@@ -229,7 +258,7 @@ class FreebeatPlatform(BasePlatform):
             },
         ]
 
-    def _mailbox_for_account(self, account: Account) -> tuple[BaseMailbox, MailboxAccount]:
+    def _mailbox_for_account(self, account: Account, params: dict[str, Any] | None = None) -> tuple[BaseMailbox, MailboxAccount]:
         extra = dict(account.extra or {})
         resources = [
             item
@@ -258,7 +287,7 @@ class FreebeatPlatform(BasePlatform):
         account_id = str(preferred.get("resource_identifier") or metadata.get("account_id") or email).strip()
         if not email:
             raise RuntimeError("账号邮箱 provider 记录缺少邮箱地址，无法自动读取验证码；请在动作参数中手动填写 code")
-        mailbox = create_mailbox(provider=provider, extra=extra, proxy=self.config.proxy if self.config else None)
+        mailbox = create_mailbox(provider=provider, extra=extra, proxy=self._proxy_for_account(account, params))
         mailbox_account = MailboxAccount(
             email=email,
             account_id=account_id,
@@ -270,7 +299,7 @@ class FreebeatPlatform(BasePlatform):
         manual_code = str(params.get("code") or "").strip()
         if manual_code:
             return manual_code
-        mailbox, mailbox_account = self._mailbox_for_account(account)
+        mailbox, mailbox_account = self._mailbox_for_account(account, params)
         try:
             timeout = int(str(params.get("otp_timeout") or "120").strip() or 120)
         except ValueError:
@@ -299,7 +328,10 @@ class FreebeatPlatform(BasePlatform):
         if not email:
             return {"ok": False, "error": "缺少 Freebeat 邮箱地址"}
 
-        client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
+        proxy = self._proxy_for_account(account, params)
+        if proxy:
+            self.log("Freebeat action using account proxy")
+        client = FreebeatClient(proxy=proxy, log_fn=self.log)
         code = self._resolve_relogin_code(account, params, client, email=email)
         login = client.verify_email_code(
             email,
@@ -381,7 +413,7 @@ class FreebeatPlatform(BasePlatform):
             context_state = self._load_state(account)
             token = str(context_state.get("token") or context_state.get("access_token") or account.token or "").strip()
             client = FreebeatClient(
-                proxy=self.config.proxy if self.config else None,
+                proxy=self._proxy_for_account(account),
                 log_fn=self.log,
                 cookie_header=str(context_state.get("cookie_header") or context_state.get("cookies") or ""),
             )
@@ -413,7 +445,7 @@ class FreebeatPlatform(BasePlatform):
             context_state = self._load_state(account)
             token = str(context_state.get("token") or context_state.get("access_token") or account.token or "").strip()
             client = FreebeatClient(
-                proxy=self.config.proxy if self.config else None,
+                proxy=self._proxy_for_account(account),
                 log_fn=self.log,
                 cookie_header=str(context_state.get("cookie_header") or context_state.get("cookies") or ""),
             )
@@ -500,7 +532,7 @@ class FreebeatPlatform(BasePlatform):
             email = str(params.get("email") or account.email or "").strip()
             if not email:
                 return {"ok": False, "error": "缺少 Freebeat 邮箱地址"}
-            client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
+            client = FreebeatClient(proxy=self._proxy_for_account(account), log_fn=self.log)
             result = client.send_email_verify_code(
                 email,
                 verify_source=str(params.get("verify_source") or FREEBEAT_DEFAULT_VERIFY_SOURCE),
@@ -535,7 +567,7 @@ class FreebeatPlatform(BasePlatform):
             model_id = int(str(params.get("model_id") or "101").strip())
             business_type = int(str(params.get("business_type") or "3").strip())
             client = FreebeatClient(
-                proxy=self.config.proxy if self.config else None,
+                proxy=self._proxy_for_account(account),
                 log_fn=self.log,
                 cookie_header=str(state.get("cookie_header") or state.get("cookies") or ""),
             )

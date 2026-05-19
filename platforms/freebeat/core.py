@@ -405,6 +405,7 @@ class FreebeatClient:
         content_type: str = "",
         token: str = "",
         include_cookie: bool = True,
+        include_fetch_headers: bool = True,
     ) -> dict[str, str]:
         request_headers = {
             "accept": accept,
@@ -412,10 +413,11 @@ class FreebeatClient:
             "sec-ch-ua": FREEBEAT_SEC_CH_UA,
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
-            "fb-language": "en",
-            "x-platform-type": "web",
             "user-agent": FREEBEAT_USER_AGENT,
         }
+        if include_fetch_headers:
+            request_headers["fb-language"] = "en"
+            request_headers["x-platform-type"] = "web"
         if content_type:
             request_headers["content-type"] = content_type
         if token:
@@ -438,6 +440,7 @@ class FreebeatClient:
                         "image/avif,image/webp,image/apng,*/*;q=0.8"
                     ),
                     include_cookie=False,
+                    include_fetch_headers=False,
                 ),
             )
             self.log(f"GET /zh/ai-video-generator warmup -> {response.status_code}")
