@@ -49,10 +49,51 @@ def test_freebeat_authenticated_api_sends_current_frontend_token_headers():
 
     headers = calls[0]["headers"]
     assert result["data"]["totalCredits"] == 100
+    assert headers["fb-language"] == "en"
+    assert headers["x-platform-type"] == "web"
+    assert headers["sec-ch-ua-mobile"] == "?0"
     assert headers["Authorization"] == "tok_123"
     assert headers["token"] == "tok_123"
     assert headers["udt"] == "tok_123"
     assert headers["cookie"] == "authToken=tok_123; fb_session=sess_123"
+
+
+def test_freebeat_api_retries_once_after_vercel_403():
+    calls: list[dict] = []
+
+    class Response403:
+        status_code = 403
+        text = '{"error":{"code":"403","message":"Forbidden"}}'
+
+        def json(self):
+            return {"error": {"code": "403", "message": "Forbidden"}}
+
+    class Response200:
+        status_code = 200
+        text = '{"code":0,"data":true}'
+
+        def json(self):
+            return {"code": 0, "data": True}
+
+    client = FreebeatClient(log_fn=lambda message: None)
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"kind": "request", "method": method, "url": url, **kwargs})
+        return Response403() if len([item for item in calls if item["kind"] == "request"]) == 1 else Response200()
+
+    def fake_get(url, **kwargs):
+        calls.append({"kind": "warmup", "url": url, **kwargs})
+        return Response200()
+
+    client.s.request = fake_request
+    client.s.get = fake_get
+
+    result = client.send_email_verify_code("user@example.com")
+
+    assert result["data"] is True
+    assert [item["kind"] for item in calls] == ["request", "warmup", "request"]
+    assert calls[0]["headers"]["x-platform-type"] == "web"
+    assert "origin" not in {key.lower(): value for key, value in calls[0]["headers"].items()}
 
 
 def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):

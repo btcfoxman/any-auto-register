@@ -20,6 +20,11 @@ FREEBEAT_SEND_CODE_PATH = "/api/proxy/v1/user/com/sendEmailVerifyCodeV2"
 FREEBEAT_DEFAULT_VERIFY_SOURCE = "WEB_SHOPIFY_LOGIN"
 FREEBEAT_DEFAULT_NEXT_ACTION = "40284e1e63e50bc18b2033770e8fa1412662d607d8"
 FREEBEAT_ONBOARDING_CODE = "onboarding_v1"
+FREEBEAT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+)
+FREEBEAT_SEC_CH_UA = '"Not/A)Brand";v="99", "Chromium";v="148"'
 
 DEFAULT_ONBOARDING_ANSWERS = [
     {"questionKey": "q1_describe_you", "options": ["content_creator"]},
@@ -123,6 +128,13 @@ def _days_until_ms(value: Any) -> int | None:
         return None
     seconds = raw / 1000 if raw > 10_000_000_000 else raw
     return max(math.floor((seconds - datetime.now(timezone.utc).timestamp()) / 86400), 0)
+
+
+def _email_domain(email: Any) -> str:
+    text = str(email or "").strip()
+    if "@" not in text:
+        return ""
+    return text.rsplit("@", 1)[1].strip().lower()
 
 
 def _response_text(response: Any) -> str:
@@ -329,12 +341,13 @@ class FreebeatClient:
             {
                 "accept": "*/*",
                 "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "origin": FREEBEAT_BASE,
                 "referer": FREEBEAT_REGISTER_REFERER,
-                "user-agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-                ),
+                "sec-ch-ua": FREEBEAT_SEC_CH_UA,
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "fb-language": "en",
+                "x-platform-type": "web",
+                "user-agent": FREEBEAT_USER_AGENT,
             }
         )
 
@@ -385,6 +398,52 @@ class FreebeatClient:
             raw = f"/{raw}"
         return f"{base}{raw}"
 
+    def _frontend_headers(
+        self,
+        *,
+        accept: str = "application/json, text/plain, */*",
+        content_type: str = "",
+        token: str = "",
+        include_cookie: bool = True,
+    ) -> dict[str, str]:
+        request_headers = {
+            "accept": accept,
+            "referer": FREEBEAT_REGISTER_REFERER,
+            "sec-ch-ua": FREEBEAT_SEC_CH_UA,
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "fb-language": "en",
+            "x-platform-type": "web",
+            "user-agent": FREEBEAT_USER_AGENT,
+        }
+        if content_type:
+            request_headers["content-type"] = content_type
+        if token:
+            request_headers["Authorization"] = token
+            request_headers["token"] = token
+            request_headers["udt"] = token
+        if include_cookie:
+            cookie_header = self.cookie_header() or _auth_token_cookie(token)
+            if cookie_header:
+                request_headers["cookie"] = cookie_header
+        return request_headers
+
+    def _warmup_frontend_session(self) -> None:
+        try:
+            response = self.s.get(
+                FREEBEAT_REGISTER_REFERER,
+                headers=self._frontend_headers(
+                    accept=(
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                        "image/avif,image/webp,image/apng,*/*;q=0.8"
+                    ),
+                    include_cookie=False,
+                ),
+            )
+            self.log(f"GET /zh/ai-video-generator warmup -> {response.status_code}")
+        except Exception as exc:
+            self.log(f"Freebeat frontend warmup failed: {exc}")
+
     def _api_json(
         self,
         method: str,
@@ -397,27 +456,27 @@ class FreebeatClient:
         base: str = FREEBEAT_BASE,
         validate_code: bool = True,
     ) -> dict[str, Any]:
-        request_headers = {
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/json",
-            "referer": FREEBEAT_REGISTER_REFERER,
-        }
-        if token:
-            request_headers["Authorization"] = token
-            request_headers["token"] = token
-            request_headers["udt"] = token
-        cookie_header = self.cookie_header() or _auth_token_cookie(token)
-        if cookie_header:
-            request_headers["cookie"] = cookie_header
+        request_headers = self._frontend_headers(
+            content_type="application/json" if json_body is not None else "",
+            token=token,
+        )
         if headers:
             request_headers.update(headers)
         data = _json_dumps(json_body) if json_body is not None else None
-        response = self.s.request(
-            method.upper(),
-            self._url(path_or_url, base=base),
-            headers=request_headers,
-            data=data,
-        )
+        url = self._url(path_or_url, base=base)
+        response = None
+        for attempt in range(2):
+            response = self.s.request(
+                method.upper(),
+                url,
+                headers=request_headers,
+                data=data,
+            )
+            if response.status_code == 403 and attempt == 0 and base == FREEBEAT_BASE:
+                self.log(f"{method.upper()} {path_or_url} -> 403, warming up frontend session and retrying")
+                self._warmup_frontend_session()
+                continue
+            break
         self.log(f"{method.upper()} {path_or_url} -> {response.status_code}")
         if response.status_code != 200:
             snippet = _response_text(response)[:300]
@@ -432,7 +491,9 @@ class FreebeatClient:
         verify_source: str = FREEBEAT_DEFAULT_VERIFY_SOURCE,
     ) -> dict[str, Any]:
         payload = {"email": str(email).strip(), "verifySource": str(verify_source or FREEBEAT_DEFAULT_VERIFY_SOURCE)}
-        return self._api_json("POST", FREEBEAT_SEND_CODE_PATH, json_body=payload, label="sendEmailVerifyCodeV2")
+        domain = _email_domain(email)
+        label = f"sendEmailVerifyCodeV2 domain={domain}" if domain else "sendEmailVerifyCodeV2"
+        return self._api_json("POST", FREEBEAT_SEND_CODE_PATH, json_body=payload, label=label)
 
     def verify_email_code(
         self,
