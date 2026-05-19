@@ -262,7 +262,7 @@ class FreebeatPlatform(BasePlatform):
         mailbox_account = MailboxAccount(
             email=email,
             account_id=account_id,
-            extra={"provider_resource": preferred},
+            extra={"provider_resource": preferred, "mailbox_provider_key": provider},
         )
         return mailbox, mailbox_account
 

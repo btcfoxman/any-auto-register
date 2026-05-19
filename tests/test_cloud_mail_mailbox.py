@@ -5,6 +5,7 @@ import pytest
 import core.base_mailbox as mailbox_module
 from core.base_mailbox import CloudMailMailbox, MAILBOX_FACTORY_REGISTRY, MailboxAccount
 from infrastructure.provider_definitions_repository import _definition_from_seed
+from infrastructure.provider_settings_repository import ProviderSettingsRepository
 
 
 class FakeResponse:
@@ -26,6 +27,31 @@ def test_cloud_mail_seed_definition_is_available():
     assert "cloud_mail_api_url" in {field["key"] for field in definition.get_fields()}
     assert MAILBOX_FACTORY_REGISTRY["cloud_mail_api"]
     assert MAILBOX_FACTORY_REGISTRY["cloud_mail"]
+
+
+def test_cloud_mail_legacy_provider_name_resolves_canonical_settings():
+    repo = ProviderSettingsRepository()
+    repo.save(
+        setting_id=None,
+        provider_type="mailbox",
+        provider_key="cloud_mail_api",
+        display_name="Cloud Mail",
+        auth_mode="api_key",
+        enabled=True,
+        is_default=True,
+        config={
+            "cloud_mail_api_url": "https://mail.example.com",
+            "cloud_mail_domain": "example.com",
+        },
+        auth={"cloud_mail_public_token": "public-token"},
+        metadata={},
+    )
+
+    settings = repo.resolve_runtime_settings("mailbox", "cloud_mail", {})
+
+    assert settings["cloud_mail_api_url"] == "https://mail.example.com"
+    assert settings["cloud_mail_public_token"] == "public-token"
+    assert settings["cloud_mail_domain"] == "example.com"
 
 
 def test_get_email_creates_cloud_mail_user(monkeypatch):

@@ -290,11 +290,11 @@ def test_freebeat_relogin_email_code_can_send_and_read_otp(monkeypatch):
 
     class FakeMailbox:
         def get_current_ids(self, account):
-            events.append(("baseline", account.email, account.account_id))
+            events.append(("baseline", account.email, account.account_id, account.extra.get("mailbox_provider_key")))
             return {"old"}
 
         def wait_for_code(self, account, **kwargs):
-            events.append(("wait", account.email, kwargs.get("before_ids")))
+            events.append(("wait", account.email, account.extra.get("mailbox_provider_key"), kwargs.get("before_ids")))
             return "778899"
 
     monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
@@ -326,9 +326,9 @@ def test_freebeat_relogin_email_code_can_send_and_read_otp(monkeypatch):
 
     assert result["ok"] is True
     assert result["data"]["access_token"] == "tok_auto"
-    assert ("baseline", "user@example.com", "user@example.com") in events
+    assert ("baseline", "user@example.com", "user@example.com", "cloud_mail") in events
     assert ("send", "user@example.com") in events
-    assert ("wait", "user@example.com", {"old"}) in events
+    assert ("wait", "user@example.com", "cloud_mail", {"old"}) in events
     assert ("login", "user@example.com", "778899") in events
 
 

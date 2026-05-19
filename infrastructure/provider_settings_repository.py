@@ -59,6 +59,8 @@ class ProviderSettingsRepository:
     def resolve_runtime_settings(self, provider_type: str, provider_key: str, overrides: dict | None = None) -> dict:
         definition = self.definitions.get_by_key(provider_type, provider_key)
         item = self.get_by_key(provider_type, provider_key)
+        if not item and definition and definition.provider_key != provider_key:
+            item = self.get_by_key(provider_type, definition.provider_key)
         payload: dict = {}
         if definition:
             for field in definition.get_fields():
