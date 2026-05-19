@@ -72,6 +72,7 @@ STATEFUL_ACTION_IDS = {
     "daily_sign_in",
     "claim_questionnaire",
     "refresh_session",
+    "relogin_email_code",
     "stop_daily_sign_in",
     "resume_daily_sign_in",
     "publish_work",

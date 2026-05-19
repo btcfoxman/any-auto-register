@@ -7,7 +7,7 @@ from core.base_platform import Account, RegisterConfig
 from core.db import AccountModel, engine
 from core.platform_accounts import build_platform_account
 from domain.actions import ActionExecutionCommand
-from infrastructure.platform_runtime import PlatformRuntime
+from infrastructure.platform_runtime import PlatformRuntime, STATEFUL_ACTION_IDS
 from platforms.freebeat.core import FreebeatClient, _extract_login_payload
 from platforms.freebeat.plugin import FreebeatPlatform
 from platforms.freebeat.protocol_mailbox import FreebeatProtocolMailboxWorker
@@ -174,6 +174,84 @@ def test_freebeat_refresh_session_action_persists_token_and_overview(monkeypatch
     assert account.token == "tok_new"
 
 
+def test_freebeat_relogin_email_code_refreshes_and_syncs(monkeypatch):
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def verify_email_code(self, email, code, *, next_action=None, next_router_state_tree=None):
+            assert email == "user@example.com"
+            assert code == "112233"
+            return {
+                "code": 0,
+                "data": {
+                    "token": "tok_relogin",
+                    "accessToken": "tok_relogin",
+                    "deviceToken": "dev_relogin",
+                    "userId": "user_relogin",
+                    "expireTime": 1781635058486,
+                },
+            }
+
+        def fetch_account_state(self, token):
+            assert token == "tok_relogin"
+            return {
+                "token": token,
+                "credits": {"free": "800", "boost": "200", "event": "100", "membership": "0", "totalCredits": 1100},
+                "signin_status": {"signedToday": False, "canSignIn": True, "serverUtcDate": "2026-05-20"},
+                "last_keepalive_at": "2026-05-20T00:00:00Z",
+            }
+
+        def auth_state(self):
+            return {
+                "cookies": "authToken=tok_relogin; fb_session=sess_relogin",
+                "cookie_header": "authToken=tok_relogin; fb_session=sess_relogin",
+            }
+
+    sync_calls: list[tuple[bool, bool, str]] = []
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, balance=False, **kwargs):
+        sync_calls.append((heartbeat, balance, account.token))
+        return {"ok": True, "account": {"id": 11}}
+
+    import platforms.freebeat.plugin as freebeat_plugin
+
+    monkeypatch.setattr(freebeat_plugin, "FreebeatClient", FakeClient)
+    monkeypatch.setattr(freebeat_plugin, "sync_account_to_freebeat2api", fake_sync)
+
+    with Session(engine) as session:
+        model = AccountModel(platform="freebeat", email="user@example.com", password="")
+        session.add(model)
+        session.commit()
+        session.refresh(model)
+        account_id = int(model.id or 0)
+
+    result = PlatformRuntime().execute_action(
+        ActionExecutionCommand(
+            platform="freebeat",
+            account_id=account_id,
+            action_id="relogin_email_code",
+            params={"code": "112233"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["access_token"] == "tok_relogin"
+    assert result.data["cookies"] == "***"
+    assert result.data["freebeat2api_synced"] is True
+    assert sync_calls == [(True, True, "tok_relogin")]
+
+    with Session(engine) as session:
+        graph = load_account_graphs(session, [account_id])[account_id]
+        credentials = {item["key"]: item["value"] for item in graph["credentials"]}
+
+    assert credentials["access_token"] == "tok_relogin"
+    assert credentials["device_token"] == "dev_relogin"
+    assert credentials["cookies"] == "authToken=tok_relogin; fb_session=sess_relogin"
+    assert graph["overview"]["total_credits"] == 1100
+    assert graph["overview"]["freebeat2api_synced"] is True
+
+
 def test_freebeat_platform_declares_protocol_mailbox_capability():
     platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
     actions = {item["id"] for item in platform.get_platform_actions()}
@@ -184,10 +262,12 @@ def test_freebeat_platform_declares_protocol_mailbox_capability():
         "daily_sign_in",
         "claim_questionnaire",
         "refresh_session",
+        "relogin_email_code",
         "keepalive_sync",
         "stop_daily_sign_in",
         "resume_daily_sign_in",
     } <= actions
+    assert "relogin_email_code" in STATEFUL_ACTION_IDS
 
 
 def test_freebeat_registration_result_maps_access_token_as_primary():

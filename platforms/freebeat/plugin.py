@@ -205,6 +205,14 @@ class FreebeatPlatform(BasePlatform):
             },
             {"id": "send_login_code", "label": "发送登录验证码", "params": []},
             {
+                "id": "relogin_email_code",
+                "label": "邮箱验证码重新登录并保活同步",
+                "params": [
+                    {"key": "code", "label": "邮箱验证码", "type": "text"},
+                    {"key": "next_action", "label": "Next Action ID(可选)", "type": "text"},
+                ],
+            },
+            {
                 "id": "stop_daily_sign_in",
                 "label": "停止自动签到",
                 "params": [
@@ -229,6 +237,62 @@ class FreebeatPlatform(BasePlatform):
                 ],
             },
         ]
+
+    def _relogin_with_email_code(self, account: Account, params: dict, *, message: str) -> dict:
+        email = str(params.get("email") or account.email or "").strip()
+        code = str(params.get("code") or "").strip()
+        if not email:
+            return {"ok": False, "error": "缺少 Freebeat 邮箱地址"}
+        if not code:
+            return {"ok": False, "error": "缺少邮箱验证码"}
+
+        client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
+        login = client.verify_email_code(
+            email,
+            code,
+            next_action=str(params.get("next_action") or "").strip() or None,
+            next_router_state_tree=str(params.get("next_router_state_tree") or "").strip() or None,
+        )
+        login_data = dict(login.get("data") or {})
+        token = str(login_data.get("token") or login_data.get("accessToken") or login_data.get("deviceToken") or "").strip()
+        state = client.fetch_account_state(token)
+        state.update(
+            {
+                "email": email,
+                "user_id": str(login_data.get("userId") or ""),
+                "login": login,
+                "expire_time": login_data.get("expireTime") or "",
+                "access_token": str(login_data.get("accessToken") or token),
+                "device_token": str(login_data.get("deviceToken") or ""),
+            }
+        )
+        data = summarize_freebeat_account_state(state, fallback_email=email)
+        auth_state = client.auth_state() if hasattr(client, "auth_state") else {}
+        data.update(
+            {
+                "access_token": str(login_data.get("accessToken") or token),
+                "accessToken": str(login_data.get("accessToken") or token),
+                "device_token": str(login_data.get("deviceToken") or ""),
+                "deviceToken": str(login_data.get("deviceToken") or ""),
+                "cookies": auth_state.get("cookies", ""),
+                "cookie_header": auth_state.get("cookie_header", ""),
+                "user_id": str(login_data.get("userId") or ""),
+                "account_id": str(login_data.get("userId") or ""),
+                "expire_time": login_data.get("expireTime") or "",
+                "session_refreshed": True,
+                "message": message,
+            }
+        )
+        sync_result = sync_account_to_freebeat2api(
+            _account_with_extra(account, {**dict(account.extra or {}), **data}),
+            log_fn=self.log,
+            heartbeat=True,
+            balance=True,
+        )
+        data["freebeat2api_synced"] = bool(sync_result)
+        if sync_result:
+            data["freebeat2api"] = sync_result
+        return {"ok": True, "data": data}
 
     def execute_action(self, action_id: str, account: Account, params: dict) -> dict:
         params = dict(params or {})
@@ -398,59 +462,18 @@ class FreebeatPlatform(BasePlatform):
             }
 
         if action_id == "refresh_session":
-            email = str(params.get("email") or account.email or "").strip()
-            code = str(params.get("code") or "").strip()
-            if not email:
-                return {"ok": False, "error": "缺少 Freebeat 邮箱地址"}
-            if not code:
-                return {"ok": False, "error": "缺少邮箱验证码"}
-            client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
-            login = client.verify_email_code(
-                email,
-                code,
-                next_action=str(params.get("next_action") or "").strip() or None,
-                next_router_state_tree=str(params.get("next_router_state_tree") or "").strip() or None,
+            return self._relogin_with_email_code(
+                account,
+                params,
+                message="Freebeat 验证码登录续期成功，并已执行保活同步",
             )
-            login_data = dict(login.get("data") or {})
-            token = str(login_data.get("token") or login_data.get("accessToken") or login_data.get("deviceToken") or "").strip()
-            state = client.fetch_account_state(token)
-            state.update(
-                {
-                    "email": email,
-                    "user_id": str(login_data.get("userId") or ""),
-                    "login": login,
-                    "expire_time": login_data.get("expireTime") or "",
-                    "access_token": str(login_data.get("accessToken") or token),
-                    "device_token": str(login_data.get("deviceToken") or ""),
-                }
+
+        if action_id == "relogin_email_code":
+            return self._relogin_with_email_code(
+                account,
+                params,
+                message="Freebeat 邮箱验证码重新登录成功，并已执行保活同步",
             )
-            data = summarize_freebeat_account_state(state, fallback_email=email)
-            auth_state = client.auth_state() if hasattr(client, "auth_state") else {}
-            data.update(
-                {
-                    "access_token": str(login_data.get("accessToken") or token),
-                    "accessToken": str(login_data.get("accessToken") or token),
-                    "device_token": str(login_data.get("deviceToken") or ""),
-                    "deviceToken": str(login_data.get("deviceToken") or ""),
-                    "cookies": auth_state.get("cookies", ""),
-                    "cookie_header": auth_state.get("cookie_header", ""),
-                    "user_id": str(login_data.get("userId") or ""),
-                    "account_id": str(login_data.get("userId") or ""),
-                    "expire_time": login_data.get("expireTime") or "",
-                    "session_refreshed": True,
-                    "message": "Freebeat 验证码登录续期成功",
-                }
-            )
-            sync_result = sync_account_to_freebeat2api(
-                _account_with_extra(account, {**dict(account.extra or {}), **data}),
-                log_fn=self.log,
-                heartbeat=True,
-                balance=True,
-            )
-            data["freebeat2api_synced"] = bool(sync_result)
-            if sync_result:
-                data["freebeat2api"] = sync_result
-            return {"ok": True, "data": data}
 
         if action_id == "get_model_rule_config":
             state = self._load_state(account)
