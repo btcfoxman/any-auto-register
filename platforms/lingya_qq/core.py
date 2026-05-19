@@ -24,6 +24,7 @@ PHONE_LOGIN_FROM = "spp_hlw_phone_login"
 PUBLISH_BIZ_ID = "1000226"
 DEFAULT_VIDEO_UPLOAD_SERVICE_ID = f"{PUBLISH_BIZ_ID}_20250923195211_7dda2b6b"
 VIDEO_UPLOAD_CHUNK_SIZE = 1024 * 1024
+DIRECT_UPLOAD_PROXIES = {"http": None, "https": None, "all": None, "no_proxy": "*"}
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -341,6 +342,7 @@ class LingYaQQClient:
             data={"filename": "undefined"},
             headers=self._headers(json_content=False),
             timeout=max(self.timeout, 60),
+            proxies=DIRECT_UPLOAD_PROXIES,
         )
         response.raise_for_status()
         data = response.json()
@@ -361,6 +363,7 @@ class LingYaQQClient:
             json={"base64": str(data_url or ""), "fileName": filename or "cover.jpg"},
             headers=self._headers(json_content=True),
             timeout=max(self.timeout, 60),
+            proxies=DIRECT_UPLOAD_PROXIES,
         )
         response.raise_for_status()
         data = response.json()
@@ -414,6 +417,7 @@ class LingYaQQClient:
                 upload_sid=upload_sid,
             ),
             timeout=max(self.timeout, 120),
+            proxies=DIRECT_UPLOAD_PROXIES,
         )
         response.raise_for_status()
         data = response.json()
@@ -489,6 +493,7 @@ class LingYaQQClient:
                     upload_sid=upload_sid,
                 ),
                 timeout=max(self.timeout, 180),
+                proxies=DIRECT_UPLOAD_PROXIES,
             )
             response.raise_for_status()
             part_data = response.json()

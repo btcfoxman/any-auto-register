@@ -5,7 +5,7 @@ from core.base_sms import SmsActivation
 from core.registry import get, load_all
 from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS, _build_account_overview
 from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES, build_lingya_qq_account_fields
-from platforms.lingya_qq.core import DEFAULT_VIDEO_UPLOAD_SERVICE_ID, LingYaQQClient
+from platforms.lingya_qq.core import DEFAULT_VIDEO_UPLOAD_SERVICE_ID, DIRECT_UPLOAD_PROXIES, LingYaQQClient
 from platforms.lingya_qq.plugin import (
     LingYaQQPlatform,
     _generate_lingya_profile_nickname,
@@ -1304,7 +1304,7 @@ def test_lingya_qq_video_upload_uses_observed_service_id_and_sdk_headers(monkeyp
         def json(self):
             return self.payload
 
-    client = LingYaQQClient(vdevice_guid="device")
+    client = LingYaQQClient(vdevice_guid="device", proxy="socks5://127.0.0.1:20003")
     monkeypatch.setattr(client, "get_video_upload_params", lambda seq=None: {"seq": "seq-1", "svr_token": "svr-token"})
 
     def fake_post(url, **kwargs):
@@ -1344,6 +1344,34 @@ def test_lingya_qq_video_upload_uses_observed_service_id_and_sdk_headers(monkeyp
     assert upload_headers["serviceId"] == DEFAULT_VIDEO_UPLOAD_SERVICE_ID
     assert upload_headers["upload-sid"] == "65011201:65536"
     assert upload_headers["upload-uin"] == "2437301834"
+    assert all(item[1].get("proxies") == DIRECT_UPLOAD_PROXIES for item in calls)
+
+
+def test_lingya_qq_publish_cover_upload_bypasses_account_proxy(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ret": 0, "url": "https://filecdn.lumio.qq.com/image/cover.jpg"}
+
+    client = LingYaQQClient(vdevice_guid="device", proxy="socks5://127.0.0.1:20003")
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    client.session.post = fake_post
+
+    cover_url = client.upload_image_bytes(b"cover", filename="cover.jpg", content_type="image/jpeg")
+    data_url_cover = client.upload_image_data_url("data:image/jpeg;base64,Y292ZXI=", filename="highlight.jpg")
+
+    assert cover_url == "https://filecdn.lumio.qq.com/image/cover.jpg"
+    assert data_url_cover == "https://filecdn.lumio.qq.com/image/cover.jpg"
+    assert all(item[0].startswith("https://fileaccess.lingya.qq.com/upload/image") for item in calls)
+    assert all(item[1].get("proxies") == DIRECT_UPLOAD_PROXIES for item in calls)
 
 
 def test_lingya_qq_publish_work_flow(monkeypatch):
