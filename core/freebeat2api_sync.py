@@ -107,20 +107,21 @@ def _merged_extra(account: Any, extra_overrides: dict[str, Any] | None = None) -
     return extra
 
 
-def _get_freebeat2api_config() -> tuple[str, str, int]:
+def _get_freebeat2api_config() -> tuple[str, str, int, bool]:
     try:
         from core.config_store import config_store
 
         base_url = config_store.get("freebeat2api_url", "")
         api_key = config_store.get("freebeat2api_api_key", "")
         max_concurrency = _clamp_concurrency(config_store.get("freebeat2api_max_concurrency", "1"))
-        return base_url, api_key, max_concurrency
+        auto_maintenance = _as_bool(config_store.get("freebeat2api_enable_auto_maintenance", ""), True)
+        return base_url, api_key, max_concurrency, auto_maintenance
     except Exception:
-        return "", "", 1
+        return "", "", 1, True
 
 
 def is_freebeat2api_configured() -> bool:
-    base_url, _, _ = _get_freebeat2api_config()
+    base_url, _, _, _ = _get_freebeat2api_config()
     return bool(_text(base_url))
 
 
@@ -128,6 +129,7 @@ def build_freebeat2api_payload(
     account: Any,
     *,
     max_concurrency: int = 1,
+    auto_maintenance_default: bool = True,
     extra_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     extra = _merged_extra(account, extra_overrides)
@@ -164,7 +166,10 @@ def build_freebeat2api_payload(
         "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")),
         "proxy_url": _text(extra.get("freebeat2api_proxy_url") or extra.get("proxy_url") or extra.get("proxy")),
         "enabled": _as_bool(extra.get("freebeat2api_enabled"), True),
-        "enable_auto_maintenance": _as_bool(extra.get("freebeat2api_enable_auto_maintenance"), False),
+        "enable_auto_maintenance": _as_bool(
+            extra.get("freebeat2api_enable_auto_maintenance"),
+            auto_maintenance_default,
+        ),
         "max_concurrency": _clamp_concurrency(extra.get("freebeat2api_max_concurrency"), max_concurrency),
     }
 
@@ -180,7 +185,7 @@ def sync_account_to_freebeat2api(
     extra_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any] | bool:
     log = log_fn or logger.info
-    base_url, api_key, max_concurrency = _get_freebeat2api_config()
+    base_url, api_key, max_concurrency, auto_maintenance_default = _get_freebeat2api_config()
     if not base_url:
         return False
 
@@ -188,15 +193,32 @@ def sync_account_to_freebeat2api(
         payload = build_freebeat2api_payload(
             account,
             max_concurrency=max_concurrency,
+            auto_maintenance_default=auto_maintenance_default,
             extra_overrides=extra_overrides,
         )
         client = Freebeat2ApiClient(base_url, api_key)
         account_result = client.upsert_account(payload)
         account_id = int(account_result.get("id") or account_result.get("account_id") or 0)
-        heartbeat_result = client.heartbeat(account_id) if heartbeat and account_id > 0 else None
-        balance_result = client.refresh_balance(account_id) if balance and account_id > 0 else None
-        sign_in_result = client.sign_in(account_id) if sign_in and account_id > 0 else None
-        check_result = client.check_account(account_id) if check and account_id > 0 else None
+        heartbeat_result = (
+            _optional_freebeat2api_call(log, "heartbeat", lambda: client.heartbeat(account_id))
+            if heartbeat and account_id > 0
+            else None
+        )
+        balance_result = (
+            _optional_freebeat2api_call(log, "balance", lambda: client.refresh_balance(account_id))
+            if balance and account_id > 0
+            else None
+        )
+        sign_in_result = (
+            _optional_freebeat2api_call(log, "sign-in", lambda: client.sign_in(account_id))
+            if sign_in and account_id > 0
+            else None
+        )
+        check_result = (
+            _optional_freebeat2api_call(log, "check", lambda: client.check_account(account_id))
+            if check and account_id > 0
+            else None
+        )
         log(f"  [Freebeat2API] synced Freebeat account: {payload['name']}")
         return {
             "ok": True,
@@ -215,13 +237,27 @@ def sync_account_to_freebeat2api(
         return False
 
 
+def _optional_freebeat2api_call(log_fn, label: str, call) -> dict[str, Any]:
+    try:
+        data = call()
+        return data if isinstance(data, dict) else {"data": data}
+    except Exception as exc:
+        error = str(exc)
+        log_fn(f"  [Freebeat2API] {label} refresh failed after account sync: {error}")
+        return {"ok": False, "error": error}
+
+
 def get_freebeat2api_account_snapshot(account: Any, *, log_fn=None) -> dict[str, Any] | None:
     log = log_fn or logger.info
-    base_url, api_key, max_concurrency = _get_freebeat2api_config()
+    base_url, api_key, max_concurrency, auto_maintenance_default = _get_freebeat2api_config()
     if not base_url:
         return None
     try:
-        payload = build_freebeat2api_payload(account, max_concurrency=max_concurrency)
+        payload = build_freebeat2api_payload(
+            account,
+            max_concurrency=max_concurrency,
+            auto_maintenance_default=auto_maintenance_default,
+        )
         expected_name = _text(payload.get("name"))
         expected_email = _text(payload.get("email"))
         expected_user_id = _text(payload.get("user_id"))

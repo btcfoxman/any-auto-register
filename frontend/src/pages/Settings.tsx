@@ -332,7 +332,7 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'freebeat2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8788' },
         { key: 'freebeat2api_api_key', label: '接口密钥', placeholder: 'sk-test-api-key', secret: true },
         { key: 'freebeat2api_max_concurrency', label: '最大并发', placeholder: '1' },
-        { key: 'freebeat2api_enable_auto_maintenance', label: '启用远端维护', placeholder: 'false' },
+        { key: 'freebeat2api_enable_auto_maintenance', label: '启用远端维护', placeholder: 'true' },
       ],
     }],
   },

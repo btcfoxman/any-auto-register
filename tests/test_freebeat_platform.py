@@ -8,7 +8,7 @@ from core.db import AccountModel, engine
 from core.platform_accounts import build_platform_account
 from domain.actions import ActionExecutionCommand
 from infrastructure.platform_runtime import PlatformRuntime
-from platforms.freebeat.core import _extract_login_payload
+from platforms.freebeat.core import FreebeatClient, _extract_login_payload
 from platforms.freebeat.plugin import FreebeatPlatform
 from platforms.freebeat.protocol_mailbox import FreebeatProtocolMailboxWorker
 
@@ -25,6 +25,33 @@ def test_freebeat_next_action_login_parser_extracts_token():
     assert parsed["code"] == 0
     assert parsed["data"]["token"] == "tok_123"
     assert parsed["data"]["deviceToken"] == "dev_123"
+
+
+def test_freebeat_authenticated_api_sends_current_frontend_token_headers():
+    calls: list[dict] = []
+
+    class Response:
+        status_code = 200
+        text = '{"code":0,"data":{"totalCredits":100}}'
+
+        def json(self):
+            return {"code": 0, "data": {"totalCredits": 100}}
+
+    client = FreebeatClient(log_fn=lambda message: None)
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        return Response()
+
+    client.s.request = fake_request
+
+    result = client.find_credits("tok_123")
+
+    headers = calls[0]["headers"]
+    assert result["data"]["totalCredits"] == 100
+    assert headers["Authorization"] == "tok_123"
+    assert headers["token"] == "tok_123"
+    assert headers["udt"] == "tok_123"
 
 
 def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
@@ -225,7 +252,7 @@ def test_freebeat_keepalive_sync_pushes_to_freebeat2api(monkeypatch):
 
     assert result["ok"] is True
     assert result["data"]["freebeat2api_synced"] is True
-    assert calls == [(True, False, False, "tok_123")]
+    assert calls == [(True, True, False, "tok_123")]
 
 
 def test_freebeat_daily_sign_in_syncs_to_freebeat2api(monkeypatch):
@@ -276,7 +303,44 @@ def test_freebeat_daily_sign_in_syncs_to_freebeat2api(monkeypatch):
     assert result["ok"] is True
     assert result["data"]["daily_sign_in_status"] == "signed"
     assert result["data"]["freebeat2api_synced"] is True
-    assert calls == [(False, False, True, "tok_123")]
+    assert calls == [(False, True, True, "tok_123")]
+
+
+def test_freebeat_registration_auto_sync_pushes_latest_account_to_freebeat2api(monkeypatch):
+    import application.tasks as tasks
+    import core.freebeat2api_sync as sync_module
+
+    calls: list[tuple[bool, bool, bool, str]] = []
+    logs: list[tuple[str, str]] = []
+
+    class Logger:
+        def log(self, message, level="info"):
+            logs.append((message, level))
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, balance=False, sign_in=False, **kwargs):
+        calls.append((heartbeat, balance, sign_in, account.token))
+        return {"ok": True, "account": {"id": 9}}
+
+    monkeypatch.setattr(sync_module, "sync_account_to_freebeat2api", fake_sync)
+    monkeypatch.setattr(sync_module, "is_freebeat2api_configured", lambda: True)
+
+    account = Account(
+        platform="freebeat",
+        email="new@example.com",
+        password="",
+        user_id="user_new",
+        token="tok_new",
+        extra={
+            "access_token": "tok_new",
+            "last_daily_sign_in_status": "signed",
+            "daily_sign_in": {"status": "signed"},
+        },
+    )
+
+    tasks._auto_sync_freebeat2api(Logger(), account)
+
+    assert calls == [(True, True, True, "tok_new")]
+    assert any("Freebeat account synced" in message for message, _ in logs)
 
 
 def test_freebeat_stop_and_resume_daily_signin_persist_account_marker():

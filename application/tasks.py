@@ -503,7 +503,13 @@ def _auto_sync_freebeat2api(task_logger: TaskLogger, account) -> None:
     try:
         from core.freebeat2api_sync import is_freebeat2api_configured, sync_account_to_freebeat2api
 
-        result = sync_account_to_freebeat2api(account, log_fn=task_logger.log, balance=True)
+        result = sync_account_to_freebeat2api(
+            account,
+            log_fn=task_logger.log,
+            heartbeat=True,
+            balance=True,
+            sign_in=_freebeat_has_sign_in_state(account),
+        )
         if result:
             task_logger.log("  [Freebeat2API] Freebeat account synced")
         elif is_freebeat2api_configured():
@@ -513,6 +519,21 @@ def _auto_sync_freebeat2api(task_logger: TaskLogger, account) -> None:
             )
     except Exception as exc:
         task_logger.log(f"  [Freebeat2API] auto sync error: {exc}", level="warning")
+
+
+def _freebeat_has_sign_in_state(account) -> bool:
+    extra = dict(getattr(account, "extra", {}) or {})
+    overview = extra.get("account_overview") if isinstance(extra.get("account_overview"), dict) else {}
+    daily = extra.get("daily_sign_in") if isinstance(extra.get("daily_sign_in"), dict) else {}
+    status = str(
+        extra.get("last_daily_sign_in_status")
+        or extra.get("daily_sign_in_status")
+        or daily.get("status")
+        or overview.get("last_daily_sign_in_status")
+        or overview.get("daily_sign_in_status")
+        or ""
+    ).strip().lower()
+    return bool(status and status not in {"skipped", "skip", "disabled"})
 
 
 def _existing_account_id(platform: str, email: str) -> int | None:

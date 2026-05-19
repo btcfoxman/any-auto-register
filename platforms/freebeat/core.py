@@ -289,7 +289,9 @@ class FreebeatClient:
             "referer": FREEBEAT_REGISTER_REFERER,
         }
         if token:
-            request_headers["authorization"] = token
+            request_headers["Authorization"] = token
+            request_headers["token"] = token
+            request_headers["udt"] = token
         if headers:
             request_headers.update(headers)
         data = _json_dumps(json_body) if json_body is not None else None
@@ -504,4 +506,3 @@ def load_freebeat_account_state(
         state["last_daily_sign_in_status"] = daily_result.get("status", "")
     state["summary"] = summarize_freebeat_account_state(state, fallback_email=context["email"])
     return state
-
