@@ -37,7 +37,7 @@ def test_freebeat_authenticated_api_sends_current_frontend_token_headers():
         def json(self):
             return {"code": 0, "data": {"totalCredits": 100}}
 
-    client = FreebeatClient(log_fn=lambda message: None)
+    client = FreebeatClient(log_fn=lambda message: None, cookie_header="authToken=tok_123; fb_session=sess_123")
 
     def fake_request(method, url, **kwargs):
         calls.append({"method": method, "url": url, **kwargs})
@@ -52,6 +52,7 @@ def test_freebeat_authenticated_api_sends_current_frontend_token_headers():
     assert headers["Authorization"] == "tok_123"
     assert headers["token"] == "tok_123"
     assert headers["udt"] == "tok_123"
+    assert headers["cookie"] == "authToken=tok_123; fb_session=sess_123"
 
 
 def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
@@ -214,6 +215,23 @@ def test_freebeat_registration_result_maps_access_token_as_primary():
     assert account.token == "tok_primary"
     assert account.extra["access_token"] == "tok_primary"
     assert account.extra["device_token"] == "dev_primary"
+
+
+def test_freebeat_registration_result_maps_cookies():
+    platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
+
+    result = platform._map_freebeat_result(
+        {
+            "email": "user@example.com",
+            "user_id": "user_123",
+            "token": "tok_primary",
+            "cookies": "authToken=tok_primary; fb_session=sess_primary",
+            "account_overview": {"valid": True, "plan_state": "free"},
+        }
+    )
+
+    assert result.extra["cookies"] == "authToken=tok_primary; fb_session=sess_primary"
+    assert result.extra["cookie_header"] == "authToken=tok_primary; fb_session=sess_primary"
 
 
 def test_freebeat_keepalive_sync_pushes_to_freebeat2api(monkeypatch):

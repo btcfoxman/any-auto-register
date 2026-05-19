@@ -20,6 +20,7 @@ def test_build_freebeat2api_payload_from_freebeat_account():
         extra={
             "proxy_url": "http://127.0.0.1:10809",
             "freebeat2api_max_concurrency": "3",
+            "cookies": "authToken=tok_123; fb_session=sess_123",
         },
     )
 
@@ -30,6 +31,8 @@ def test_build_freebeat2api_payload_from_freebeat_account():
     assert payload["email"] == "user@example.com"
     assert payload["user_id"] == "user_123"
     assert payload["proxy_url"] == "http://127.0.0.1:10809"
+    assert payload["cookies"] == "authToken=tok_123; fb_session=sess_123"
+    assert payload["cookie_header"] == "authToken=tok_123; fb_session=sess_123"
     assert payload["max_concurrency"] == 3
     assert payload["enabled"] is True
     assert payload["enable_auto_maintenance"] is True

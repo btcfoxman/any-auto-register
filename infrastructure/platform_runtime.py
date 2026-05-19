@@ -385,6 +385,16 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
     return overview if len(overview) > 2 else None
 
 
+def _redact_cookie_result_data(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+    redacted = dict(data)
+    for key in ("cookies", "cookie_header", "freebeat_cookies"):
+        if key in redacted:
+            redacted[key] = "***" if redacted.get(key) else ""
+    return redacted
+
+
 class PlatformRuntime:
     def list_platforms(self) -> list[PlatformDescriptor]:
         load_all()
@@ -494,6 +504,6 @@ class PlatformRuntime:
                     session.commit()
             return ActionExecutionResult(
                 ok=bool(result.get("ok")),
-                data=result.get("data"),
+                data=_redact_cookie_result_data(result.get("data")),
                 error=str(result.get("error", "")),
             )

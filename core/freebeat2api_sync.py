@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 
 import requests
@@ -74,6 +75,48 @@ def _first_text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _cookie_header_from_any(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text.startswith(("[", "{")):
+            try:
+                return _cookie_header_from_any(json.loads(text))
+            except Exception:
+                return text
+        return text
+    pairs: list[str] = []
+    if isinstance(value, dict):
+        if "name" in value and "value" in value:
+            name = _text(value.get("name"))
+            cookie_value = _text(value.get("value"))
+            return f"{name}={cookie_value}" if name and cookie_value else ""
+        items = value.items()
+    elif isinstance(value, list):
+        items = ((item.get("name"), item.get("value")) for item in value if isinstance(item, dict))
+    else:
+        return ""
+    for name, cookie_value in items:
+        name_text = _text(name)
+        value_text = _text(cookie_value)
+        if not name_text or not value_text:
+            continue
+        if any(ch in name_text for ch in ";\r\n\t ") or any(ch in value_text for ch in ";\r\n"):
+            continue
+        pairs.append(f"{name_text}={value_text}")
+    return "; ".join(dict.fromkeys(pairs))
+
+
+def _auth_token_cookie(token: str) -> str:
+    token_text = _text(token)
+    if not token_text or any(ch in token_text for ch in ";\r\n"):
+        return ""
+    return f"authToken={token_text}"
 
 
 def _as_bool(value: Any, default: bool = True) -> bool:
@@ -155,6 +198,12 @@ def build_freebeat2api_payload(
     name = _first_text(extra.get("freebeat2api_name"), email, user_id)
     if not name:
         raise ValueError("Freebeat account has no usable freebeat2api account name")
+    cookies = _cookie_header_from_any(
+        extra.get("cookies")
+        or extra.get("cookie_header")
+        or extra.get("freebeat_cookies")
+        or extra.get("freebeat_cookie_header")
+    ) or _auth_token_cookie(token)
 
     return {
         "name": name[:80],
@@ -164,6 +213,8 @@ def build_freebeat2api_payload(
         "user_agent": _text(extra.get("user_agent")),
         "sec_ch_ua": _text(extra.get("sec_ch_ua")),
         "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")),
+        "cookies": cookies,
+        "cookie_header": cookies,
         "proxy_url": _text(extra.get("freebeat2api_proxy_url") or extra.get("proxy_url") or extra.get("proxy")),
         "enabled": _as_bool(extra.get("freebeat2api_enabled"), True),
         "enable_auto_maintenance": _as_bool(
@@ -230,6 +281,8 @@ def sync_account_to_freebeat2api(
             "payload": {
                 **payload,
                 "token": "***",
+                "cookies": "***" if payload.get("cookies") else "",
+                "cookie_header": "***" if payload.get("cookie_header") else "",
             },
         }
     except Exception as exc:

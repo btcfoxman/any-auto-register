@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from http.cookiejar import Cookie
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -26,9 +27,67 @@ DEFAULT_ONBOARDING_ANSWERS = [
     {"questionKey": "q3_use_for", "options": ["client_projects"]},
 ]
 
+FREEBEAT_COOKIE_DOMAINS = ("freebeat.ai", "freebeatfit.com")
+
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _valid_cookie_pair(name: Any, value: Any) -> tuple[str, str] | None:
+    cookie_name = str(name or "").strip()
+    cookie_value = str(value or "").strip()
+    if not cookie_name or cookie_value == "":
+        return None
+    if any(ch in cookie_name for ch in ";\r\n\t "):
+        return None
+    if any(ch in cookie_value for ch in ";\r\n"):
+        return None
+    return cookie_name, cookie_value
+
+
+def _cookie_header_from_any(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text.startswith(("[", "{")):
+            try:
+                return _cookie_header_from_any(json.loads(text))
+            except Exception:
+                return text
+        return text
+    pairs: list[str] = []
+    if isinstance(value, dict):
+        if "name" in value and "value" in value:
+            pair = _valid_cookie_pair(value.get("name"), value.get("value"))
+            return f"{pair[0]}={pair[1]}" if pair else ""
+        iterable = value.items()
+        for name, cookie_value in iterable:
+            if isinstance(cookie_value, (dict, list)):
+                continue
+            pair = _valid_cookie_pair(name, cookie_value)
+            if pair:
+                pairs.append(f"{pair[0]}={pair[1]}")
+    elif isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            pair = _valid_cookie_pair(item.get("name"), item.get("value"))
+            if pair:
+                pairs.append(f"{pair[0]}={pair[1]}")
+    return "; ".join(dict.fromkeys(pairs))
+
+
+def _cookie_records_to_header(records: list[dict[str, Any]]) -> str:
+    return _cookie_header_from_any(records)
+
+
+def _auth_token_cookie(token: str) -> str:
+    pair = _valid_cookie_pair("authToken", token)
+    return f"{pair[0]}={pair[1]}" if pair else ""
 
 
 def _clip(value: Any, left: int = 10, right: int = 6) -> str:
@@ -223,6 +282,8 @@ def summarize_freebeat_account_state(state: dict[str, Any], *, fallback_email: s
 
 def extract_freebeat_account_context(account: Account | Any) -> dict[str, str]:
     extra = dict(getattr(account, "extra", {}) or {})
+    overview = extra.get("account_overview") if isinstance(extra.get("account_overview"), dict) else {}
+    legacy_extra = overview.get("legacy_extra") if isinstance(overview.get("legacy_extra"), dict) else {}
     token = (
         extra.get("access_token")
         or extra.get("accessToken")
@@ -239,12 +300,29 @@ def extract_freebeat_account_context(account: Account | Any) -> dict[str, str]:
         "user_id": str(extra.get("user_id") or extra.get("userId") or getattr(account, "user_id", "") or "").strip(),
         "email": str(extra.get("email") or getattr(account, "email", "") or "").strip(),
         "expire_time": str(extra.get("expire_time") or extra.get("expireTime") or "").strip(),
+        "cookies": _cookie_header_from_any(
+            extra.get("cookies")
+            or extra.get("cookie_header")
+            or extra.get("freebeat_cookies")
+            or legacy_extra.get("cookies")
+            or legacy_extra.get("cookie_header")
+            or overview.get("cookies")
+            or overview.get("cookie_header")
+        ),
     }
 
 
 class FreebeatClient:
-    def __init__(self, *, proxy: str | None = None, log_fn: Callable[[str], None] = print):
+    def __init__(
+        self,
+        *,
+        proxy: str | None = None,
+        log_fn: Callable[[str], None] = print,
+        cookie_header: str = "",
+        cookies: Any = None,
+    ):
         self._log = log_fn
+        self._cookie_header = _cookie_header_from_any(cookie_header or cookies)
         proxies = {"http": proxy, "https": proxy} if proxy else None
         self.s = Session(impersonate="chrome", proxies=proxies, timeout=30)
         self.s.headers.update(
@@ -262,6 +340,42 @@ class FreebeatClient:
 
     def log(self, message: str) -> None:
         self._log(message)
+
+    def cookie_records(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        try:
+            jar = self.s.cookies.jar
+        except Exception:
+            return records
+        for cookie in list(jar):
+            if not isinstance(cookie, Cookie):
+                continue
+            domain = str(cookie.domain or "")
+            if domain and not any(domain.lstrip(".").endswith(item) for item in FREEBEAT_COOKIE_DOMAINS):
+                continue
+            records.append(
+                {
+                    "name": cookie.name,
+                    "value": cookie.value,
+                    "domain": cookie.domain,
+                    "path": cookie.path or "/",
+                    "expires": cookie.expires,
+                    "secure": bool(cookie.secure),
+                }
+            )
+        return records
+
+    def cookie_header(self) -> str:
+        header = _cookie_records_to_header(self.cookie_records())
+        return header or self._cookie_header
+
+    def auth_state(self) -> dict[str, Any]:
+        cookie_header = self.cookie_header()
+        return {
+            "cookies": cookie_header,
+            "cookie_header": cookie_header,
+            "freebeat_cookies": self.cookie_records(),
+        }
 
     def _url(self, path_or_url: str, *, base: str = FREEBEAT_BASE) -> str:
         raw = str(path_or_url or "").strip()
@@ -292,6 +406,9 @@ class FreebeatClient:
             request_headers["Authorization"] = token
             request_headers["token"] = token
             request_headers["udt"] = token
+        cookie_header = self.cookie_header() or _auth_token_cookie(token)
+        if cookie_header:
+            request_headers["cookie"] = cookie_header
         if headers:
             request_headers.update(headers)
         data = _json_dumps(json_body) if json_body is not None else None
@@ -463,7 +580,7 @@ class FreebeatClient:
             raise RuntimeError("缺少 Freebeat token")
         credits_payload = self.find_credits(token)
         signin_payload = self.signin_status(token)
-        return {
+        state = {
             "token": token,
             "credits": dict(credits_payload.get("data") or {}),
             "signin_status": dict(signin_payload.get("data") or {}),
@@ -471,6 +588,8 @@ class FreebeatClient:
             "signin_payload": signin_payload,
             "last_keepalive_at": _now_iso(),
         }
+        state.update(self.auth_state())
+        return state
 
 
 def load_freebeat_account_state(
@@ -482,7 +601,7 @@ def load_freebeat_account_state(
     auto_sign_in: bool = False,
 ) -> dict[str, Any]:
     context = extract_freebeat_account_context(account)
-    client = FreebeatClient(proxy=proxy, log_fn=log_fn)
+    client = FreebeatClient(proxy=proxy, log_fn=log_fn, cookie_header=context["cookies"])
     token = context["token"]
     if not token:
         raise RuntimeError("缺少 Freebeat token，无法查询账号状态")

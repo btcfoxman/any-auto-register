@@ -65,6 +65,16 @@ def _account_with_extra(account: Account, extra: dict[str, Any]) -> Account:
     )
 
 
+def _attach_auth_state(data: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    cookie_header = str(state.get("cookie_header") or state.get("cookies") or "").strip()
+    if cookie_header:
+        data["cookies"] = cookie_header
+        data["cookie_header"] = cookie_header
+    if state.get("freebeat_cookies"):
+        data["freebeat_cookies"] = state.get("freebeat_cookies")
+    return data
+
+
 @register
 class FreebeatPlatform(BasePlatform):
     name = "freebeat"
@@ -104,6 +114,8 @@ class FreebeatPlatform(BasePlatform):
                 "signin": result.get("signin", {}),
                 "questionnaire": result.get("questionnaire", {}),
                 "daily_sign_in": result.get("daily_sign_in", {}),
+                "cookies": str(result.get("cookies") or result.get("cookie_header") or "").strip(),
+                "cookie_header": str(result.get("cookie_header") or result.get("cookies") or "").strip(),
                 "account_overview": overview,
             },
         )
@@ -223,7 +235,7 @@ class FreebeatPlatform(BasePlatform):
 
         if action_id in {"get_user_info", "get_account_state", "query_state"}:
             state = self._load_state(account)
-            return {"ok": True, "data": dict(state.get("summary") or {})}
+            return {"ok": True, "data": _attach_auth_state(dict(state.get("summary") or {}), state)}
 
         if action_id == "keepalive_sync":
             state = self._load_state(
@@ -232,6 +244,7 @@ class FreebeatPlatform(BasePlatform):
                 auto_sign_in=_truthy(params.get("auto_daily_sign_in"), False),
             )
             data = dict(state.get("summary") or {})
+            _attach_auth_state(data, state)
             data["session_refreshed"] = False
             data["message"] = "Freebeat 已完成保活请求；当前抓包未发现静默刷新 token 接口"
             sync_result = sync_account_to_freebeat2api(
@@ -249,10 +262,15 @@ class FreebeatPlatform(BasePlatform):
         if action_id == "daily_sign_in":
             context_state = self._load_state(account)
             token = str(context_state.get("token") or context_state.get("access_token") or account.token or "").strip()
-            client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
+            client = FreebeatClient(
+                proxy=self.config.proxy if self.config else None,
+                log_fn=self.log,
+                cookie_header=str(context_state.get("cookie_header") or context_state.get("cookies") or ""),
+            )
             daily = client.daily_sign_in(token)
             state = self._load_state(account)
             data = dict(state.get("summary") or {})
+            _attach_auth_state(data, state)
             data.update(
                 {
                     "daily_sign_in_status": daily.get("status", ""),
@@ -276,10 +294,15 @@ class FreebeatPlatform(BasePlatform):
         if action_id == "claim_questionnaire":
             context_state = self._load_state(account)
             token = str(context_state.get("token") or context_state.get("access_token") or account.token or "").strip()
-            client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
+            client = FreebeatClient(
+                proxy=self.config.proxy if self.config else None,
+                log_fn=self.log,
+                cookie_header=str(context_state.get("cookie_header") or context_state.get("cookies") or ""),
+            )
             questionnaire = client.claim_questionnaire(token, questionnaire_code=FREEBEAT_ONBOARDING_CODE)
             state = self._load_state(account)
             data = dict(state.get("summary") or {})
+            _attach_auth_state(data, state)
             data.update(
                 {
                     "questionnaire_status": questionnaire.get("status", ""),
@@ -302,6 +325,7 @@ class FreebeatPlatform(BasePlatform):
         if action_id == "sync_freebeat2api":
             state = self._load_state(account)
             data = dict(state.get("summary") or {})
+            _attach_auth_state(data, state)
             sync_result = sync_account_to_freebeat2api(
                 _account_with_extra(account, {**dict(account.extra or {}), **state, **data}),
                 log_fn=self.log,
@@ -401,12 +425,15 @@ class FreebeatPlatform(BasePlatform):
                 }
             )
             data = summarize_freebeat_account_state(state, fallback_email=email)
+            auth_state = client.auth_state() if hasattr(client, "auth_state") else {}
             data.update(
                 {
                     "access_token": str(login_data.get("accessToken") or token),
                     "accessToken": str(login_data.get("accessToken") or token),
                     "device_token": str(login_data.get("deviceToken") or ""),
                     "deviceToken": str(login_data.get("deviceToken") or ""),
+                    "cookies": auth_state.get("cookies", ""),
+                    "cookie_header": auth_state.get("cookie_header", ""),
                     "user_id": str(login_data.get("userId") or ""),
                     "account_id": str(login_data.get("userId") or ""),
                     "expire_time": login_data.get("expireTime") or "",
@@ -430,7 +457,11 @@ class FreebeatPlatform(BasePlatform):
             token = str(state.get("token") or state.get("access_token") or account.token or "").strip()
             model_id = int(str(params.get("model_id") or "101").strip())
             business_type = int(str(params.get("business_type") or "3").strip())
-            client = FreebeatClient(proxy=self.config.proxy if self.config else None, log_fn=self.log)
+            client = FreebeatClient(
+                proxy=self.config.proxy if self.config else None,
+                log_fn=self.log,
+                cookie_header=str(state.get("cookie_header") or state.get("cookies") or ""),
+            )
             rule = client.get_model_rule_config(token, model_id=model_id, business_type=business_type)
             return {
                 "ok": True,

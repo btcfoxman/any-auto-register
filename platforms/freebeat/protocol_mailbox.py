@@ -117,6 +117,8 @@ class FreebeatProtocolMailboxWorker:
             "signin": summary.get("signin", {}),
             "questionnaire": questionnaire,
             "daily_sign_in": daily_sign_in,
+            "cookies": str(state.get("cookies") or state.get("cookie_header") or "").strip(),
+            "cookie_header": str(state.get("cookie_header") or state.get("cookies") or "").strip(),
             "account_overview": overview,
         }
         self.log(
@@ -124,4 +126,3 @@ class FreebeatProtocolMailboxWorker:
             f"user={result['user_id'] or '-'} credits={overview.get('total_credits', '-')}"
         )
         return result
-
