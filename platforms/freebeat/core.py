@@ -168,6 +168,12 @@ def _validate_api_payload(payload: dict[str, Any], *, label: str) -> dict[str, A
     raise RuntimeError(f"Freebeat {label} rejected: code={code} msg={msg or snippet}")
 
 
+def _is_send_code_already_sent(payload: dict[str, Any]) -> bool:
+    code = payload.get("code")
+    msg = str(payload.get("msg") or payload.get("message") or "").strip().lower()
+    return code in (409, "409") and "already" in msg and "sent" in msg
+
+
 def _extract_login_payload(text: str) -> dict[str, Any]:
     """Parse Next.js text/x-component response and return the login result object."""
     raw = str(text or "").strip()
@@ -518,7 +524,11 @@ class FreebeatClient:
         payload = {"email": str(email).strip(), "verifySource": str(verify_source or FREEBEAT_DEFAULT_VERIFY_SOURCE)}
         domain = _email_domain(email)
         label = f"sendEmailVerifyCodeV2 domain={domain}" if domain else "sendEmailVerifyCodeV2"
-        return self._api_json("POST", FREEBEAT_SEND_CODE_PATH, json_body=payload, label=label)
+        result = self._api_json("POST", FREEBEAT_SEND_CODE_PATH, json_body=payload, label=label, validate_code=False)
+        if _is_send_code_already_sent(result):
+            self.log("Freebeat login code was already sent; continuing to wait for mailbox code")
+            return result
+        return _validate_api_payload(result, label=label)
 
     def verify_email_code(
         self,

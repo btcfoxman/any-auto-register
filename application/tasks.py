@@ -910,6 +910,54 @@ def _int_config(value: Any, default: int) -> int:
         return default
 
 
+def _looks_like_proxy_network_error(error: Any) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    markers = (
+        "curl: (5)",
+        "curl: (6)",
+        "curl: (7)",
+        "curl: (28)",
+        "connection timed out",
+        "operation timed out",
+        "could not resolve proxy",
+        "couldn't connect",
+        "proxyerror",
+        "proxy error",
+        "timed out",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _preflight_platform_proxy(platform_name: str, proxy: str | None, logger: "TaskLogger") -> None:
+    if not proxy or platform_name != "freebeat":
+        return
+    try:
+        from curl_cffi.requests import Session
+    except Exception:
+        return
+    session = Session(
+        impersonate="chrome",
+        proxies={"http": proxy, "https": proxy},
+        timeout=8,
+    )
+    response = session.get(
+        "https://freebeat.ai/zh/ai-video-generator",
+        headers={
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "referer": "https://freebeat.ai/",
+            "user-agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+            ),
+        },
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Freebeat proxy preflight failed: HTTP {response.status_code}")
+
+
 def _auto_followup_windsurf_payment(
     *,
     platform_name: str,
@@ -993,6 +1041,13 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     target_success = count
     max_success = count + hero_extra_max if herosms_enabled and hero_reuse_to_max else count
     progress_total = max_success if herosms_enabled else count
+    proxy_retry_attempts = max(_int_config(payload.get("proxy_retry_attempts") or extra.get("proxy_retry_attempts"), 3), 1)
+    proxy_direct_fallback_value = payload.get("proxy_direct_fallback")
+    if proxy_direct_fallback_value in (None, ""):
+        proxy_direct_fallback_value = extra.get("proxy_direct_fallback")
+    if proxy_direct_fallback_value in (None, ""):
+        proxy_direct_fallback_value = extra.get("freebeat_proxy_direct_fallback")
+    proxy_direct_fallback = _bool_config(proxy_direct_fallback_value, platform_name == "freebeat")
 
     logger.set_progress(0, progress_total)
     if herosms_enabled:
@@ -1093,6 +1148,97 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             _save_task_log(platform_name, email or "", "failed", error=error)
             return error
 
+    def _proxy_candidates() -> list[str | None]:
+        candidates: list[str | None] = []
+        if proxy:
+            candidates.append(proxy)
+        elif use_proxy_pool:
+            seen: set[str] = set()
+            for _ in range(proxy_retry_attempts):
+                candidate = proxy_pool.get_next()
+                if not candidate or candidate in seen:
+                    continue
+                seen.add(candidate)
+                candidates.append(candidate)
+        if not candidates:
+            candidates.append(None)
+        if proxy_direct_fallback and None not in candidates:
+            candidates.append(None)
+        return candidates
+
+    def _do_one_with_retries(index: int) -> bool | str:
+        if logger.is_cancel_requested():
+            return "__cancel_requested__"
+        candidates = _proxy_candidates()
+        logger.log(f"开始注册第 {index + 1}/{count} 个账号")
+        last_error = ""
+        for attempt, resolved_proxy in enumerate(candidates, start=1):
+            try:
+                if resolved_proxy:
+                    suffix = f" (尝试 {attempt}/{len(candidates)})" if len(candidates) > 1 else ""
+                    logger.log(f"使用代理: {resolved_proxy}{suffix}")
+                elif attempt > 1:
+                    logger.log("代理不可用，尝试直连 Freebeat")
+                _preflight_platform_proxy(platform_name, resolved_proxy, logger)
+                platform = _build_platform_instance(platform_name, payload, logger, resolved_proxy=resolved_proxy, shared_mailbox=shared_mailbox)
+                account = platform.register(email=email, password=password)
+                if resolved_proxy:
+                    account_extra = dict(account.extra or {})
+                    account_extra["proxy_url"] = resolved_proxy
+                    account.extra = account_extra
+                existing_account_id = _existing_account_id(account.platform, account.email)
+                save_account(account)
+                saved_account_id = existing_account_id or _existing_account_id(account.platform, account.email) or 0
+                if saved_account_id:
+                    save_mode = "updated existing" if existing_account_id else "created"
+                    logger.log(f"  [Accounts] saved account id={saved_account_id} ({save_mode})")
+                _auto_sync_lingya2api(logger, account)
+                _auto_sync_freebeat2api(logger, account)
+                _auto_followup_windsurf_payment(
+                    platform_name=platform_name,
+                    payload=payload,
+                    platform=platform,
+                    account=account,
+                    logger=logger,
+                )
+                if resolved_proxy:
+                    proxy_pool.report_success(resolved_proxy)
+                logger.record_success()
+                logger.log(f"✓ 注册成功: {account.email}")
+                _save_task_log(platform_name, account.email, "success")
+                _auto_followup_lingya_qq_rewards(
+                    platform_name=platform_name,
+                    payload=payload,
+                    platform=platform,
+                    account=account,
+                    logger=logger,
+                )
+                _auto_upload_cpa(logger, account)
+                _auto_push_any2api(logger, account)
+                account_extra = dict(account.extra or {})
+                overview = dict(account_extra.get("account_overview") or {})
+                cashier_url = str(account_extra.get("cashier_url") or overview.get("cashier_url") or "")
+                if cashier_url:
+                    logger.log(f"  [升级链接] {cashier_url}")
+                    logger.add_cashier_url(cashier_url)
+                return True
+            except Exception as exc:
+                if resolved_proxy:
+                    proxy_pool.report_fail(resolved_proxy)
+                error = str(exc)
+                last_error = error
+                if attempt < len(candidates) and _looks_like_proxy_network_error(error):
+                    logger.log(f"代理连接失败，切换出口重试: {error}", level="warning")
+                    continue
+                logger.record_error(error)
+                logger.log(f"✗ 注册失败: {error}", level="error")
+                _save_task_log(platform_name, email or "", "failed", error=error)
+                return error
+        logger.record_error(last_error)
+        logger.log(f"✗ 注册失败: {last_error}", level="error")
+        _save_task_log(platform_name, email or "", "failed", error=last_error)
+        return last_error
+
     try:
         submitted = 0
         completed = 0
@@ -1131,7 +1277,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             while _should_submit_more() and len(futures) < concurrency:
-                futures[pool.submit(_do_one, submitted)] = submitted
+                futures[pool.submit(_do_one_with_retries, submitted)] = submitted
                 submitted += 1
 
             while futures:
@@ -1146,7 +1292,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                         errors.append(str(result))
                     logger.set_progress(min(success if herosms_enabled else completed, progress_total), progress_total)
                 while _should_submit_more() and len(futures) < concurrency:
-                    futures[pool.submit(_do_one, submitted)] = submitted
+                    futures[pool.submit(_do_one_with_retries, submitted)] = submitted
                     submitted += 1
                 if logger.is_cancel_requested() and not futures:
                     break

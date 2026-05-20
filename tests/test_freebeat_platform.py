@@ -97,6 +97,25 @@ def test_freebeat_api_retries_once_after_vercel_403():
     assert "origin" not in {key.lower(): value for key, value in calls[0]["headers"].items()}
 
 
+def test_freebeat_send_code_already_sent_response_continues():
+    class Response409:
+        status_code = 200
+        text = '{"code":409,"msg":"A login code has already been sent to this email. Please try again in 1 minute."}'
+
+        def json(self):
+            return {
+                "code": 409,
+                "msg": "A login code has already been sent to this email. Please try again in 1 minute.",
+            }
+
+    client = FreebeatClient(log_fn=lambda message: None)
+    client.s.request = lambda *args, **kwargs: Response409()
+
+    result = client.send_email_verify_code("user@example.com")
+
+    assert result["code"] == 409
+
+
 def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
     calls: list[tuple[str, object]] = []
 
