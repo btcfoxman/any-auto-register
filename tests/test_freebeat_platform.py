@@ -152,6 +152,63 @@ def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
     assert ("signin", "tok_worker") in calls
 
 
+def test_freebeat_protocol_mailbox_worker_saves_token_when_state_refresh_times_out(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def send_email_verify_code(self, email, *, verify_source):
+            calls.append(("send", email))
+            return {"code": 0, "data": True}
+
+        def verify_email_code(self, email, code, *, next_action=None, next_router_state_tree=None):
+            calls.append(("login", code))
+            return {
+                "code": 0,
+                "data": {
+                    "token": "tok_partial",
+                    "accessToken": "tok_partial",
+                    "deviceToken": "dev_partial",
+                    "userId": "user_partial",
+                    "newUser": True,
+                    "expireTime": 1781635058486,
+                },
+            }
+
+        def fetch_account_state(self, token):
+            calls.append(("state", token))
+            raise TimeoutError("credits timeout")
+
+        def claim_questionnaire(self, token):
+            calls.append(("questionnaire", token))
+            raise AssertionError("questionnaire should be skipped after state timeout")
+
+        def daily_sign_in(self, token):
+            calls.append(("signin", token))
+            raise AssertionError("daily sign-in should be skipped after state timeout")
+
+        def auth_state(self):
+            return {"cookies": "authToken=tok_partial", "cookie_header": "authToken=tok_partial"}
+
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.FreebeatClient", FakeClient)
+
+    logs: list[str] = []
+    worker = FreebeatProtocolMailboxWorker(log_fn=logs.append)
+    result = worker.run(email="user@example.com", otp_callback=lambda: "123456")
+
+    assert result["success"] is True
+    assert result["token"] == "tok_partial"
+    assert result["device_token"] == "dev_partial"
+    assert result["cookies"] == "authToken=tok_partial"
+    assert result["account_overview"]["account_state_partial"] is True
+    assert "credits timeout" in result["account_overview"]["account_state_error"]
+    assert ("questionnaire", "tok_partial") not in calls
+    assert ("signin", "tok_partial") not in calls
+    assert any("先保存账号" in message for message in logs)
+
+
 def test_freebeat_refresh_session_action_persists_token_and_overview(monkeypatch):
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -292,6 +349,51 @@ def test_freebeat_relogin_email_code_refreshes_and_syncs(monkeypatch):
     assert credentials["cookies"] == "authToken=tok_relogin; fb_session=sess_relogin"
     assert graph["overview"]["total_credits"] == 1100
     assert graph["overview"]["freebeat2api_synced"] is True
+
+
+def test_freebeat_relogin_saves_new_token_when_state_refresh_times_out(monkeypatch):
+    sync_calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def verify_email_code(self, email, code, *, next_action=None, next_router_state_tree=None):
+            return {
+                "code": 0,
+                "data": {
+                    "token": "tok_partial",
+                    "accessToken": "tok_partial",
+                    "deviceToken": "dev_partial",
+                    "userId": "user_partial",
+                    "expireTime": 1781635058486,
+                },
+            }
+
+        def fetch_account_state(self, token):
+            raise TimeoutError("credits timeout")
+
+        def auth_state(self):
+            return {"cookies": "authToken=tok_partial", "cookie_header": "authToken=tok_partial"}
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, balance=False, **kwargs):
+        sync_calls.append(account.token)
+        return {"ok": True}
+
+    monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
+    monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", fake_sync)
+
+    platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
+    account = Account(platform="freebeat", email="user@example.com", password="", token="tok_old")
+
+    result = platform.execute_action("relogin_email_code", account, {"code": "112233"})
+
+    assert result["ok"] is True
+    assert result["data"]["access_token"] == "tok_partial"
+    assert result["data"]["device_token"] == "dev_partial"
+    assert result["data"]["account_state_partial"] is True
+    assert "credits timeout" in result["data"]["account_state_error"]
+    assert sync_calls == ["tok_partial"]
 
 
 def test_freebeat_relogin_uses_saved_account_proxy(monkeypatch):

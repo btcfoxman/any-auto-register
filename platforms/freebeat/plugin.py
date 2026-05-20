@@ -14,6 +14,7 @@ from platforms.freebeat.core import (
     FREEBEAT_ONBOARDING_CODE,
     FreebeatClient,
     load_freebeat_account_state,
+    partial_freebeat_account_state,
     summarize_freebeat_account_state,
 )
 
@@ -341,7 +342,11 @@ class FreebeatPlatform(BasePlatform):
         )
         login_data = dict(login.get("data") or {})
         token = str(login_data.get("token") or login_data.get("accessToken") or login_data.get("deviceToken") or "").strip()
-        state = client.fetch_account_state(token)
+        try:
+            state = client.fetch_account_state(token)
+        except Exception as exc:
+            state = partial_freebeat_account_state(token, client=client, error=exc)
+            self.log(f"Freebeat 重新登录成功，但查询积分/状态失败，先保存新 token: {exc}")
         state.update(
             {
                 "email": email,

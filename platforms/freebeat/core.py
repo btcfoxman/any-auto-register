@@ -278,6 +278,8 @@ def summarize_freebeat_account_state(state: dict[str, Any], *, fallback_email: s
         "token_expire_at": token_expire_at,
         "token_expire_in_days": token_expire_days,
         "last_keepalive_at": str(state.get("last_keepalive_at") or ""),
+        "account_state_partial": bool(state.get("account_state_partial")),
+        "account_state_error": str(state.get("account_state_error") or ""),
         "last_questionnaire_status": str(state.get("last_questionnaire_status") or ""),
         "last_daily_sign_in_status": str(state.get("last_daily_sign_in_status") or ""),
         "credits": credits,
@@ -290,6 +292,26 @@ def summarize_freebeat_account_state(state: dict[str, Any], *, fallback_email: s
         if key not in {"account_overview", "credits", "signin"}
     }
     return summary
+
+
+def partial_freebeat_account_state(token: str, *, client: Any = None, error: Any = "") -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "token": str(token or "").strip(),
+        "credits": {},
+        "signin_status": {},
+        "credits_payload": {},
+        "signin_payload": {},
+        "last_keepalive_at": _now_iso(),
+        "account_state_partial": True,
+        "account_state_error": str(error or ""),
+        "valid": True,
+    }
+    if client is not None and hasattr(client, "auth_state"):
+        try:
+            state.update(client.auth_state())
+        except Exception:
+            pass
+    return state
 
 
 def extract_freebeat_account_context(account: Account | Any) -> dict[str, str]:

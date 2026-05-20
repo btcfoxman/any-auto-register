@@ -6,6 +6,7 @@ from typing import Any, Callable
 from platforms.freebeat.core import (
     FREEBEAT_DEFAULT_VERIFY_SOURCE,
     FreebeatClient,
+    partial_freebeat_account_state,
     summarize_freebeat_account_state,
 )
 
@@ -62,9 +63,16 @@ class FreebeatProtocolMailboxWorker:
         if not token:
             raise RuntimeError("Freebeat 登录成功响应中缺少 token")
 
-        state = self.client.fetch_account_state(token)
+        state_partial = False
+        try:
+            state = self.client.fetch_account_state(token)
+        except Exception as exc:
+            state_partial = True
+            state = partial_freebeat_account_state(token, client=self.client, error=exc)
+            self.log(f"Freebeat 登录成功，但查询积分/状态失败，先保存账号: {exc}")
+
         questionnaire: dict[str, Any] = {"status": "skipped"}
-        if auto_questionnaire:
+        if auto_questionnaire and (not state_partial or questionnaire_required):
             try:
                 questionnaire = self.client.claim_questionnaire(token)
                 self.log(f"Freebeat 问卷奖励状态: {questionnaire.get('status')} +{questionnaire.get('credits_granted', 0)}")
@@ -73,9 +81,11 @@ class FreebeatProtocolMailboxWorker:
                     raise
                 questionnaire = {"status": "error", "error": str(exc)}
                 self.log(f"Freebeat 问卷奖励失败，忽略并继续: {exc}")
+        elif auto_questionnaire and state_partial:
+            self.log("Freebeat 跳过问卷奖励: 登录后状态接口暂不可用")
 
         daily_sign_in: dict[str, Any] = {"status": "skipped"}
-        if auto_daily_sign_in:
+        if auto_daily_sign_in and (not state_partial or daily_sign_in_required):
             try:
                 daily_sign_in = self.client.daily_sign_in(token)
                 self.log(f"Freebeat 每日签到状态: {daily_sign_in.get('status')} +{daily_sign_in.get('reward_amount', 0)}")
@@ -84,8 +94,19 @@ class FreebeatProtocolMailboxWorker:
                     raise
                 daily_sign_in = {"status": "error", "error": str(exc)}
                 self.log(f"Freebeat 每日签到失败，忽略并继续: {exc}")
+        elif auto_daily_sign_in and state_partial:
+            self.log("Freebeat 跳过每日签到: 登录后状态接口暂不可用")
 
-        state = self.client.fetch_account_state(token)
+        if not state_partial or questionnaire.get("status") != "skipped" or daily_sign_in.get("status") != "skipped":
+            try:
+                state = self.client.fetch_account_state(token)
+            except Exception as exc:
+                previous_state = dict(state or {})
+                state = partial_freebeat_account_state(token, client=self.client, error=exc)
+                state.update({k: v for k, v in previous_state.items() if k not in {"account_state_error"}})
+                state["account_state_partial"] = True
+                state["account_state_error"] = str(exc)
+                self.log(f"Freebeat 最终状态刷新失败，保留已登录账号: {exc}")
         state.update(
             {
                 "email": email,
