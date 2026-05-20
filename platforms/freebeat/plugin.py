@@ -97,6 +97,14 @@ def _account_proxy_value(account: Account) -> str:
     return ""
 
 
+def _with_sync_proxy(account: Account, params: dict[str, Any] | None, data: dict[str, Any], proxy: str | None = None) -> dict[str, Any]:
+    sync_data = dict(data or {})
+    proxy_url = str(proxy or _param_proxy_value(params) or _account_proxy_value(account) or "").strip()
+    if proxy_url:
+        sync_data["proxy_url"] = proxy_url
+    return sync_data
+
+
 @register
 class FreebeatPlatform(BasePlatform):
     name = "freebeat"
@@ -375,7 +383,7 @@ class FreebeatPlatform(BasePlatform):
             }
         )
         sync_result = sync_account_to_freebeat2api(
-            _account_with_extra(account, {**dict(account.extra or {}), **data}),
+            _account_with_extra(account, {**dict(account.extra or {}), **_with_sync_proxy(account, params, data, proxy)}),
             log_fn=self.log,
             heartbeat=True,
             balance=True,
@@ -403,7 +411,7 @@ class FreebeatPlatform(BasePlatform):
             data["session_refreshed"] = False
             data["message"] = "Freebeat 已完成保活请求；当前抓包未发现静默刷新 token 接口"
             sync_result = sync_account_to_freebeat2api(
-                _account_with_extra(account, {**dict(account.extra or {}), **state, **data}),
+                _account_with_extra(account, {**dict(account.extra or {}), **_with_sync_proxy(account, params, {**state, **data})}),
                 log_fn=self.log,
                 heartbeat=True,
                 balance=True,
@@ -436,7 +444,7 @@ class FreebeatPlatform(BasePlatform):
                 }
             )
             sync_result = sync_account_to_freebeat2api(
-                _account_with_extra(account, {**dict(account.extra or {}), **state, **data}),
+                _account_with_extra(account, {**dict(account.extra or {}), **_with_sync_proxy(account, params, {**state, **data})}),
                 log_fn=self.log,
                 balance=True,
                 sign_in=True,
@@ -467,7 +475,7 @@ class FreebeatPlatform(BasePlatform):
                 }
             )
             sync_result = sync_account_to_freebeat2api(
-                _account_with_extra(account, {**dict(account.extra or {}), **state, **data}),
+                _account_with_extra(account, {**dict(account.extra or {}), **_with_sync_proxy(account, params, {**state, **data})}),
                 log_fn=self.log,
                 heartbeat=True,
                 balance=True,
@@ -482,7 +490,7 @@ class FreebeatPlatform(BasePlatform):
             data = dict(state.get("summary") or {})
             _attach_auth_state(data, state)
             sync_result = sync_account_to_freebeat2api(
-                _account_with_extra(account, {**dict(account.extra or {}), **state, **data}),
+                _account_with_extra(account, {**dict(account.extra or {}), **_with_sync_proxy(account, params, {**state, **data})}),
                 log_fn=self.log,
                 balance=_truthy(params.get("balance"), True),
                 heartbeat=_truthy(params.get("heartbeat"), False),

@@ -54,6 +54,26 @@ def test_build_freebeat2api_payload_can_disable_remote_maintenance():
     assert payload["enable_auto_maintenance"] is False
 
 
+def test_build_freebeat2api_payload_accepts_proxy_aliases():
+    account = Account(
+        platform="freebeat",
+        email="user@example.com",
+        password="",
+        token="tok_123",
+        extra={
+            "account_overview": {
+                "legacy_extra": {
+                    "proxyUrl": "http://legacy-proxy.example:8080",
+                }
+            }
+        },
+    )
+
+    payload = build_freebeat2api_payload(account)
+
+    assert payload["proxy_url"] == "http://legacy-proxy.example:8080"
+
+
 def test_freebeat2api_client_upserts_account_with_bearer_key():
     resp = Mock()
     resp.raise_for_status = Mock()

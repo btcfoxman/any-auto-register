@@ -417,6 +417,7 @@ def test_freebeat_relogin_saves_new_token_when_state_refresh_times_out(monkeypat
 
 def test_freebeat_relogin_uses_saved_account_proxy(monkeypatch):
     proxies: list[str | None] = []
+    synced_proxy_urls: list[str] = []
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -445,8 +446,12 @@ def test_freebeat_relogin_uses_saved_account_proxy(monkeypatch):
         def auth_state(self):
             return {"cookies": "authToken=tok_proxy", "cookie_header": "authToken=tok_proxy"}
 
+    def fake_sync(account, *args, **kwargs):
+        synced_proxy_urls.append(str((account.extra or {}).get("proxy_url") or ""))
+        return {"ok": True}
+
     monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
-    monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", fake_sync)
 
     platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
     account = Account(
@@ -468,6 +473,57 @@ def test_freebeat_relogin_uses_saved_account_proxy(monkeypatch):
 
     assert result["ok"] is True
     assert proxies == ["http://proxy.example:8080"]
+    assert synced_proxy_urls == ["http://proxy.example:8080"]
+
+
+def test_freebeat_relogin_syncs_proxy_param_to_freebeat2api(monkeypatch):
+    synced_proxy_urls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def verify_email_code(self, email, code, *, next_action=None, next_router_state_tree=None):
+            return {
+                "code": 0,
+                "data": {
+                    "token": "tok_proxy_param",
+                    "accessToken": "tok_proxy_param",
+                    "deviceToken": "dev_proxy_param",
+                    "userId": "user_proxy_param",
+                    "expireTime": 1781635058486,
+                },
+            }
+
+        def fetch_account_state(self, token):
+            return {
+                "token": token,
+                "credits": {"free": "500", "boost": "0", "event": "0", "membership": "0", "totalCredits": 500},
+                "signin_status": {"signedToday": False, "canSignIn": True},
+                "last_keepalive_at": "2026-05-20T00:00:00Z",
+            }
+
+        def auth_state(self):
+            return {"cookies": "authToken=tok_proxy_param", "cookie_header": "authToken=tok_proxy_param"}
+
+    def fake_sync(account, *args, **kwargs):
+        synced_proxy_urls.append(str((account.extra or {}).get("proxy_url") or ""))
+        return {"ok": True}
+
+    monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
+    monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", fake_sync)
+
+    platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
+    account = Account(platform="freebeat", email="user@example.com", password="", token="tok_old")
+
+    result = platform.execute_action(
+        "relogin_email_code",
+        account,
+        {"code": "112233", "proxy": "http://override-proxy.example:8080"},
+    )
+
+    assert result["ok"] is True
+    assert synced_proxy_urls == ["http://override-proxy.example:8080"]
 
 
 def test_freebeat_relogin_proxy_param_overrides_saved_proxy():

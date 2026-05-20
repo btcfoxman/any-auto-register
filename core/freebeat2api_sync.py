@@ -215,7 +215,13 @@ def build_freebeat2api_payload(
         "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")),
         "cookies": cookies,
         "cookie_header": cookies,
-        "proxy_url": _text(extra.get("freebeat2api_proxy_url") or extra.get("proxy_url") or extra.get("proxy")),
+        "proxy_url": _text(
+            extra.get("freebeat2api_proxy_url")
+            or extra.get("proxy_url")
+            or extra.get("proxyUrl")
+            or extra.get("resolved_proxy")
+            or extra.get("proxy")
+        ),
         "enabled": _as_bool(extra.get("freebeat2api_enabled"), True),
         "enable_auto_maintenance": _as_bool(
             extra.get("freebeat2api_enable_auto_maintenance"),
