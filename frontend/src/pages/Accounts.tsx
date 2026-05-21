@@ -1044,10 +1044,10 @@ function ActionParamsModal({
   return (
     <div className="dialog-backdrop" onClick={onClose}>
       <div
-        className="dialog-panel dialog-panel-md"
+        className="dialog-panel dialog-panel-md flex flex-col"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-[var(--text-primary)]">{actionLabel(action?.label)}</h2>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">填写执行该动作所需的参数</p>
@@ -1056,7 +1056,7 @@ function ActionParamsModal({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="px-6 py-4 space-y-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
           {params.map((param: any) => {
             const value = form[param.key] ?? ''
             if (Array.isArray(param.options) && param.options.length > 0) {
@@ -1101,7 +1101,7 @@ function ActionParamsModal({
             )
           })}
         </div>
-        <div className="px-6 py-4 border-t border-[var(--border)] flex gap-3">
+        <div className="flex shrink-0 gap-3 border-t border-[var(--border)] px-6 py-4">
           <Button onClick={() => onSubmit(form)} disabled={submitting} className="flex-1">
             {submitting ? '执行中...' : '执行'}
           </Button>
