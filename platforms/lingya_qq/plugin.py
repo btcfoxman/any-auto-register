@@ -497,6 +497,33 @@ class LingYaQQPlatform(BasePlatform):
             timeout=_as_int(extra.get("lingya_qq_http_timeout"), 20),
         )
 
+    def _get_user_profile_or_empty(
+        self,
+        client: LingYaQQClient,
+        vuid: str,
+        *,
+        context: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        try:
+            return _extract_user_profile(client.get_user_profile(vuid)), {}
+        except Exception as exc:
+            message = str(exc)
+            self.log(f"LingYaQQ {context}: profile refresh skipped: {message}")
+            return {}, {"profile_error": message}
+
+    def _get_user_quota_or_empty(
+        self,
+        client: LingYaQQClient,
+        *,
+        context: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        try:
+            return client.get_user_quota(), {}
+        except Exception as exc:
+            message = str(exc)
+            self.log(f"LingYaQQ {context}: quota refresh skipped: {message}")
+            return {}, {"quota_error": message}
+
     def get_platform_actions(self) -> list:
         actions = super().get_platform_actions()
         actions.append(
@@ -645,9 +672,8 @@ class LingYaQQPlatform(BasePlatform):
             if not vuid or not vusession:
                 raise RuntimeError("LingYaQQ login response is missing vuid/vusession")
 
-            profile_data = client.get_user_profile(vuid)
-            profile = _extract_user_profile(profile_data)
-            quota = client.get_user_quota()
+            profile, profile_meta = self._get_user_profile_or_empty(client, vuid, context="register")
+            quota, quota_meta = self._get_user_quota_or_empty(client, context="register")
             quota_overview = _quota_summary(quota)
             nick = str(profile.get("nickname") or ((login_response.get("user_info") or {}).get("user_nick")) or "")
             cookie_fields = build_lingya_qq_account_fields(
@@ -667,10 +693,12 @@ class LingYaQQPlatform(BasePlatform):
                 "sms_activation_id": activation.activation_id,
                 "vuid": vuid,
                 "nick": nick,
+                **profile_meta,
+                **quota_meta,
                 **quota_overview,
                 "chips": [
                     "手机号登录",
-                    f"额度 {quota_overview.get('quota_balance', '-')}/{quota_overview.get('quota_sum', '-')}",
+                    f"额度 {quota_overview.get('quota_balance') or '-'}/{quota_overview.get('quota_sum') or '-'}",
                 ],
             }
             try:
@@ -703,6 +731,8 @@ class LingYaQQPlatform(BasePlatform):
                     "vversion_platform": VVERSION_PLATFORM,
                     "nick": nick,
                     "avatar": str(profile.get("avatar") or ((login_response.get("user_info") or {}).get("user_head")) or ""),
+                    **profile_meta,
+                    **quota_meta,
                     "quota": quota_overview,
                     "account_overview": overview,
                     "provider_resources": [
@@ -833,9 +863,8 @@ class LingYaQQPlatform(BasePlatform):
             if not vuid or not vusession:
                 raise RuntimeError("LingYaQQ relogin response is missing vuid/vusession")
 
-            profile_data = client.get_user_profile(vuid)
-            profile = _extract_user_profile(profile_data)
-            quota = client.get_user_quota()
+            profile, profile_meta = self._get_user_profile_or_empty(client, vuid, context="relogin")
+            quota, quota_meta = self._get_user_quota_or_empty(client, context="relogin")
             quota_overview = _quota_summary(quota)
             nick = str(profile.get("nickname") or ((login_response.get("user_info") or {}).get("user_nick")) or "")
             cookie_fields = build_lingya_qq_account_fields(
@@ -871,6 +900,8 @@ class LingYaQQPlatform(BasePlatform):
                 "vdevice_guid": client.vdevice_guid,
                 "nick": nick,
                 "avatar": str(profile.get("avatar") or ((login_response.get("user_info") or {}).get("user_head")) or ""),
+                **profile_meta,
+                **quota_meta,
                 **quota_overview,
             }
             sync_result = sync_account_to_lingya2api(

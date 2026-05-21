@@ -369,6 +369,80 @@ def test_lingya_qq_manual_phone_register(monkeypatch):
     assert not any(event[0] == "cancel" for event in events)
 
 
+def test_lingya_qq_register_profile_failure_is_non_blocking(monkeypatch):
+    events = []
+
+    class FakeSmsProvider:
+        def get_number(self, *, service: str, country: str = ""):
+            events.append(("get_number", service, country))
+            return SmsActivation(activation_id="act_1", phone_number="+8613800138000")
+
+        def get_code(self, activation_id: str, *, timeout: int = 120):
+            return "123456"
+
+        def report_success(self, activation_id: str):
+            events.append(("report_success", activation_id))
+            return True
+
+        def cancel(self, activation_id: str):
+            events.append(("cancel", activation_id))
+            return True
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid or "device1234567890"
+
+        def login_with_phone_code(self, *, phone: str, code: str, area_code: str = "+86"):
+            return {
+                "ret": 0,
+                "data": {
+                    "error_code": 0,
+                    "rsp": {
+                        "login_response": {
+                            "vuid": "1234567890",
+                            "vusession": "session-token",
+                            "vurefresh": "refresh-token",
+                            "user_info": {"user_nick": "tester", "user_head": ""},
+                        }
+                    },
+                },
+            }
+
+        def get_user_profile(self, vuid: str):
+            raise RuntimeError(
+                "/trpc.caotai.personal_page.PersonalPage/GetUserProfileInfo: "
+                "BatchGetWorkCount fail, err:type:business, code:5000017"
+            )
+
+        def get_user_quota(self):
+            return {"quota_balance": "0", "quota_sum": "0"}
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.create_sms_provider", lambda key, cfg: FakeSmsProvider())
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr(
+        "platforms.lingya_qq.plugin._resolve_sms_runtime",
+        lambda extra: ("sms_activate_api", {"sms_activate_api_key": "key"}),
+    )
+    monkeypatch.setattr(
+        "platforms.lingya_qq.plugin._publish_lingya_phone_login_assist",
+        lambda **kwargs: {"assist_id": "assist_1"},
+    )
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    logs = []
+    platform.set_logger(logs.append)
+    account = platform.register()
+
+    assert account.token == "session-token"
+    assert account.user_id == "1234567890"
+    assert account.extra["nick"] == "tester"
+    assert "BatchGetWorkCount fail" in account.extra["profile_error"]
+    assert "BatchGetWorkCount fail" in account.extra["account_overview"]["profile_error"]
+    assert ("report_success", "act_1") in events
+    assert not any(event[0] == "cancel" for event in events)
+    assert any("profile refresh skipped" in message for message in logs)
+
+
 def test_lingya_qq_check_valid(monkeypatch):
     class FakeClient:
         def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
