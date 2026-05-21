@@ -116,6 +116,21 @@ class TestCreateSmsProvider:
         with pytest.raises(RuntimeError, match="FeiHuMsg 未配置"):
             create_sms_provider("feihumsg_api", {"feihumsg_pid": "1001"})
 
+    def test_feihumsg_does_not_treat_generic_sms_service_as_pid(self):
+        provider = create_sms_provider(
+            "feihumsg_api",
+            {
+                "feihumsg_user": "user1",
+                "feihumsg_password": "pass1",
+                "sms_service": "qq",
+            },
+        )
+
+        assert isinstance(provider, FeiHuMsgProvider)
+        assert provider.pid == ""
+        with pytest.raises(RuntimeError, match="FeiHuMsg .*feihumsg_pid.*"):
+            provider.get_number(service="qq")
+
     def test_haozhuma(self):
         provider = create_sms_provider(
             "haozhuma_api",

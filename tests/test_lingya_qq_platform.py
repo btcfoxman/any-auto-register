@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import pytest
+
 from core.base_platform import Account, RegisterConfig
 from core.base_sms import SmsActivation
 from core.registry import get, load_all
@@ -11,6 +13,7 @@ from platforms.lingya_qq.plugin import (
     _generate_lingya_profile_nickname,
     _is_lingya_sms_code,
     _resolve_sms_runtime,
+    _resolve_sms_service,
     _sms_timeout,
 )
 from platforms.lingya_qq.publish import LingYaQQPublishAsset
@@ -45,6 +48,16 @@ def test_lingya_qq_resolves_feihumsg_inline_auth():
     assert provider_key == "feihumsg_api"
     assert settings["feihumsg_user"] == "user1"
     assert settings["feihumsg_pid"] == "1001"
+
+
+def test_lingya_qq_feihumsg_requires_numeric_project_id():
+    assert (
+        _resolve_sms_service({"sms_service": "1001,1002"}, {}, provider_key="feihumsg_api")
+        == "1001,1002"
+    )
+
+    with pytest.raises(RuntimeError, match="FeiHuMsg .*feihumsg_pid"):
+        _resolve_sms_service({"sms_service": "qq"}, {}, provider_key="feihumsg_api")
 
 
 def test_lingya_qq_normalizes_haozhuma_provider_alias():

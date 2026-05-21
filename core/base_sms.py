@@ -42,6 +42,27 @@ def _release_sms_number(provider: str, phone: str) -> None:
         _SMS_ACTIVE_NUMBERS.discard(key)
 
 
+def _split_unique_sms_project_ids(raw: str) -> list[str]:
+    ids: list[str] = []
+    for part in re.split(r"[\s,，;；|]+", str(raw or "").strip()):
+        value = part.strip()
+        if value and value not in ids:
+            ids.append(value)
+    return ids
+
+
+def _numeric_sms_project_ids(provider_name: str, field_name: str, raw: str) -> list[str]:
+    ids = _split_unique_sms_project_ids(raw)
+    if not ids:
+        raise RuntimeError(f"{provider_name} 需要配置项目 ID({field_name})")
+    invalid = [value for value in ids if not value.isdecimal()]
+    if invalid:
+        raise RuntimeError(
+            f"{provider_name} 项目 ID({field_name}) 必须是数字，当前值: {', '.join(invalid)}"
+        )
+    return ids
+
+
 @dataclass
 class SmsActivation:
     """Represents an active phone number rental."""
@@ -1378,14 +1399,7 @@ class FeiHuMsgProvider(BaseSmsProvider):
 
     def _pid_candidates(self, service: str = "") -> list[str]:
         raw = str(self.pid or service or "").strip()
-        pids: list[str] = []
-        for part in re.split(r"[\s,，;；|]+", raw):
-            pid = part.strip()
-            if pid and pid not in pids:
-                pids.append(pid)
-        if not pids:
-            raise RuntimeError("FeiHuMsg 需要配置项目 ID(feihumsg_pid)")
-        return pids
+        return _numeric_sms_project_ids("FeiHuMsg", "feihumsg_pid", raw)
 
     def get_balance(self):
         data = self._request("/api/sms/userInfo")
@@ -1999,7 +2013,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             user=user,
             password=password,
             token=token,
-            pid=str(config.get("feihumsg_pid") or config.get("sms_service") or "").strip(),
+            pid=str(config.get("feihumsg_pid") or "").strip(),
             phone=str(config.get("feihumsg_phone") or "").strip(),
             isp=str(config.get("feihumsg_isp") or "").strip(),
             province=str(config.get("feihumsg_province") or config.get("sms_country") or "").strip(),

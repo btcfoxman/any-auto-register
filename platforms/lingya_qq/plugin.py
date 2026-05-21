@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import random
+import re
 import time
 from typing import Any
 import zipfile
@@ -253,7 +254,48 @@ def _resolve_sms_runtime(extra: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return provider_key, settings
 
 
-def _resolve_sms_service(settings: dict[str, Any], extra: dict[str, Any]) -> str:
+def _split_sms_project_ids(value: Any) -> list[str]:
+    return [part.strip() for part in re.split(r"[\s,，;；|]+", str(value or "").strip()) if part.strip()]
+
+
+def _resolve_numeric_sms_project_id(
+    provider_label: str,
+    field_name: str,
+    settings: dict[str, Any],
+    extra: dict[str, Any],
+    keys: tuple[str, ...],
+) -> str:
+    for key in keys:
+        value = str(extra.get(key) or settings.get(key) or "").strip()
+        if not value:
+            continue
+        invalid = [part for part in _split_sms_project_ids(value) if not part.isdecimal()]
+        if invalid:
+            raise RuntimeError(
+                f"{provider_label} 需要配置数字项目 ID({field_name})，当前 {key}={value!r} 不是有效项目 ID"
+            )
+        return value
+    raise RuntimeError(f"{provider_label} 需要配置数字项目 ID({field_name})")
+
+
+def _resolve_sms_service(settings: dict[str, Any], extra: dict[str, Any], provider_key: str = "") -> str:
+    normalized_provider = _normalize_sms_provider_key(provider_key)
+    if normalized_provider == "feihumsg_api":
+        return _resolve_numeric_sms_project_id(
+            "FeiHuMsg",
+            "feihumsg_pid",
+            settings,
+            extra,
+            ("feihumsg_pid", "lingya_qq_sms_service", "sms_service"),
+        )
+    if normalized_provider == "haozhuma_api":
+        return _resolve_numeric_sms_project_id(
+            "HaoZhuMa",
+            "haozhuma_sid",
+            settings,
+            extra,
+            ("haozhuma_sid", "lingya_qq_sms_service", "sms_service"),
+        )
     for key in (
         "lingya_qq_sms_service",
         "sms_service",
@@ -617,7 +659,7 @@ class LingYaQQPlatform(BasePlatform):
     def register(self, email: str = None, password: str = None) -> Account:
         extra = dict(self.config.extra or {}) if self.config else {}
         provider_key, sms_settings = _resolve_sms_runtime(extra)
-        service = _resolve_sms_service(sms_settings, extra)
+        service = _resolve_sms_service(sms_settings, extra, provider_key=provider_key)
         country = _resolve_sms_country(sms_settings, extra)
         area_code = normalize_area_code(extra.get("lingya_qq_area_code") or extra.get("phone_area_code") or "+86")
         timeout = _sms_timeout(extra.get("lingya_qq_sms_timeout") or extra.get("sms_code_timeout"))
@@ -815,7 +857,7 @@ class LingYaQQPlatform(BasePlatform):
             sms_settings["haozhuma_phone"] = phone
         else:
             return {"ok": False, "error": f"SMS relogin currently supports only UOMsg, EOMsg, FeiHuMsg and HaoZhuMa for existing phone numbers. Resolved provider: {provider_key or '-'}"}
-        service = _resolve_sms_service(sms_settings, sms_extra)
+        service = _resolve_sms_service(sms_settings, sms_extra, provider_key=provider_key)
         country = _resolve_sms_country(sms_settings, sms_extra)
         timeout = _sms_timeout(params.get("sms_timeout") or params.get("lingya_qq_sms_timeout"))
         provider = create_sms_provider(provider_key, sms_settings)
