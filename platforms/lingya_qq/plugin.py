@@ -590,8 +590,6 @@ class LingYaQQPlatform(BasePlatform):
     def register(self, email: str = None, password: str = None) -> Account:
         extra = dict(self.config.extra or {}) if self.config else {}
         provider_key, sms_settings = _resolve_sms_runtime(extra)
-        if self.config and self.config.proxy and not str(sms_settings.get("sms_proxy") or sms_settings.get("proxy") or "").strip():
-            sms_settings["sms_proxy"] = self.config.proxy
         service = _resolve_sms_service(sms_settings, extra)
         country = _resolve_sms_country(sms_settings, extra)
         area_code = normalize_area_code(extra.get("lingya_qq_area_code") or extra.get("phone_area_code") or "+86")
@@ -787,9 +785,6 @@ class LingYaQQPlatform(BasePlatform):
             sms_settings["haozhuma_phone"] = phone
         else:
             return {"ok": False, "error": f"SMS relogin currently supports only UOMsg, EOMsg, FeiHuMsg and HaoZhuMa for existing phone numbers. Resolved provider: {provider_key or '-'}"}
-        if self.config and self.config.proxy and not str(sms_settings.get("sms_proxy") or sms_settings.get("proxy") or "").strip():
-            sms_settings["sms_proxy"] = self.config.proxy
-
         service = _resolve_sms_service(sms_settings, sms_extra)
         country = _resolve_sms_country(sms_settings, sms_extra)
         timeout = _sms_timeout(params.get("sms_timeout") or params.get("lingya_qq_sms_timeout"))

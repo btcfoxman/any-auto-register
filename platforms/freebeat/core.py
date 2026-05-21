@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from http.cookiejar import Cookie
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -611,25 +612,41 @@ class FreebeatClient:
         *,
         questionnaire_code: str = FREEBEAT_ONBOARDING_CODE,
         answers: list[dict[str, Any]] | None = None,
+        retry_attempts: int = 3,
+        retry_delay_seconds: float = 2.0,
     ) -> dict[str, Any]:
-        check = self.questionnaire_check(token, questionnaire_code=questionnaire_code)
         try:
-            submitted = self.questionnaire_submit(
-                token,
-                questionnaire_code=questionnaire_code,
-                answers=answers,
-            )
+            check = self.questionnaire_check(token, questionnaire_code=questionnaire_code)
         except RuntimeError as exc:
-            message = str(exc)
-            lowered = message.lower()
-            if any(marker in lowered for marker in ("already", "duplicate", "submitted", "complete", "已", "重复")):
-                return {
-                    "status": "already_claimed",
-                    "credits_granted": 0,
-                    "check": check,
-                    "message": message,
-                }
-            raise
+            check = {"status": "check_failed", "error": str(exc)}
+        attempts = max(1, int(retry_attempts or 1))
+        submitted: dict[str, Any] | None = None
+        last_error = ""
+        for attempt in range(1, attempts + 1):
+            try:
+                submitted = self.questionnaire_submit(
+                    token,
+                    questionnaire_code=questionnaire_code,
+                    answers=answers,
+                )
+                break
+            except RuntimeError as exc:
+                message = str(exc)
+                lowered = message.lower()
+                if any(marker in lowered for marker in ("already", "duplicate", "submitted", "complete", "已", "重复")):
+                    return {
+                        "status": "already_claimed",
+                        "credits_granted": 0,
+                        "check": check,
+                        "message": message,
+                    }
+                last_error = message
+                if attempt >= attempts:
+                    raise
+                self.log(f"Freebeat questionnaire submit failed, retrying ({attempt}/{attempts}): {message}")
+                time.sleep(max(0.0, float(retry_delay_seconds or 0)))
+        if submitted is None:
+            raise RuntimeError(f"Freebeat questionnaire submit failed: {last_error}")
         data = dict(submitted.get("data") or {})
         return {
             "status": "claimed",
@@ -638,20 +655,49 @@ class FreebeatClient:
             "submit": submitted,
         }
 
-    def daily_sign_in(self, token: str) -> dict[str, Any]:
-        before = self.signin_status(token)
+    def daily_sign_in(
+        self,
+        token: str,
+        *,
+        retry_attempts: int = 3,
+        retry_delay_seconds: float = 2.0,
+    ) -> dict[str, Any]:
+        status_available = True
+        try:
+            before = self.signin_status(token)
+        except RuntimeError as exc:
+            status_available = False
+            before = {"status": "status_failed", "error": str(exc)}
         info = dict(before.get("data") or {})
-        if not info.get("canSignIn"):
+        if status_available and not info.get("canSignIn"):
             return {
                 "status": "already_signed" if info.get("signedToday") else "not_available",
                 "reward_amount": 0,
                 "before": before,
                 "after": before,
             }
-        submitted = self.signin_submit(token)
+        attempts = max(1, int(retry_attempts or 1))
+        submitted: dict[str, Any] | None = None
+        last_error = ""
+        for attempt in range(1, attempts + 1):
+            try:
+                submitted = self.signin_submit(token)
+                break
+            except RuntimeError as exc:
+                last_error = str(exc)
+                if attempt >= attempts:
+                    raise
+                self.log(f"Freebeat sign-in submit failed, retrying ({attempt}/{attempts}): {last_error}")
+                time.sleep(max(0.0, float(retry_delay_seconds or 0)))
+        if submitted is None:
+            raise RuntimeError(f"Freebeat sign-in submit failed: {last_error}")
         submit_info = dict(submitted.get("data") or {})
         return {
-            "status": "signed" if submit_info.get("granted") else "not_granted",
+            "status": (
+                "already_signed"
+                if submit_info.get("signedToday") is True and submit_info.get("granted") is False
+                else ("signed" if submit_info.get("granted") else "not_granted")
+            ),
             "reward_amount": _safe_int(submit_info.get("rewardAmount")),
             "before": before,
             "after": submitted,

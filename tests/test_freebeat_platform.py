@@ -97,6 +97,104 @@ def test_freebeat_api_retries_once_after_vercel_403():
     assert "origin" not in {key.lower(): value for key, value in calls[0]["headers"].items()}
 
 
+def test_freebeat_questionnaire_check_failure_does_not_block_submit(monkeypatch):
+    client = FreebeatClient(log_fn=lambda message: None)
+    submit_calls: list[tuple[str, str]] = []
+
+    def fake_check(token, *, questionnaire_code):
+        raise RuntimeError("questionnaire check not ready")
+
+    def fake_submit(token, *, questionnaire_code, answers=None):
+        submit_calls.append((token, questionnaire_code))
+        return {"code": 0, "data": {"creditsGranted": 300}}
+
+    monkeypatch.setattr(client, "questionnaire_check", fake_check)
+    monkeypatch.setattr(client, "questionnaire_submit", fake_submit)
+
+    result = client.claim_questionnaire("tok_123", retry_attempts=1)
+
+    assert result["status"] == "claimed"
+    assert result["credits_granted"] == 300
+    assert result["check"]["status"] == "check_failed"
+    assert submit_calls == [("tok_123", "onboarding_v1")]
+
+
+def test_freebeat_questionnaire_submit_retries_transient_failure(monkeypatch):
+    client = FreebeatClient(log_fn=lambda message: None)
+    submit_calls: list[str] = []
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr("platforms.freebeat.core.time.sleep", sleep_calls.append)
+    monkeypatch.setattr(
+        client,
+        "questionnaire_check",
+        lambda token, *, questionnaire_code: {"code": 0, "data": {"eligible": True}},
+    )
+
+    def fake_submit(token, *, questionnaire_code, answers=None):
+        submit_calls.append(token)
+        if len(submit_calls) == 1:
+            raise RuntimeError("temporary questionnaire submit failure")
+        return {"code": 0, "data": {"creditsGranted": 300}}
+
+    monkeypatch.setattr(client, "questionnaire_submit", fake_submit)
+
+    result = client.claim_questionnaire("tok_123", retry_attempts=2, retry_delay_seconds=0.25)
+
+    assert result["status"] == "claimed"
+    assert submit_calls == ["tok_123", "tok_123"]
+    assert sleep_calls == [0.25]
+
+
+def test_freebeat_daily_sign_in_status_failure_does_not_block_submit(monkeypatch):
+    client = FreebeatClient(log_fn=lambda message: None)
+    submit_calls: list[str] = []
+
+    def fake_status(token):
+        raise RuntimeError("sign-in status not ready")
+
+    def fake_submit(token):
+        submit_calls.append(token)
+        return {"code": 0, "data": {"granted": True, "rewardAmount": 200}}
+
+    monkeypatch.setattr(client, "signin_status", fake_status)
+    monkeypatch.setattr(client, "signin_submit", fake_submit)
+
+    result = client.daily_sign_in("tok_123", retry_attempts=1)
+
+    assert result["status"] == "signed"
+    assert result["reward_amount"] == 200
+    assert result["before"]["status"] == "status_failed"
+    assert submit_calls == ["tok_123"]
+
+
+def test_freebeat_daily_sign_in_submit_retries_transient_failure(monkeypatch):
+    client = FreebeatClient(log_fn=lambda message: None)
+    submit_calls: list[str] = []
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr("platforms.freebeat.core.time.sleep", sleep_calls.append)
+    monkeypatch.setattr(
+        client,
+        "signin_status",
+        lambda token: {"code": 0, "data": {"canSignIn": True, "rewardAmount": 200}},
+    )
+
+    def fake_submit(token):
+        submit_calls.append(token)
+        if len(submit_calls) == 1:
+            raise RuntimeError("temporary sign-in submit failure")
+        return {"code": 0, "data": {"granted": True, "rewardAmount": 200}}
+
+    monkeypatch.setattr(client, "signin_submit", fake_submit)
+
+    result = client.daily_sign_in("tok_123", retry_attempts=2, retry_delay_seconds=0.25)
+
+    assert result["status"] == "signed"
+    assert submit_calls == ["tok_123", "tok_123"]
+    assert sleep_calls == [0.25]
+
+
 def test_freebeat_send_code_already_sent_response_continues():
     class Response409:
         status_code = 200

@@ -1923,6 +1923,9 @@ def _feihumsg_token_store(provider_key: str) -> Callable[[str], None]:
 
 def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
     """Create an SMS provider instance from config."""
+    # SMS provider APIs are control-plane calls; keep get-number/get-code direct
+    # even when the target platform registration uses a proxy.
+    sms_api_proxy = None
     if provider_key in ("sms_activate", "sms_activate_api"):
         api_key = config.get("sms_activate_api_key", "")
         if not api_key:
@@ -1930,7 +1933,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
         return SmsActivateProvider(
             api_key=api_key,
             default_country=config.get("sms_activate_country", config.get("sms_activate_default_country", "")),
-            proxy=config.get("sms_proxy") or config.get("proxy") or None,
+            proxy=sms_api_proxy,
         )
     if provider_key in ("herosms", "herosms_api"):
         api_key = str(config.get("herosms_api_key", "") or "").strip()
@@ -1941,7 +1944,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             default_service=str(config.get("sms_service") or config.get("herosms_service") or config.get("herosms_default_service") or HERO_SMS_DEFAULT_SERVICE),
             default_country=str(config.get("sms_country") or config.get("herosms_country") or config.get("herosms_default_country") or HERO_SMS_DEFAULT_COUNTRY),
             max_price=_safe_float(config.get("herosms_max_price"), -1),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             reuse_phone_to_max=_safe_bool(config.get("register_reuse_phone_to_max"), True),
             phone_success_max=max(0, _safe_int(config.get("register_phone_extra_max") or config.get("register_phone_success_max"), 3)),
         )
@@ -1954,7 +1957,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             default_service=str(config.get("sms_service") or config.get("smsbower_service") or config.get("smsbower_default_service") or HERO_SMS_DEFAULT_SERVICE),
             default_country=str(config.get("sms_country") or config.get("smsbower_country") or config.get("smsbower_default_country") or HERO_SMS_DEFAULT_COUNTRY),
             max_price=_safe_float(config.get("smsbower_max_price"), -1),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             reuse_phone_to_max=_safe_bool(config.get("register_reuse_phone_to_max"), True),
             phone_success_max=max(0, _safe_int(config.get("register_phone_extra_max") or config.get("register_phone_success_max"), 3)),
         )
@@ -1969,7 +1972,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             card_type=str(config.get("uomsg_card_type") or "全部").strip() or "全部",
             phone=str(config.get("uomsg_phone") or "").strip(),
             poll_interval=_safe_int(config.get("uomsg_poll_interval"), 3),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             base_url=str(config.get("uomsg_base_url") or "").strip(),
         )
     if provider_key in ("eomsg", "eomsg_api"):
@@ -1983,7 +1986,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             card_type=str(config.get("eomsg_card_type") or "全部").strip() or "全部",
             phone=str(config.get("eomsg_phone") or "").strip(),
             poll_interval=_safe_int(config.get("eomsg_poll_interval"), 3),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             base_url=str(config.get("eomsg_base_url") or "").strip(),
         )
     if provider_key in ("feihumsg", "feihumsg_api"):
@@ -2005,7 +2008,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             exclude=str(config.get("feihumsg_exclude") or "").strip(),
             author=str(config.get("feihumsg_author") or "").strip(),
             poll_interval=_safe_int(config.get("feihumsg_poll_interval"), 10),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             base_url=str(config.get("feihumsg_base_url") or "").strip(),
             token_store=_feihumsg_token_store(provider_key),
         )
@@ -2030,7 +2033,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             batch_size=_safe_int(config.get("haozhuma_batch_size"), 5),
             batch_param=str(config.get("haozhuma_batch_param") or "num").strip(),
             poll_interval=_safe_int(config.get("haozhuma_poll_interval"), 15),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             base_url=str(config.get("haozhuma_base_url") or "").strip(),
             token_store=_haozhuma_token_store(provider_key),
         )

@@ -132,6 +132,21 @@ class TestCreateSmsProvider:
         assert provider.token == "cached-token"
         assert provider.sid == "1000"
 
+    def test_haozhuma_does_not_use_sms_or_generic_proxy(self):
+        provider = create_sms_provider(
+            "haozhuma_api",
+            {
+                "haozhuma_user": "user1",
+                "haozhuma_password": "pass1",
+                "haozhuma_sid": "1000",
+                "sms_proxy": "socks5://127.0.0.1:1080",
+                "proxy": "socks5://127.0.0.1:1080",
+            },
+        )
+
+        assert isinstance(provider, HaoZhuMaProvider)
+        assert provider.proxies is None
+
     def test_haozhuma_missing_auth(self):
         with pytest.raises(RuntimeError, match="HaoZhuMa 未配置"):
             create_sms_provider("haozhuma_api", {"haozhuma_sid": "1000"})
