@@ -1,33 +1,33 @@
+<div align="center">
+
 # Any Auto Register
 
-<p align="center">
-  <a href="https://github.com/lxf746/any-auto-register/stargazers"><img src="https://img.shields.io/github/stars/lxf746/any-auto-register?style=for-the-badge&logo=github&color=FFB003" alt="Stars" /></a>
-  <a href="https://github.com/lxf746/any-auto-register/network/members"><img src="https://img.shields.io/github/forks/lxf746/any-auto-register?style=for-the-badge&logo=github&color=blue" alt="Forks" /></a>
-  <a href="https://github.com/lxf746/any-auto-register/releases"><img src="https://img.shields.io/github/v/release/lxf746/any-auto-register?style=for-the-badge&logo=github&color=green" alt="Release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/lxf746/any-auto-register?style=for-the-badge&color=orange" alt="License" /></a>
+Auto-register accounts for ChatGPT / Cursor / Kiro / Grok / Windsurf / Trae & 13+ AI platforms · Protocol/browser dual-mode · One-click Mac/Windows desktop
+
+<p>
+  <a href="https://github.com/lxf746/any-auto-register/stargazers"><img src="https://img.shields.io/github/stars/lxf746/any-auto-register?style=flat-square&logo=github&color=FFB003" alt="Stars" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/releases/latest"><img src="https://img.shields.io/github/v/release/lxf746/any-auto-register?style=flat-square&logo=github&color=22c55e" alt="Release" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/network/members"><img src="https://img.shields.io/github/forks/lxf746/any-auto-register?style=flat-square&logo=github&color=3b82f6" alt="Forks" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/lxf746/any-auto-register?style=flat-square&color=f97316" alt="License" /></a>
 </p>
 
-<p align="center">
-  <a href="README.md">中文</a> |
-  <b>English</b> |
+<p>
+  <a href="https://github.com/lxf746/any-auto-register/releases/latest">Download desktop</a>
+  &nbsp;·&nbsp;
+  <a href="README.md">中文</a>
+  &nbsp;·&nbsp;
   <a href="README_vi.md">Tiếng Việt</a>
 </p>
 
-<p align="center">
-  <b>Auto-register accounts for ChatGPT, Cursor, Kiro, Grok, Windsurf, Trae & 13+ AI platforms · Protocol/browser dual-mode · Plugin-based · One-click Mac/Windows desktop</b>
-</p>
+<img src="assets/screenshots/dashboard.png" alt="Any Auto Register Dashboard" width="92%" />
 
-<a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy - High-purity residential IPs with one-account-per-IP isolation, full-link anti-correlation, significantly boosting account approval rates and long-term survival" width="100%"></a>
+</div>
 
-> ⚠️ **Disclaimer**: This project is for learning and research purposes only. It must not be used for any commercial purposes. Users are solely responsible for any consequences arising from the use of this project.
+---
 
-> 🌟 **This is the official upstream of [`lxf746/any-auto-register`](https://github.com/lxf746/any-auto-register)** — the original author's repository with the most timely updates. Other repositories with the same name are forks.
+> **This is the official upstream of [`lxf746/any-auto-register`](https://github.com/lxf746/any-auto-register)** — the original author's repository with the most timely updates. Other repositories with the same name are forks.
 
-A multi-platform account auto-registration and management system with plugin-based extensibility and a built-in Web UI.
-
-<a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy - Residential proxies built for account registration and automation, 74M+ real residential IPs, 195+ countries, HTTP/3 high-speed connection, starting at $0.60/GB" width="100%"></a>
-
-[LegionProxy — Residential proxies built for account registration and automation · 74M+ real residential IPs · 195+ countries · HTTP/3 · From $0.60/GB](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register)
+> This project is for learning and research only, not for commercial misuse. Users are solely responsible for any consequences arising from its use.
 
 ## Table of Contents
 
@@ -47,7 +47,6 @@ A multi-platform account auto-registration and management system with plugin-bas
 - [Any2API Integration](#any2api-integration)
 - [Plugin Development](#plugin-development)
 - [FAQ](#faq)
-- [Sponsors](#sponsors)
 - [Community](#community)
 - [Star History](#star-history)
 - [License](#license)
@@ -266,29 +265,26 @@ If `any2api_url` is not set, this integration is silently skipped.
 
 ## Plugin Development
 
-Adding a new platform:
+Adding a platform uses the current plugin system:
 
-1. Create `platforms/myplatform/` with `__init__.py` and `plugin.py`
-2. Implement a `BasePlatform` subclass and decorate it with `@register`
-3. Declare capabilities (`supported_executors`, `supported_identity_modes`, etc.)
+1. Create `platforms/myplatform/` with `__init__.py` and `plugin.py`.
+2. Keep `plugin.py` as a module composer using `ConfiguredPlatformPlugin`.
+3. Put registration in `registration/module.py`, protocol logic in `registration/protocol.py`, mailbox orchestration in `registration/worker.py`, and optional browser/OAuth logic in `registration/browser.py` and `registration/oauth.py`.
+4. Add `query.py`, `payment.py`, or `transfer.py` only when the platform supports those capabilities.
 
 ```python
-from core.base_platform import BasePlatform, AccountStatus
-from core.registry import register
+from core.platform_plugin import ConfiguredPlatformPlugin
+from core.plugin_registry import register
 
 @register
-class MyPlatform(BasePlatform):
+class MyPlatformPlugin(ConfiguredPlatformPlugin):
     name = "myplatform"
     display_name = "My Platform"
-    version = "1.0.0"
-    supported_executors = ["protocol"]
-    supported_identity_modes = ["mailbox"]
-
-    def check_valid(self, account) -> bool:
-        return bool(account.token)
+    version = "2.0.0"
+    query_class = "MyPlatformQuery"
 ```
 
-The platform auto-loads on startup. See the [Chinese README](README.md#插件开发) for full implementation details.
+The platform auto-loads on startup from `platforms/*/plugin.py`. See the [Chinese README](README.md#插件开发) for the full registration module example.
 
 ## FAQ
 
@@ -307,32 +303,41 @@ python3 -m camoufox fetch
 **Solver startup timeout?**
 The local Turnstile Solver needs Camoufox installed. Run `python3 -m camoufox fetch` first, then click "Restart Solver" in the Settings page. Or skip local Solver entirely and use YesCaptcha / 2Captcha.
 
-## Sponsors
-
-Thanks to the following sponsors for their long-term support of any-auto-register. If your service targets account registration, automation, or AI developers, feel free to reach out.
-
-| Logo | Name | Description | Link |
-| --- | --- | --- | --- |
-| <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy" width="140" /></a> | **BestProxy** | High-purity residential IPs with one-account-per-IP isolation, full-link anti-correlation, significantly boosting approval rates and long-term survival. | [bestproxy.com](https://bestproxy.com/?keyword=l85nsbgw) |
-| <a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy" width="140" /></a> | **LegionProxy** | Residential proxies built for account registration and automation, 74M+ real residential IPs, 195+ countries, HTTP/3 high-speed connection, from $0.60/GB. | [legionproxy.io](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register) |
-
 ## Community
 
 Join the user group for updates, configuration tips, and registration know-how:
 
-### QQ Group (recommended)
+### QQ Group
 
-**Group ID: `1081650009`**
+| Group | ID | Status |
+|---|---|---|
+| #1 | `1081650009` | Full |
+| #2 | `1097916468` | Open |
 
-<a href="assets/qq-group.png" target="_blank"><img src="assets/qq-group.png" alt="QQ Group QR Code" width="220" /></a>
-
-Scan the QR code above or search the group ID to join.
+Search the group ID in QQ to join.
 
 For bugs and feature requests, please use [Issues](https://github.com/lxf746/any-auto-register/issues).
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=lxf746/any-auto-register&type=Date)](https://star-history.com/#lxf746/any-auto-register&Date)
+
+## Sponsors
+
+<table>
+<tr>
+<td width="220" align="center">
+<a href="https://www.rapidproxy.io/?ref=lxf" target="_blank">
+<img src="https://www.rapidproxy.io/static/rapidproxy/images/rapid_logo_700.png" alt="RapidProxy" width="180" />
+</a>
+</td>
+<td>
+<b><a href="https://www.rapidproxy.io/?ref=lxf">RapidProxy</a></b> — High-quality residential proxies with smart IP rotation, low ban rate, and non-expiring traffic. Powerful for data collection.<br/>
+90M+ real residential IPs · 200+ countries / regions · 99.9% uptime · &lt;0.5s response.<br/>
+<a href="https://www.rapidproxy.io/?ref=lxf"><b>Free trial →</b></a>
+</td>
+</tr>
+</table>
 
 ## License
 
