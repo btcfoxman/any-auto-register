@@ -1,7 +1,11 @@
 const ASSIST_DEFAULTS = {
   serviceUrl: "https://any-register.aiid.edu.kg",
   apiKey: "",
+  api_key: "",
   proxyUrl: "socks5://xray:20003",
+  proxy_url: "",
+  envCode: "",
+  env_code: "",
   extensionId: "",
   assistLastStatus: "Task assistant idle."
 };
@@ -37,7 +41,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.serviceUrl || changes.apiKey || changes.proxyUrl || changes.serviceAccessGrantedAt) {
+  if (changes.serviceUrl || changes.apiKey || changes.api_key || changes.proxyUrl || changes.proxy_url || changes.serviceAccessGrantedAt) {
     scheduleAssistPoll(250);
   }
 });
@@ -63,10 +67,20 @@ async function pollAssistOnce() {
   polling = true;
   let serviceUrl = "";
   try {
-    const settings = await storageGet(ASSIST_DEFAULTS);
+    const settings = normalizeInjectedSettings(await storageGet(ASSIST_DEFAULTS));
     settings.serviceUrl = defaultServiceUrl(settings.serviceUrl);
     settings.apiKey = defaultApiKey(settings.apiKey);
     settings.proxyUrl = defaultProxyUrl(settings.proxyUrl);
+    if (settings.__normalizedInjected) {
+      await storageSet({
+        apiKey: settings.apiKey,
+        api_key: settings.apiKey,
+        proxyUrl: settings.proxyUrl,
+        proxy_url: settings.proxyUrl,
+        envCode: settings.envCode,
+        env_code: settings.envCode
+      });
+    }
     serviceUrl = settings.serviceUrl;
     if (!settings.serviceUrl) {
       await setAssistStatus("Task assistant needs a Service URL.");
@@ -248,6 +262,28 @@ function defaultApiKey(value) {
 function defaultProxyUrl(value) {
   const proxyUrl = String(value || "").trim();
   return proxyUrl || ASSIST_DEFAULTS.proxyUrl;
+}
+
+function normalizeInjectedSettings(saved) {
+  const raw = saved || {};
+  const data = { ...ASSIST_DEFAULTS, ...raw };
+  const apiKey = String(raw.api_key || raw.apiKey || "").trim();
+  const proxyUrl = String(raw.proxy_url || raw.proxyUrl || ASSIST_DEFAULTS.proxyUrl).trim();
+  const envCode = String(raw.env_code || raw.envCode || "").trim();
+  return {
+    ...data,
+    apiKey,
+    api_key: apiKey,
+    proxyUrl,
+    proxy_url: proxyUrl,
+    envCode,
+    env_code: envCode,
+    __normalizedInjected: Boolean(
+      (raw.api_key && raw.apiKey !== apiKey)
+        || (raw.proxy_url && raw.proxyUrl !== proxyUrl)
+        || (raw.env_code && raw.envCode !== envCode)
+    )
+  };
 }
 
 async function wasAssistHandled(assistId) {

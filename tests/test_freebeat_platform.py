@@ -102,7 +102,7 @@ def test_freebeat_questionnaire_check_failure_does_not_block_submit(monkeypatch)
     submit_calls: list[tuple[str, str]] = []
 
     def fake_check(token, *, questionnaire_code):
-        raise RuntimeError("questionnaire check not ready")
+        raise TimeoutError("questionnaire check not ready")
 
     def fake_submit(token, *, questionnaire_code, answers=None):
         submit_calls.append((token, questionnaire_code))
@@ -151,7 +151,7 @@ def test_freebeat_daily_sign_in_status_failure_does_not_block_submit(monkeypatch
     submit_calls: list[str] = []
 
     def fake_status(token):
-        raise RuntimeError("sign-in status not ready")
+        raise TimeoutError("sign-in status not ready")
 
     def fake_submit(token):
         submit_calls.append(token)
@@ -165,6 +165,30 @@ def test_freebeat_daily_sign_in_status_failure_does_not_block_submit(monkeypatch
     assert result["status"] == "signed"
     assert result["reward_amount"] == 200
     assert result["before"]["status"] == "status_failed"
+    assert submit_calls == ["tok_123"]
+
+
+def test_freebeat_daily_sign_in_uses_cached_status_payload(monkeypatch):
+    client = FreebeatClient(log_fn=lambda message: None)
+    submit_calls: list[str] = []
+
+    def fake_status(token):
+        raise AssertionError("cached status should avoid duplicate signin/status request")
+
+    def fake_submit(token):
+        submit_calls.append(token)
+        return {"code": 0, "data": {"granted": True, "rewardAmount": 200}}
+
+    monkeypatch.setattr(client, "signin_status", fake_status)
+    monkeypatch.setattr(client, "signin_submit", fake_submit)
+
+    result = client.daily_sign_in(
+        "tok_123",
+        before_status={"code": 0, "data": {"canSignIn": True, "signedToday": False}},
+    )
+
+    assert result["status"] == "signed"
+    assert result["reward_amount"] == 200
     assert submit_calls == ["tok_123"]
 
 
@@ -216,6 +240,7 @@ def test_freebeat_send_code_already_sent_response_continues():
 
 def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.time.sleep", lambda seconds: None)
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -239,7 +264,7 @@ def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
                 },
             }
 
-        def fetch_account_state(self, token):
+        def fetch_account_state(self, token, **kwargs):
             calls.append(("state", token))
             return {
                 "token": token,
@@ -248,11 +273,11 @@ def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
                 "last_keepalive_at": "2026-05-18T00:00:00Z",
             }
 
-        def claim_questionnaire(self, token):
+        def claim_questionnaire(self, token, **kwargs):
             calls.append(("questionnaire", token))
             return {"status": "claimed", "credits_granted": 300}
 
-        def daily_sign_in(self, token):
+        def daily_sign_in(self, token, **kwargs):
             calls.append(("signin", token))
             return {"status": "signed", "reward_amount": 200}
 
@@ -271,6 +296,7 @@ def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
 
 def test_freebeat_protocol_mailbox_worker_saves_token_when_state_refresh_times_out(monkeypatch):
     calls: list[tuple[str, object]] = []
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.time.sleep", lambda seconds: None)
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -294,17 +320,17 @@ def test_freebeat_protocol_mailbox_worker_saves_token_when_state_refresh_times_o
                 },
             }
 
-        def fetch_account_state(self, token):
+        def fetch_account_state(self, token, **kwargs):
             calls.append(("state", token))
             raise TimeoutError("credits timeout")
 
-        def claim_questionnaire(self, token):
+        def claim_questionnaire(self, token, **kwargs):
             calls.append(("questionnaire", token))
-            raise AssertionError("questionnaire should be skipped after state timeout")
+            return {"status": "claimed", "credits_granted": 300}
 
-        def daily_sign_in(self, token):
+        def daily_sign_in(self, token, **kwargs):
             calls.append(("signin", token))
-            raise AssertionError("daily sign-in should be skipped after state timeout")
+            return {"status": "signed", "reward_amount": 200}
 
         def auth_state(self):
             return {"cookies": "authToken=tok_partial", "cookie_header": "authToken=tok_partial"}
@@ -321,8 +347,11 @@ def test_freebeat_protocol_mailbox_worker_saves_token_when_state_refresh_times_o
     assert result["cookies"] == "authToken=tok_partial"
     assert result["account_overview"]["account_state_partial"] is True
     assert "credits timeout" in result["account_overview"]["account_state_error"]
-    assert ("questionnaire", "tok_partial") not in calls
-    assert ("signin", "tok_partial") not in calls
+    assert result["questionnaire"]["status"] == "claimed"
+    assert result["daily_sign_in"]["status"] == "signed"
+    assert calls[2:5] == [("state", "tok_partial"), ("state", "tok_partial"), ("state", "tok_partial")]
+    assert ("questionnaire", "tok_partial") in calls
+    assert ("signin", "tok_partial") in calls
     assert any("先保存账号" in message for message in logs)
 
 

@@ -52,8 +52,12 @@ const SYNC_COOKIE_NAMES = new Set([
 const DEFAULTS = {
   serviceUrl: "https://any-register.aiid.edu.kg",
   apiKey: "",
+  api_key: "",
   accountName: "",
+  envCode: "",
+  env_code: "",
   proxyUrl: "socks5://xray:20003",
+  proxy_url: "",
   maxConcurrency: 1
 };
 const LEGACY_DEFAULT_SERVICE_URLS = new Set([
@@ -66,9 +70,11 @@ let scannedCookies = [];
 let lastScanDiagnostics = [];
 let lastRawCookieNames = [];
 let saveTimer = null;
+let applyingInjectedSettings = false;
+let lastInjectedApiKey = "";
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const saved = await storageGet(DEFAULTS);
+  const saved = normalizeInjectedSettings(await storageGet(DEFAULTS));
   const serviceUrl = defaultServiceUrl(saved.serviceUrl);
   const apiKey = defaultApiKey(saved.apiKey);
   const proxyUrl = defaultProxyUrl(saved.proxyUrl);
@@ -77,8 +83,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("accountName").value = saved.accountName || "";
   $("proxyUrl").value = proxyUrl;
   $("maxConcurrency").value = saved.maxConcurrency || 1;
-  if (saved.serviceUrl !== serviceUrl || saved.apiKey !== apiKey || saved.proxyUrl !== proxyUrl) {
-    await storageSet({ serviceUrl, apiKey, proxyUrl });
+  if (saved.serviceUrl !== serviceUrl || saved.apiKey !== apiKey || saved.proxyUrl !== proxyUrl || saved.__normalizedInjected) {
+    await storageSet({
+      serviceUrl,
+      apiKey,
+      api_key: apiKey,
+      envCode: saved.envCode || "",
+      env_code: saved.envCode || "",
+      proxyUrl,
+      proxy_url: proxyUrl
+    });
   }
 
   $("importButton").addEventListener("click", importCookies);
@@ -92,6 +106,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && (changes.assistLastStatus || changes.assistLastKind || changes.assistLastUpdatedAt)) {
       renderAssistStatus();
+    }
+    if (
+      area === "local"
+      && (changes.env_code || changes.envCode || changes.proxy_url || changes.proxyUrl || changes.api_key || changes.apiKey)
+    ) {
+      applyInjectedSettingsFromStorage();
     }
   });
 
@@ -117,6 +137,52 @@ function defaultApiKey(value) {
 function defaultProxyUrl(value) {
   const proxyUrl = String(value || "").trim();
   return proxyUrl || DEFAULTS.proxyUrl;
+}
+
+function normalizeInjectedSettings(saved) {
+  const raw = saved || {};
+  const data = { ...DEFAULTS, ...raw };
+  const envCode = String(raw.env_code || raw.envCode || "").trim();
+  const apiKey = String(raw.api_key || raw.apiKey || "").trim();
+  const proxyUrl = String(raw.proxy_url || raw.proxyUrl || DEFAULTS.proxyUrl).trim();
+  if (raw.api_key) {
+    lastInjectedApiKey = apiKey;
+  }
+  return {
+    ...data,
+    apiKey,
+    accountName: String(raw.accountName || "").trim(),
+    envCode,
+    proxyUrl,
+    __normalizedInjected: Boolean(
+      (raw.api_key && raw.apiKey !== apiKey)
+        || (raw.proxy_url && raw.proxyUrl !== proxyUrl)
+        || (raw.env_code && raw.envCode !== envCode)
+    )
+  };
+}
+
+async function applyInjectedSettingsFromStorage() {
+  if (applyingInjectedSettings) return;
+  applyingInjectedSettings = true;
+  try {
+    const saved = normalizeInjectedSettings(await storageGet(DEFAULTS));
+    const apiKey = defaultApiKey(saved.apiKey);
+    const proxyUrl = defaultProxyUrl(saved.proxyUrl);
+    if (apiKey) {
+      lastInjectedApiKey = apiKey;
+    }
+    const changed = $("apiKey").value !== apiKey
+      || $("proxyUrl").value !== proxyUrl;
+    if (!changed) return;
+    $("apiKey").value = apiKey;
+    $("proxyUrl").value = proxyUrl;
+    await storageSet(readSettings());
+    await renderServiceAccessStatus();
+    await renderAssistStatus();
+  } finally {
+    applyingInjectedSettings = false;
+  }
 }
 
 async function importCookies() {
@@ -437,11 +503,15 @@ function noCookieMessage() {
 }
 
 function readSettings() {
+  const apiKey = $("apiKey").value || lastInjectedApiKey || "";
+  const proxyUrl = $("proxyUrl").value.trim();
   return {
     serviceUrl: ($("serviceUrl").value || DEFAULTS.serviceUrl).replace(/\/+$/, ""),
-    apiKey: $("apiKey").value || "",
+    apiKey,
+    api_key: apiKey,
     accountName: $("accountName").value.trim(),
-    proxyUrl: $("proxyUrl").value.trim(),
+    proxyUrl,
+    proxy_url: proxyUrl,
     maxConcurrency: clampNumber(Number($("maxConcurrency").value || 1), 1, 10)
   };
 }

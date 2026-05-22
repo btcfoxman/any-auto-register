@@ -487,6 +487,7 @@ class FreebeatClient:
         label: str = "api",
         base: str = FREEBEAT_BASE,
         validate_code: bool = True,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         request_headers = self._frontend_headers(
             content_type="application/json" if json_body is not None else "",
@@ -498,11 +499,16 @@ class FreebeatClient:
         url = self._url(path_or_url, base=base)
         response = None
         for attempt in range(2):
+            request_kwargs = {
+                "headers": request_headers,
+                "data": data,
+            }
+            if timeout_seconds is not None:
+                request_kwargs["timeout"] = max(0.1, float(timeout_seconds))
             response = self.s.request(
                 method.upper(),
                 url,
-                headers=request_headers,
-                data=data,
+                **request_kwargs,
             )
             if response.status_code == 403 and attempt == 0 and base == FREEBEAT_BASE:
                 self.log(f"{method.upper()} {path_or_url} -> 403, warming up frontend session and retrying")
@@ -573,11 +579,23 @@ class FreebeatClient:
         self.log(f"Freebeat WebLogin ok: user={data.get('userId', '')} token={_clip(token)}")
         return payload
 
-    def find_credits(self, token: str) -> dict[str, Any]:
-        return self._api_json("GET", "/api/proxy/v1/user/credits/findCredits", token=token, label="findCredits")
+    def find_credits(self, token: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        return self._api_json(
+            "GET",
+            "/api/proxy/v1/user/credits/findCredits",
+            token=token,
+            label="findCredits",
+            timeout_seconds=timeout_seconds,
+        )
 
-    def signin_status(self, token: str) -> dict[str, Any]:
-        return self._api_json("GET", "/api/proxy/v1/user/signin/status", token=token, label="signin/status")
+    def signin_status(self, token: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        return self._api_json(
+            "GET",
+            "/api/proxy/v1/user/signin/status",
+            token=token,
+            label="signin/status",
+            timeout_seconds=timeout_seconds,
+        )
 
     def signin_submit(self, token: str) -> dict[str, Any]:
         return self._api_json("POST", "/api/proxy/v1/user/signin/submit", json_body={}, token=token, label="signin/submit")
@@ -614,11 +632,15 @@ class FreebeatClient:
         answers: list[dict[str, Any]] | None = None,
         retry_attempts: int = 3,
         retry_delay_seconds: float = 2.0,
+        submit_delay_seconds: float = 0.0,
     ) -> dict[str, Any]:
         try:
             check = self.questionnaire_check(token, questionnaire_code=questionnaire_code)
-        except RuntimeError as exc:
+        except Exception as exc:
             check = {"status": "check_failed", "error": str(exc)}
+        delay = max(0.0, float(submit_delay_seconds or 0))
+        if delay:
+            time.sleep(delay)
         attempts = max(1, int(retry_attempts or 1))
         submitted: dict[str, Any] | None = None
         last_error = ""
@@ -630,7 +652,7 @@ class FreebeatClient:
                     answers=answers,
                 )
                 break
-            except RuntimeError as exc:
+            except Exception as exc:
                 message = str(exc)
                 lowered = message.lower()
                 if any(marker in lowered for marker in ("already", "duplicate", "submitted", "complete", "已", "重复")):
@@ -661,13 +683,17 @@ class FreebeatClient:
         *,
         retry_attempts: int = 3,
         retry_delay_seconds: float = 2.0,
+        before_status: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         status_available = True
-        try:
-            before = self.signin_status(token)
-        except RuntimeError as exc:
-            status_available = False
-            before = {"status": "status_failed", "error": str(exc)}
+        if before_status is not None:
+            before = before_status
+        else:
+            try:
+                before = self.signin_status(token)
+            except Exception as exc:
+                status_available = False
+                before = {"status": "status_failed", "error": str(exc)}
         info = dict(before.get("data") or {})
         if status_available and not info.get("canSignIn"):
             return {
@@ -683,7 +709,7 @@ class FreebeatClient:
             try:
                 submitted = self.signin_submit(token)
                 break
-            except RuntimeError as exc:
+            except Exception as exc:
                 last_error = str(exc)
                 if attempt >= attempts:
                     raise
@@ -716,12 +742,12 @@ class FreebeatClient:
             label="getModelRuleConfig",
         )
 
-    def fetch_account_state(self, token: str) -> dict[str, Any]:
+    def fetch_account_state(self, token: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
         token = str(token or "").strip()
         if not token:
             raise RuntimeError("缺少 Freebeat token")
-        credits_payload = self.find_credits(token)
-        signin_payload = self.signin_status(token)
+        credits_payload = self.find_credits(token, timeout_seconds=timeout_seconds)
+        signin_payload = self.signin_status(token, timeout_seconds=timeout_seconds)
         state = {
             "token": token,
             "credits": dict(credits_payload.get("data") or {}),

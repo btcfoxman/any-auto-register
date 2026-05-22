@@ -37,3 +37,22 @@ When the active tab is `lingya.qq.com`, the popup also injects a short script to
 
 The default `https://any-register.aiid.edu.kg` origin is listed in `host_permissions`. For other LAN hosts, the popup can grant the origin through `optional_host_permissions`; reload the extension if you edited `manifest.json`.
 `Proxy URL` is only sent to the service for task matching and account import metadata. The extension does not configure Chrome or BitBrowser proxy settings.
+
+## Script-injected settings
+
+Automation scripts can prefill the extension popup by writing these keys to `chrome.storage.local` from the extension background/service-worker context:
+
+```js
+chrome.storage.local.set({
+  env_code: "browser-account-short-code",
+  proxy_url: "socks5://xray:20003",
+  api_key: "APP_PASSWORD value"
+});
+```
+
+The extension normalizes those injected keys into its internal form fields:
+
+- `proxy_url` -> `Proxy URL`
+- `api_key` -> `API Key / APP_PASSWORD`
+
+`env_code` is preserved in extension storage for script-side identification, but it does not overwrite `Account Name`.
