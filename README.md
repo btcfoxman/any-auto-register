@@ -1,74 +1,87 @@
+<div align="center">
+
 # Any Auto Register
 
-<p align="center">
-  <a href="https://github.com/lxf746/any-auto-register/stargazers"><img src="https://img.shields.io/github/stars/lxf746/any-auto-register?style=for-the-badge&logo=github&color=FFB003" alt="Stars" /></a>
-  <a href="https://github.com/lxf746/any-auto-register/network/members"><img src="https://img.shields.io/github/forks/lxf746/any-auto-register?style=for-the-badge&logo=github&color=blue" alt="Forks" /></a>
-  <a href="https://github.com/lxf746/any-auto-register/releases"><img src="https://img.shields.io/github/v/release/lxf746/any-auto-register?style=for-the-badge&logo=github&color=green" alt="Release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/lxf746/any-auto-register?style=for-the-badge&color=orange" alt="License" /></a>
+13+ AI 平台账号自动化注册与管理 · 协议/浏览器双模式 · Mac/Windows 桌面版一键启动
+
+<p>
+  <a href="https://github.com/lxf746/any-auto-register/stargazers"><img src="https://img.shields.io/github/stars/lxf746/any-auto-register?style=flat-square&logo=github&color=FFB003" alt="Stars" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/releases/latest"><img src="https://img.shields.io/github/v/release/lxf746/any-auto-register?style=flat-square&logo=github&color=22c55e" alt="Release" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/network/members"><img src="https://img.shields.io/github/forks/lxf746/any-auto-register?style=flat-square&logo=github&color=3b82f6" alt="Forks" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/lxf746/any-auto-register?style=flat-square&color=f97316" alt="License" /></a>
 </p>
 
-<p align="center">
-  <b>中文</b> |
-  <a href="README_en.md">English</a> |
+<p>
+  <a href="https://github.com/lxf746/any-auto-register/releases/latest">下载桌面版</a>
+  &nbsp;·&nbsp;
+  <a href="#界面预览">界面预览</a>
+  &nbsp;·&nbsp;
+  <a href="#用户讨论群">加入社群</a>
+  &nbsp;·&nbsp;
+  <a href="README_en.md">English</a>
+  &nbsp;·&nbsp;
   <a href="README_vi.md">Tiếng Việt</a>
 </p>
 
-<p align="center">
-  <b>ChatGPT / Cursor / Kiro / Grok / Windsurf / Trae 等 13+ AI 平台账号自动注册与管理 · 协议/浏览器双模式 · Mac/Windows 桌面版一键启动</b>
-</p>
+<img src="assets/screenshots/dashboard.png" alt="Any Auto Register Dashboard" width="92%" />
 
-<a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy - 高纯度住宅IP资源，支持一号一IP独享模式，全链路防关联，显著提升账号通过率与长期存活率" width="100%"></a>
+</div>
 
-> ⚠️ **免责声明**：本项目仅供学习和研究使用，不得用于任何商业用途。使用本项目所产生的一切后果由使用者自行承担。
+---
 
-> 🌟 **本仓库为 [`lxf746/any-auto-register`](https://github.com/lxf746/any-auto-register) 官方上游（Official Upstream）**，最早的原作者仓库与最及时的更新均在此处。其他同名 fork 均为二次开发分支。
+> **本仓库是 [`lxf746/any-auto-register`](https://github.com/lxf746/any-auto-register) 官方上游**,最早的原作者仓库与最及时的更新都在此处。其他同名 fork 均为二次开发分支。
 
-多平台账号自动注册与管理系统，支持插件化扩展，内置 Web UI。
+> 本项目仅供学习与研究,不得用于商业违规用途。使用所产生的一切后果由使用者自行承担。
 
-<a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy—住宅代理专为账号注册与自动化打造，74M+ 真实住宅IP，195+ 国家，HTTP/3 高速连接，$0.60/GB 起" width="100%"></a>
+## 它解决什么
 
-[LegionProxy—住宅代理专为账号注册与自动化打造 74M+ 真实住宅IP · 195+ 国家 · HTTP/3 高速连接 · $0.60/GB 起](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register)
+多数同类项目只解决"怎么注册某一个平台",留下大量工程化空白:邮箱怎么管、验证码怎么过、代理怎么轮换、注册成功后怎么持续用、Token 过期了怎么办、出错了怎么定位。Any Auto Register 把这些都做了。
+
+| | 同类工具 | Any Auto Register |
+|---|---|---|
+| 部署 | 命令行 / Docker / .py 脚本 | 桌面客户端(Mac / Win)双击即用,内嵌 React UI |
+| 平台覆盖 | 1-3 个 | 13+ 平台 + 通用 Anything 适配器,新平台插件式接入 |
+| 邮箱方案 | 多数靠 IMAP | 9 种通道:MoeMail / Cloudflare 自建 / TempMail / DDG Email 等 |
+| 执行模式 | 仅浏览器 | 纯协议(最快)/ Headless / Headed 三种 |
+| 全生命周期 | 注册完丢一边 | 定时检测 + Token 续期 + Trial 预警 |
+| 数据分析 | 无 | 成功率仪表盘,按平台 / 代理 / 时段聚合,错误归因 |
+| API 网关联动 | 无 | 注册即推送 [Any2API](https://github.com/lxf746/any2api),账号 → OpenAI 兼容 API |
+| 架构 | 通常硬编码 | 全插件化:平台 / 邮箱 / 验证码 / 接码 / 代理 都可热插拔 |
+
+配合 [`Any2API`](https://github.com/lxf746/any2api) 网关可以一键打通:批量注册账号 → 自动推送 → 立即作为 OpenAI / Claude 兼容 API 使用。
+
+## 快速开始
+
+**桌面版(推荐)**
+
+去 [Releases](https://github.com/lxf746/any-auto-register/releases/latest) 下载对应平台:
+- macOS:`Any Auto Register-x.x.x-arm64.dmg`(Apple Silicon)
+- Windows:`Any Auto Register Setup x.x.x.exe`
+
+双击安装 → 启动 → 输入激活码([加群获取](#用户讨论群)) → 选择平台 → 配置邮箱 → 开始注册。
+
+**Docker**
+
+```bash
+docker run -d -p 8000:8000 -p 8889:8889 \
+  -v $(pwd)/data:/app/data \
+  --name aar ghcr.io/lxf746/any-auto-register:latest
+```
+
+打开 `http://localhost:8000`,详见 [Docker 部署](#docker-部署)。
+
+**源码运行**
+
+Python 3.11+ / Node.js 18+,详见 [本地开发](#快速开始)。
 
 ## 目录
 
-- [项目亮点](#项目亮点)
-- [功能特性](#功能特性)
-- [界面预览](#界面预览)
-- [技术栈](#技术栈)
-- [快速开始](#快速开始)
-- [桌面版下载](#桌面版下载)
-- [Docker 部署](#docker-部署)
-- [邮箱服务配置](#邮箱服务配置)
-- [验证码服务配置](#验证码服务配置)
-- [代理池配置](#代理池配置)
-- [接码服务配置](#接码服务配置)
-- [账号生命周期管理](#账号生命周期管理)
-- [注册成功率仪表盘](#注册成功率仪表盘)
-- [Any2API 联动](#any2api-联动)
-- [项目结构](#项目结构)
-- [插件开发](#插件开发)
-- [常见问题](#常见问题)
-- [赞助商](#赞助商)
-- [用户讨论群](#用户讨论群)
-- [Star History](#star-history)
-- [License](#license)
-
-## 项目亮点
-
-为什么选择 any-auto-register（与同类项目对比）：
-
-| 能力 | any-auto-register（本项目） | 其他同类工具 |
-|------|------|------|
-| 🖥️ **桌面版一键启动** | ✅ Mac / Windows 双平台 Electron 客户端，免命令行 | ❌ 通常仅 CLI / Docker |
-| 🧩 **平台覆盖** | ✅ 13+ 平台开箱即用 + 通用 Anything 适配器 | 通常 1-3 个平台 |
-| 📨 **邮箱服务** | ✅ 9 种邮箱服务（自建 + 公共 + DDG） | 通常 1-2 种 |
-| ⚡ **三种执行模式** | ✅ 纯协议（无浏览器，最快） / 无头 / 有头 | 通常仅浏览器 |
-| 🔁 **账号生命周期** | ✅ 定时检测、Token 自动续期、Trial 预警 | ❌ 大多数仅注册 |
-| 📊 **成功率仪表盘** | ✅ 按平台/按代理/按天统计，错误聚合 | ❌ |
-| 🔌 **Any2API 联动** | ✅ 注册即可用，自动推送到网关 | ❌ |
-| 📦 **插件化架构** | ✅ 平台/邮箱/验证码/接码/代理 全部可插拔 | 通常硬编码 |
-
-> 💡 [`Any2API`](https://github.com/lxf746/any2api) 网关 + `any-auto-register` 注册器组合，可实现 **批量注册账号 → 自动推送 → 即刻当作 OpenAI/Claude 兼容 API 使用** 的全链路闭环。
+- [它解决什么](#它解决什么) · [快速开始](#快速开始) · [界面预览](#界面预览) · [技术栈](#技术栈)
+- 部署:[桌面版](#桌面版下载) · [Docker](#docker-部署) · [源码](#本地开发)
+- 配置:[邮箱](#邮箱服务配置) · [验证码](#验证码服务配置) · [代理池](#代理池配置) · [接码](#接码服务配置)
+- 进阶:[账号生命周期](#账号生命周期管理) · [成功率仪表盘](#注册成功率仪表盘) · [Any2API 联动](#any2api-联动)
+- 开发:[项目结构](#项目结构) · [插件开发](#插件开发)
+- 其他:[常见问题](#常见问题) · [用户讨论群](#用户讨论群) · [Star History](#star-history) · [License](#license)
 
 ## 功能特性
 
@@ -124,7 +137,7 @@
 
 如需源码运行或自行打包，参考下方 [快速开始](#快速开始) 与 `electron/` 目录。
 
-## 快速开始
+## 本地开发
 
 ### 环境要求
 
@@ -208,7 +221,6 @@ python3 -m camoufox fetch
 - 生产模式下前端构建产物由后端直接托管，访问 `http://localhost:8000` 即可
 - 开发模式下前端独立运行在 `http://localhost:5173`，通过 Vite 代理转发 API 请求
 - 前后端接口文档见 [docs/frontend-api-contract.md](docs/frontend-api-contract.md)
-- 新的 C 端 / 管理端独立 API 项目见 [customer_portal_api/README.md](customer_portal_api/README.md)
 
 ### 开发模式（前端热更新）
 
@@ -474,21 +486,16 @@ account_manager/
 ├── requirements.txt        # Python 依赖
 ├── api/                    # HTTP 路由层
 │   ├── accounts.py         # 账号 CRUD + 导出
-│   ├── account_checks.py   # 账号检测
-│   ├── lifecycle.py        # 生命周期管理
-│   ├── stats.py            # 注册成功率仪表盘
-│   ├── task_commands.py    # 注册任务创建 + SSE
-│   ├── tasks.py            # 任务查询
-│   ├── task_logs.py        # 历史任务日志
-│   ├── actions.py          # 平台操作
-│   ├── config.py           # 配置读写
+│   ├── account_providers.py     # 账号资源池：邮箱 / 验证 / 接码 / 代理
+│   ├── registration.py          # 注册任务创建 + SSE
+│   ├── query.py                 # 账号状态查询
+│   ├── payment.py               # 支付链接 / 支付动作
+│   ├── transfer.py              # 导入导出
 │   ├── platforms.py        # 平台列表
-│   ├── platform_capabilities.py
 │   ├── provider_definitions.py  # Provider 定义管理
-│   ├── provider_settings.py     # Provider 配置管理
 │   ├── proxies.py          # 代理管理
 │   ├── health.py           # 健康检查
-│   └── system.py           # Solver 管理
+│   └── system.py           # 系统设置 / Solver 管理
 ├── application/            # 应用服务层
 ├── domain/                 # 领域模型
 ├── infrastructure/         # 仓储与运行时适配
@@ -533,78 +540,98 @@ account_manager/
 
 ## 插件开发
 
-添加新平台需要以下步骤：
+添加新平台时，按当前插件体系拆成平台入口和能力模块。`plugin.py` 只组装模块，不写注册细节。
 
 ### 1. 新建平台目录
-
-在 `platforms/` 下新建目录，必须包含 `__init__.py` 和 `plugin.py`（`pkgutil.iter_modules` 只扫描带 `__init__.py` 的 Python 包）：
 
 ```
 platforms/myplatform/
 ├── __init__.py
-├── plugin.py              # 平台适配层（必须）
-├── protocol_mailbox.py    # 协议模式注册逻辑（按需）
-├── browser_register.py    # 浏览器注册逻辑（按需）
-└── browser_oauth.py       # 浏览器 OAuth 逻辑（按需）
+├── plugin.py
+├── registration/
+│   ├── __init__.py
+│   ├── module.py       # 注册模块入口，导出 Registration
+│   ├── protocol.py     # 纯协议核心
+│   ├── worker.py       # mailbox provider 到协议流程
+│   ├── browser.py      # 浏览器注册（按需）
+│   ├── oauth.py        # 浏览器 OAuth（按需）
+│   └── models.py       # 注册结果模型导出
+├── query.py            # 查询能力（按需）
+├── payment.py          # 支付能力（按需）
+└── transfer.py         # 导入导出能力（按需）
 ```
 
 ### 2. 实现 plugin.py
 
 ```python
-from core.base_platform import BasePlatform, Account, AccountStatus, RegisterConfig
-from core.base_mailbox import BaseMailbox
-from core.registration import ProtocolMailboxAdapter, OtpSpec, RegistrationResult
-from core.registry import register
+from core.platform_plugin import ConfiguredPlatformPlugin
+from core.plugin_registry import register
 
 
 @register
-class MyPlatform(BasePlatform):
+class MyPlatformPlugin(ConfiguredPlatformPlugin):
     name = "myplatform"
     display_name = "My Platform"
-    version = "1.0.0"
-
-    def __init__(self, config: RegisterConfig = None, mailbox: BaseMailbox = None):
-        super().__init__(config)
-        self.mailbox = mailbox
-
-    def build_protocol_mailbox_adapter(self):
-        """协议模式注册适配器"""
-        return ProtocolMailboxAdapter(
-            result_mapper=lambda ctx, result: RegistrationResult(
-                email=result["email"],
-                password=result.get("password", ""),
-                status=AccountStatus.REGISTERED,
-            ),
-            worker_builder=lambda ctx, artifacts: __import__(
-                "platforms.myplatform.protocol_mailbox",
-                fromlist=["MyWorker"],
-            ).MyWorker(proxy=ctx.proxy, log_fn=ctx.log),
-            register_runner=lambda worker, ctx, artifacts: worker.run(
-                email=ctx.identity.email,
-                password=ctx.password,
-                otp_callback=artifacts.otp_callback,
-            ),
-            otp_spec=OtpSpec(wait_message="等待验证码邮件..."),
-        )
-
-    def check_valid(self, account: Account) -> bool:
-        """检测账号是否有效"""
-        return bool(account.token)
+    version = "2.0.0"
+    query_class = "MyPlatformQuery"
+    payment_class = "MyPlatformPayment"
+    transfer_class = "MyPlatformTransfer"
 ```
 
-### 3. 声明平台能力
-
-平台能力优先使用插件类属性声明，也可以在 Web UI 的“平台能力”页面覆盖：
+### 3. 实现 registration/module.py
 
 ```python
-class MyPlatform(BasePlatform):
-    supported_executors = ["protocol"]
-    supported_identity_modes = ["mailbox"]
-    supported_oauth_providers = []
-    capabilities = []
+from core.base_registration import RegistrationModule
+from core.models import AccountStatus
+from core.registration import OtpSpec, ProtocolMailboxAdapter, RegistrationResult
+
+
+def _map_result(ctx, result: dict) -> RegistrationResult:
+    return RegistrationResult(
+        email=result["email"],
+        password=result.get("password", ""),
+        token=result.get("token", ""),
+        status=AccountStatus.REGISTERED,
+        extra=result.get("extra", {}),
+    )
+
+
+def _build_protocol_mailbox_adapter() -> ProtocolMailboxAdapter:
+    def _build_worker(ctx, artifacts):
+        from platforms.myplatform.registration.worker import ProtocolMailboxWorker
+        return ProtocolMailboxWorker(proxy=ctx.proxy, log_fn=ctx.log)
+
+    def _run_worker(worker, ctx, artifacts):
+        return worker.run(
+            email=ctx.identity.email,
+            password=ctx.password,
+            otp_callback=artifacts.otp_callback,
+            captcha_solver=artifacts.captcha_solver,
+        )
+
+    return ProtocolMailboxAdapter(
+        result_mapper=_map_result,
+        worker_builder=_build_worker,
+        register_runner=_run_worker,
+        otp_spec=OtpSpec(wait_message="等待验证码邮件..."),
+        use_captcha=True,
+    )
+
+
+class MyPlatformRegistration(RegistrationModule):
+    name = "myplatform"
+    display_name = "My Platform"
+    supported_identity_modes = ("mailbox",)
+    supported_executors = ("protocol", "headless", "headed")
+
+    def build_adapters(self, ctx):
+        return {"protocol_mailbox": _build_protocol_mailbox_adapter()}
+
+
+Registration = MyPlatformRegistration
 ```
 
-系统启动时会自动扫描 `platforms/` 目录加载所有带 `@register` 装饰器的插件。
+系统启动时会扫描 `platforms/*/plugin.py` 并加载 `@register` 注册的当前插件。
 
 ## 常见问题
 
@@ -681,32 +708,39 @@ docker compose up -d
 
 详见 [GitHub Releases](https://github.com/lxf746/any-auto-register/releases)。
 
-## 赞助商
-
-感谢以下赞助商对 any-auto-register 的长期支持。如果你的服务也面向账号注册、自动化或 AI 开发者，欢迎联系作者加入。
-
-| Logo | 名称 | 介绍 | 链接 |
-| --- | --- | --- | --- |
-| <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy" width="140" /></a> | **BestProxy** | 高纯度住宅 IP，支持一号一 IP 独享模式，全链路防关联，显著提升账号通过率与长期存活率。 | [bestproxy.com](https://bestproxy.com/?keyword=l85nsbgw) |
-| <a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy" width="140" /></a> | **LegionProxy** | 住宅代理专为账号注册与自动化打造，74M+ 真实住宅 IP，195+ 国家，HTTP/3 高速连接，$0.60/GB 起。 | [legionproxy.io](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register) |
-
 ## 用户讨论群
 
 加入用户群获取最新动态、配置经验和注册技巧：
 
-### QQ 群（推荐）
+### QQ 群
 
-**群号：`1081650009`**
+| 群 | 群号 | 状态 |
+|---|---|---|
+| 一群 | `1081650009` | 已满 |
+| 二群 | `1097916468` | 可加入 |
 
-<a href="assets/qq-group.png" target="_blank"><img src="assets/qq-group.png" alt="QQ 交流群二维码" width="220" /></a>
-
-扫描上方二维码或搜索群号加入。
-
-如需提交 Bug 或请求新功能，请前往 [Issues](https://github.com/lxf746/any-auto-register/issues)。
+直接在 QQ 中搜索群号加入。如需提交 Bug 或请求新功能，请前往 [Issues](https://github.com/lxf746/any-auto-register/issues)。
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=lxf746/any-auto-register&type=Date)](https://star-history.com/#lxf746/any-auto-register&Date)
+
+## 赞助商
+
+<table>
+<tr>
+<td width="220" align="center">
+<a href="https://www.rapidproxy.io/?ref=lxf" target="_blank">
+<img src="https://www.rapidproxy.io/static/rapidproxy/images/rapid_logo_700.png" alt="RapidProxy" width="180" />
+</a>
+</td>
+<td>
+<b><a href="https://www.rapidproxy.io/?ref=lxf">RapidProxy</a></b> — 高质量住宅代理，智能 IP 轮换，低封禁率，流量不过期，助力数据采集。<br/>
+90M+ 真实住宅 IP · 200+ 国家 / 地区 · 99.9% 在线率 · &lt;0.5s 响应。<br/>
+<a href="https://www.rapidproxy.io/?ref=lxf"><b>免费试用 →</b></a>
+</td>
+</tr>
+</table>
 
 ## License
 
