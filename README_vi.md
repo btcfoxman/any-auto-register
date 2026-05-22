@@ -1,33 +1,33 @@
+<div align="center">
+
 # Any Auto Register
 
-<p align="center">
-  <a href="https://github.com/lxf746/any-auto-register/stargazers"><img src="https://img.shields.io/github/stars/lxf746/any-auto-register?style=for-the-badge&logo=github&color=FFB003" alt="Stars" /></a>
-  <a href="https://github.com/lxf746/any-auto-register/network/members"><img src="https://img.shields.io/github/forks/lxf746/any-auto-register?style=for-the-badge&logo=github&color=blue" alt="Forks" /></a>
-  <a href="https://github.com/lxf746/any-auto-register/releases"><img src="https://img.shields.io/github/v/release/lxf746/any-auto-register?style=for-the-badge&logo=github&color=green" alt="Release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/lxf746/any-auto-register?style=for-the-badge&color=orange" alt="License" /></a>
+Tự động đăng ký tài khoản ChatGPT / Cursor / Kiro / Grok / Windsurf / Trae & 13+ nền tảng AI · Chế độ giao thức/trình duyệt · Khởi động một chạm trên Mac/Windows
+
+<p>
+  <a href="https://github.com/lxf746/any-auto-register/stargazers"><img src="https://img.shields.io/github/stars/lxf746/any-auto-register?style=flat-square&logo=github&color=FFB003" alt="Stars" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/releases/latest"><img src="https://img.shields.io/github/v/release/lxf746/any-auto-register?style=flat-square&logo=github&color=22c55e" alt="Release" /></a>
+  <a href="https://github.com/lxf746/any-auto-register/network/members"><img src="https://img.shields.io/github/forks/lxf746/any-auto-register?style=flat-square&logo=github&color=3b82f6" alt="Forks" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/lxf746/any-auto-register?style=flat-square&color=f97316" alt="License" /></a>
 </p>
 
-<p align="center">
-  <a href="README.md">中文</a> |
-  <a href="README_en.md">English</a> |
-  <b>Tiếng Việt</b>
+<p>
+  <a href="https://github.com/lxf746/any-auto-register/releases/latest">Tải bản desktop</a>
+  &nbsp;·&nbsp;
+  <a href="README.md">中文</a>
+  &nbsp;·&nbsp;
+  <a href="README_en.md">English</a>
 </p>
 
-<p align="center">
-  <b>Tự động đăng ký tài khoản ChatGPT, Cursor, Kiro, Grok, Windsurf, Trae & 13+ nền tảng AI · Chế độ Protocol/Browser · Ứng dụng desktop một cú nhấp cho Mac/Windows</b>
-</p>
+<img src="assets/screenshots/dashboard.png" alt="Any Auto Register Dashboard" width="92%" />
 
-<a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy - Residential IP độ tinh khiết cao, hỗ trợ chế độ một tài khoản một IP độc lập, chống liên kết toàn tuyến, tăng đáng kể tỷ lệ chấp nhận tài khoản và khả năng tồn tại lâu dài" width="100%"></a>
+</div>
 
-> ⚠️ **Tuyên bố miễn trừ**: Dự án này chỉ dành cho mục đích học tập và nghiên cứu, không được phép sử dụng cho bất kỳ mục đích thương mại nào. Người dùng tự chịu trách nhiệm về mọi hậu quả phát sinh khi sử dụng dự án này.
+---
 
-> 🌟 **Đây là upstream chính thức của [`lxf746/any-auto-register`](https://github.com/lxf746/any-auto-register)** — repository gốc của tác giả ban đầu, nơi cập nhật mới nhất và sớm nhất. Các repository khác có cùng tên đều là bản fork.
+> **Đây là kho chính thức của [`lxf746/any-auto-register`](https://github.com/lxf746/any-auto-register)** — kho gốc của tác giả với các cập nhật mới nhất. Các kho cùng tên khác đều là fork.
 
-Hệ thống tự động đăng ký và quản lý tài khoản đa nền tảng, hỗ trợ mở rộng dạng plugin, tích hợp Web UI.
-
-<a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy — Residential proxy được thiết kế cho đăng ký tài khoản và automation, 74M+ residential IP thật, 195+ quốc gia, kết nối HTTP/3 tốc độ cao, từ $0.60/GB" width="100%"></a>
-
-[LegionProxy — Residential proxy chuyên cho đăng ký tài khoản và automation · 74M+ residential IP thật · 195+ quốc gia · HTTP/3 · Từ $0.60/GB](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register)
+> Dự án này chỉ dành cho mục đích học tập và nghiên cứu, không được sử dụng cho mục đích thương mại trái phép. Người dùng tự chịu trách nhiệm về mọi hậu quả phát sinh khi sử dụng.
 
 ## Mục lục
 
@@ -47,7 +47,6 @@ Hệ thống tự động đăng ký và quản lý tài khoản đa nền tản
 - [Tích hợp Any2API](#tích-hợp-any2api)
 - [Phát triển plugin](#phát-triển-plugin)
 - [Câu hỏi thường gặp](#câu-hỏi-thường-gặp)
-- [Nhà tài trợ](#nhà-tài-trợ)
 - [Cộng đồng](#cộng-đồng)
 - [Star History](#star-history)
 - [Giấy phép](#giấy-phép)
@@ -266,29 +265,26 @@ Nếu không cấu hình `any2api_url`, tích hợp này sẽ được bỏ qua 
 
 ## Phát triển plugin
 
-Thêm một nền tảng mới:
+Thêm nền tảng mới theo hệ plugin hiện tại:
 
-1. Tạo `platforms/myplatform/` với `__init__.py` và `plugin.py`
-2. Implement subclass của `BasePlatform` và decorate với `@register`
-3. Khai báo capability (`supported_executors`, `supported_identity_modes`...)
+1. Tạo `platforms/myplatform/` với `__init__.py` và `plugin.py`.
+2. Giữ `plugin.py` chỉ để ghép module bằng `ConfiguredPlatformPlugin`.
+3. Đặt registration trong `registration/module.py`, logic protocol trong `registration/protocol.py`, worker mailbox trong `registration/worker.py`, và browser/OAuth tùy chọn trong `registration/browser.py` / `registration/oauth.py`.
+4. Chỉ thêm `query.py`, `payment.py`, hoặc `transfer.py` khi nền tảng có capability tương ứng.
 
 ```python
-from core.base_platform import BasePlatform, AccountStatus
-from core.registry import register
+from core.platform_plugin import ConfiguredPlatformPlugin
+from core.plugin_registry import register
 
 @register
-class MyPlatform(BasePlatform):
+class MyPlatformPlugin(ConfiguredPlatformPlugin):
     name = "myplatform"
     display_name = "My Platform"
-    version = "1.0.0"
-    supported_executors = ["protocol"]
-    supported_identity_modes = ["mailbox"]
-
-    def check_valid(self, account) -> bool:
-        return bool(account.token)
+    version = "2.0.0"
+    query_class = "MyPlatformQuery"
 ```
 
-Plugin sẽ được tự động load khi khởi động. Xem [README tiếng Anh](README_en.md#plugin-development) để biết chi tiết đầy đủ.
+Plugin sẽ được tự động load từ `platforms/*/plugin.py` khi khởi động. Xem [README tiếng Trung](README.md#插件开发) để biết ví dụ registration module đầy đủ.
 
 ## Câu hỏi thường gặp
 
@@ -307,32 +303,41 @@ python3 -m camoufox fetch
 **Solver khởi động timeout?**
 Local Turnstile Solver cần Camoufox được cài đặt. Chạy `python3 -m camoufox fetch` trước, sau đó nhấp "Restart Solver" trong trang Settings. Hoặc bỏ qua local Solver hoàn toàn và dùng YesCaptcha / 2Captcha.
 
-## Nhà tài trợ
-
-Cảm ơn các nhà tài trợ sau đã hỗ trợ lâu dài cho any-auto-register. Nếu dịch vụ của bạn hướng tới đăng ký tài khoản, automation hoặc nhà phát triển AI, đừng ngần ngại liên hệ.
-
-| Logo | Tên | Mô tả | Link |
-| --- | --- | --- | --- |
-| <a href="https://bestproxy.com/?keyword=l85nsbgw" target="_blank"><img src="assets/bestproxy.gif" alt="BestProxy" width="140" /></a> | **BestProxy** | Residential IP độ tinh khiết cao, hỗ trợ chế độ một tài khoản một IP độc lập, chống liên kết toàn tuyến, tăng đáng kể tỷ lệ chấp nhận và khả năng tồn tại lâu dài. | [bestproxy.com](https://bestproxy.com/?keyword=l85nsbgw) |
-| <a href="https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register" target="_blank"><img src="assets/legionproxy.png" alt="LegionProxy" width="140" /></a> | **LegionProxy** | Residential proxy chuyên cho đăng ký tài khoản và automation, 74M+ residential IP thật, 195+ quốc gia, kết nối HTTP/3 tốc độ cao, từ $0.60/GB. | [legionproxy.io](https://legionproxy.io/?utm_source=github&utm_campaign=any-auto-register) |
-
 ## Cộng đồng
 
 Tham gia nhóm người dùng để cập nhật thông tin, kinh nghiệm cấu hình và mẹo đăng ký:
 
-### Nhóm QQ (khuyến nghị)
+### Nhóm QQ
 
-**Mã nhóm: `1081650009`**
+| Nhóm | Mã | Trạng thái |
+|---|---|---|
+| Nhóm 1 | `1081650009` | Đã đầy |
+| Nhóm 2 | `1097916468` | Còn chỗ |
 
-<a href="assets/qq-group.png" target="_blank"><img src="assets/qq-group.png" alt="Mã QR nhóm QQ" width="220" /></a>
-
-Quét mã QR phía trên hoặc tìm theo mã nhóm để tham gia.
+Tìm mã nhóm trong QQ để tham gia.
 
 Để báo bug và yêu cầu tính năng, vui lòng dùng [Issues](https://github.com/lxf746/any-auto-register/issues).
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=lxf746/any-auto-register&type=Date)](https://star-history.com/#lxf746/any-auto-register&Date)
+
+## Nhà tài trợ
+
+<table>
+<tr>
+<td width="220" align="center">
+<a href="https://www.rapidproxy.io/?ref=lxf" target="_blank">
+<img src="https://www.rapidproxy.io/static/rapidproxy/images/rapid_logo_700.png" alt="RapidProxy" width="180" />
+</a>
+</td>
+<td>
+<b><a href="https://www.rapidproxy.io/?ref=lxf">RapidProxy</a></b> — Proxy dân cư chất lượng cao, xoay IP thông minh, tỷ lệ bị chặn thấp, lưu lượng không hết hạn, hỗ trợ thu thập dữ liệu mạnh mẽ.<br/>
+90M+ IP dân cư thực · 200+ quốc gia / khu vực · 99.9% uptime · &lt;0.5s phản hồi.<br/>
+<a href="https://www.rapidproxy.io/?ref=lxf"><b>Dùng thử miễn phí →</b></a>
+</td>
+</tr>
+</table>
 
 ## Giấy phép
 
