@@ -52,6 +52,7 @@ data/
 
 # 文档
 docs/
+/.docs/
 
 # macOS
 .DS_Store
