@@ -937,16 +937,20 @@ def _preflight_platform_proxy(platform_name: str, proxy: str | None, logger: "Ta
         from curl_cffi.requests import Session
     except Exception:
         return
+    try:
+        from platforms.freebeat.core import FREEBEAT_REGISTER_REFERER
+    except Exception:
+        FREEBEAT_REGISTER_REFERER = "https://freebeat.ai/tw"
     session = Session(
         impersonate="chrome",
         proxies={"http": proxy, "https": proxy},
         timeout=8,
     )
     response = session.get(
-        "https://freebeat.ai/zh/ai-video-generator",
+        FREEBEAT_REGISTER_REFERER,
         headers={
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "accept-language": "zh-HK,zh;q=0.9,en;q=0.8",
             "referer": "https://freebeat.ai/",
             "user-agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

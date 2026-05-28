@@ -8,7 +8,12 @@ from core.db import AccountModel, engine
 from core.platform_accounts import build_platform_account
 from domain.actions import ActionExecutionCommand
 from infrastructure.platform_runtime import PlatformRuntime, STATEFUL_ACTION_IDS
-from platforms.freebeat.core import FreebeatClient, _extract_login_payload
+from platforms.freebeat.core import (
+    FREEBEAT_DEFAULT_NEXT_ACTION,
+    FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE,
+    FreebeatClient,
+    _extract_login_payload,
+)
 from platforms.freebeat.plugin import FreebeatPlatform
 from platforms.freebeat.protocol_mailbox import FreebeatProtocolMailboxWorker
 
@@ -25,6 +30,51 @@ def test_freebeat_next_action_login_parser_extracts_token():
     assert parsed["code"] == 0
     assert parsed["data"]["token"] == "tok_123"
     assert parsed["data"]["deviceToken"] == "dev_123"
+
+
+def test_freebeat_next_action_login_parser_accepts_rsc_prefix():
+    payload = (
+        '2:"$Sreact.fragment"\n'
+        '3:I[829209,["/_next/static/chunks/7b2195c52b577e49.js"],"default"]\n'
+        '4:{"code":0,"msg":"","data":{"token":"tok_456","accessToken":"tok_456",'
+        '"deviceToken":"dev_456","userId":"user_456","newUser":true,"expireTime":1781635058486}}\n'
+    )
+
+    parsed = _extract_login_payload(payload)
+
+    assert parsed["data"]["token"] == "tok_456"
+    assert parsed["data"]["userId"] == "user_456"
+
+
+def test_freebeat_verify_email_code_uses_tw_server_action_route():
+    calls: list[dict] = []
+
+    class Response:
+        status_code = 200
+        text = (
+            '2:"$Sreact.fragment"\n'
+            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
+            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
+        )
+
+    client = FreebeatClient(log_fn=lambda message: None, deployment_id="dpl_test")
+    client._warmup_frontend_session = lambda: None
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    client.s.post = fake_post
+
+    result = client.verify_email_code("user@example.com", "123456")
+
+    assert result["data"]["token"] == "tok_123"
+    assert calls[0]["url"] == "https://freebeat.ai/tw"
+    assert calls[0]["headers"]["referer"] == "https://freebeat.ai/tw"
+    assert calls[0]["headers"]["next-action"] == FREEBEAT_DEFAULT_NEXT_ACTION
+    assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
+    assert calls[0]["headers"]["x-deployment-id"] == "dpl_test"
+    assert calls[0]["data"] == '[{"email":"user@example.com","code":"123456"}]'
 
 
 def test_freebeat_authenticated_api_sends_current_frontend_token_headers():

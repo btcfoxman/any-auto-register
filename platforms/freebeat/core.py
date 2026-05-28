@@ -16,10 +16,16 @@ from core.base_platform import Account
 
 FREEBEAT_BASE = "https://freebeat.ai"
 FREEBEAT_UPLOAD_BASE = "https://api.freebeatfit.com"
-FREEBEAT_REGISTER_REFERER = f"{FREEBEAT_BASE}/zh/ai-video-generator"
+FREEBEAT_DEFAULT_FRONTEND_PATH = "/tw"
+FREEBEAT_REGISTER_REFERER = f"{FREEBEAT_BASE}{FREEBEAT_DEFAULT_FRONTEND_PATH}"
 FREEBEAT_SEND_CODE_PATH = "/api/proxy/v1/user/com/sendEmailVerifyCodeV2"
 FREEBEAT_DEFAULT_VERIFY_SOURCE = "WEB_SHOPIFY_LOGIN"
-FREEBEAT_DEFAULT_NEXT_ACTION = "40284e1e63e50bc18b2033770e8fa1412662d607d8"
+FREEBEAT_DEFAULT_NEXT_ACTION = "402d8eb2510d158b5be2d296bb8821c93f972f4f30"
+FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE = (
+    "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22tw%22%2C%22d%22%5D%2C"
+    "%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull"
+    "%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
+)
 FREEBEAT_ONBOARDING_CODE = "onboarding_v1"
 FREEBEAT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -143,6 +149,29 @@ def _response_text(response: Any) -> str:
         return str(response.text or "")
     except Exception:
         return ""
+
+
+def _normalize_frontend_path(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return FREEBEAT_DEFAULT_FRONTEND_PATH
+    if text.startswith(FREEBEAT_BASE):
+        text = text[len(FREEBEAT_BASE) :]
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    if not text.startswith("/"):
+        text = f"/{text}"
+    return text.rstrip("/") or "/"
+
+
+def _display_path(value: str) -> str:
+    try:
+        parsed = re.match(r"^https?://[^/]+(?P<path>/.*)?$", value)
+        if parsed:
+            return parsed.group("path") or "/"
+    except Exception:
+        pass
+    return value or "/"
 
 
 def _json_from_response(response: Any) -> dict[str, Any]:
@@ -361,16 +390,21 @@ class FreebeatClient:
         log_fn: Callable[[str], None] = print,
         cookie_header: str = "",
         cookies: Any = None,
+        frontend_path: str = "",
+        deployment_id: str = "",
     ):
         self._log = log_fn
         self._cookie_header = _cookie_header_from_any(cookie_header or cookies)
+        self.frontend_path = _normalize_frontend_path(frontend_path)
+        self.frontend_url = self._url(self.frontend_path)
+        self._deployment_id = str(deployment_id or "").strip()
         proxies = {"http": proxy, "https": proxy} if proxy else None
         self.s = Session(impersonate="chrome", proxies=proxies, timeout=30)
         self.s.headers.update(
             {
                 "accept": "*/*",
-                "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "referer": FREEBEAT_REGISTER_REFERER,
+                "accept-language": "zh-HK,zh;q=0.9,en;q=0.8",
+                "referer": self.frontend_url,
                 "sec-ch-ua": FREEBEAT_SEC_CH_UA,
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"',
@@ -438,7 +472,7 @@ class FreebeatClient:
     ) -> dict[str, str]:
         request_headers = {
             "accept": accept,
-            "referer": FREEBEAT_REGISTER_REFERER,
+            "referer": self.frontend_url,
             "sec-ch-ua": FREEBEAT_SEC_CH_UA,
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
@@ -462,7 +496,7 @@ class FreebeatClient:
     def _warmup_frontend_session(self) -> None:
         try:
             response = self.s.get(
-                FREEBEAT_REGISTER_REFERER,
+                self.frontend_url,
                 headers=self._frontend_headers(
                     accept=(
                         "text/html,application/xhtml+xml,application/xml;q=0.9,"
@@ -472,7 +506,11 @@ class FreebeatClient:
                     include_fetch_headers=False,
                 ),
             )
-            self.log(f"GET /zh/ai-video-generator warmup -> {response.status_code}")
+            text = _response_text(response)
+            match = re.search(r"\bdpl_[A-Za-z0-9]+", text)
+            if match and not self._deployment_id:
+                self._deployment_id = match.group(0)
+            self.log(f"GET {_display_path(self.frontend_path)} warmup -> {response.status_code}")
         except Exception as exc:
             self.log(f"Freebeat frontend warmup failed: {exc}")
 
@@ -552,22 +590,28 @@ class FreebeatClient:
         if not re.fullmatch(r"\d{4,8}", code):
             raise RuntimeError(f"Freebeat email verification code is invalid: {code!r}")
 
+        self._warmup_frontend_session()
         action_id = str(next_action or FREEBEAT_DEFAULT_NEXT_ACTION).strip()
+        router_state = str(next_router_state_tree or FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE).strip()
         headers = {
             "accept": "text/x-component",
+            "accept-language": "zh-HK,zh;q=0.9,en;q=0.8",
             "content-type": "text/plain;charset=UTF-8",
             "origin": FREEBEAT_BASE,
-            "referer": FREEBEAT_REGISTER_REFERER,
+            "referer": self.frontend_url,
             "next-action": action_id,
+            "priority": "u=1, i",
         }
-        if next_router_state_tree:
-            headers["next-router-state-tree"] = str(next_router_state_tree)
+        if router_state:
+            headers["next-router-state-tree"] = router_state
+        if self._deployment_id:
+            headers["x-deployment-id"] = self._deployment_id
         response = self.s.post(
-            FREEBEAT_REGISTER_REFERER,
+            self.frontend_url,
             headers=headers,
             data=_json_dumps([{"email": email, "code": code}]),
         )
-        self.log(f"POST /zh/ai-video-generator WebLogin -> {response.status_code}")
+        self.log(f"POST {_display_path(self.frontend_path)} WebLogin -> {response.status_code}")
         if response.status_code != 200:
             snippet = _response_text(response)[:500]
             raise RuntimeError(f"Freebeat WebLogin failed: HTTP {response.status_code} {snippet}")

@@ -42,6 +42,22 @@ def _runtime_value(extra: dict[str, Any], key: str, default: Any = "") -> Any:
         return default
 
 
+def _frontend_path_value(data: dict[str, Any] | None) -> str:
+    source = dict(data or {})
+    return str(
+        source.get("freebeat_frontend_path")
+        or source.get("freebeat_login_path")
+        or source.get("frontend_path")
+        or source.get("login_path")
+        or ""
+    ).strip()
+
+
+def _deployment_id_value(data: dict[str, Any] | None) -> str:
+    source = dict(data or {})
+    return str(source.get("freebeat_deployment_id") or source.get("deployment_id") or "").strip()
+
+
 def _status_from_overview(overview: dict[str, Any]) -> AccountStatus:
     if overview.get("valid") is False:
         return AccountStatus.INVALID
@@ -167,6 +183,8 @@ class FreebeatPlatform(BasePlatform):
                 log_fn=ctx.log,
                 next_action=extra.get("freebeat_next_action"),
                 next_router_state_tree=extra.get("freebeat_next_router_state_tree"),
+                frontend_path=_frontend_path_value(extra),
+                deployment_id=_deployment_id_value(extra),
                 verify_source=str(extra.get("freebeat_verify_source") or FREEBEAT_DEFAULT_VERIFY_SOURCE),
             )
 
@@ -340,7 +358,13 @@ class FreebeatPlatform(BasePlatform):
         proxy = self._proxy_for_account(account, params)
         if proxy:
             self.log("Freebeat action using account proxy")
-        client = FreebeatClient(proxy=proxy, log_fn=self.log)
+        merged = {**dict(account.extra or {}), **params}
+        client = FreebeatClient(
+            proxy=proxy,
+            log_fn=self.log,
+            frontend_path=_frontend_path_value(merged),
+            deployment_id=_deployment_id_value(merged),
+        )
         code = self._resolve_relogin_code(account, params, client, email=email)
         login = client.verify_email_code(
             email,
@@ -545,7 +569,12 @@ class FreebeatPlatform(BasePlatform):
             email = str(params.get("email") or account.email or "").strip()
             if not email:
                 return {"ok": False, "error": "缺少 Freebeat 邮箱地址"}
-            client = FreebeatClient(proxy=self._proxy_for_account(account), log_fn=self.log)
+            client = FreebeatClient(
+                proxy=self._proxy_for_account(account),
+                log_fn=self.log,
+                frontend_path=_frontend_path_value({**dict(account.extra or {}), **params}),
+                deployment_id=_deployment_id_value({**dict(account.extra or {}), **params}),
+            )
             result = client.send_email_verify_code(
                 email,
                 verify_source=str(params.get("verify_source") or FREEBEAT_DEFAULT_VERIFY_SOURCE),

@@ -63,9 +63,16 @@ class FreebeatProtocolMailboxWorker:
         log_fn: Callable[[str], None] = print,
         next_action: str | None = None,
         next_router_state_tree: str | None = None,
+        frontend_path: str = "",
+        deployment_id: str = "",
         verify_source: str = FREEBEAT_DEFAULT_VERIFY_SOURCE,
     ):
-        self.client = FreebeatClient(proxy=proxy, log_fn=log_fn)
+        self.client = FreebeatClient(
+            proxy=proxy,
+            log_fn=log_fn,
+            frontend_path=frontend_path,
+            deployment_id=deployment_id,
+        )
         self.log = log_fn
         self.next_action = str(next_action or "").strip() or None
         self.next_router_state_tree = str(next_router_state_tree or "").strip() or None
