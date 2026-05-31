@@ -289,6 +289,7 @@ class QuickFramePlatform(BasePlatform):
             login_identifier_url=str(extra.get("quickframe_login_identifier_url") or ""),
             challenge_url=str(extra.get("quickframe_challenge_url") or ""),
             turnstile_solver=self.solve_turnstile_with_fallback,
+            browser_fingerprint=True,
         )
 
     def _resolve_relogin_code(self, account: Account, params: dict[str, Any], client: QuickFrameClient, *, email: str) -> str:
@@ -429,6 +430,7 @@ class QuickFramePlatform(BasePlatform):
                 proxy=self._proxy_for_account(account, params),
                 log_fn=self.log,
                 turnstile_solver=self.solve_turnstile_with_fallback,
+                browser_fingerprint=True,
             )
             pending = client.begin_email_challenge(email)
             return {

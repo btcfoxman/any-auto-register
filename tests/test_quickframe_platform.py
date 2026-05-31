@@ -289,7 +289,6 @@ def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_
     assert f"{auth_login.scheme}://{auth_login.netloc}{auth_login.path}" == "https://server.cs.quickframe.com/auth/login"
     assert auth_query == {
         "returnUrl": "https://ai.quickframe.com/",
-        "login_hint": "new@example.com",
         "previous_anonymous_id": "anonymous_00000000-0000-4000-8000-000000000001",
         "visitorId": "visitor1234567890123",
         "eventId": "1780217363226.Xaxk79",
@@ -302,6 +301,56 @@ def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_
     assert pending["quickframe_login_identifier_url"] == ""
     assert pending["quickframe_challenge_url"].endswith("/u/login/passwordless-email-challenge?state=state-direct")
     assert any(item["name"] == "dd_anonymous_user_id" for item in pending["quickframe_pending_cookies"])
+
+
+def test_quickframe_start_login_uses_browser_fingerprint_context():
+    calls: list[dict] = []
+
+    def fake_fingerprint_collector(**kwargs):
+        return {
+            "previous_anonymous_id": "anonymous_11111111-1111-4111-8111-111111111111",
+            "visitorId": "fpVisitor1234567890",
+            "eventId": "1780217363226.fp1234",
+            "cookies": [
+                {"name": "_vid_t", "value": "fp-cookie", "domain": ".quickframe.com", "path": "/"},
+            ],
+        }
+
+    client = QuickFrameClient(
+        log_fn=lambda message: None,
+        browser_fingerprint=True,
+        fingerprint_collector=fake_fingerprint_collector,
+    )
+    responses = [
+        Response(status_code=302, headers={"location": "https://login.quickframe.com/authorize?state=query-state"}),
+        Response(status_code=302, headers={"location": "/u/login/identifier?state=query-state"}),
+        Response(
+            status_code=200,
+            text=(
+                '<form method="post" action="/u/login/identifier?state=query-state">'
+                '<input type="hidden" name="state" value="query-state">'
+                '<input type="text" name="username" value="">'
+                "</form>"
+            ),
+        ),
+    ]
+
+    def fake_get(url, **kwargs):
+        calls.append({"method": "GET", "url": url, **kwargs})
+        return responses.pop(0)
+
+    client.s.get = fake_get
+
+    result = client.start_login("new@example.com")
+
+    auth_login = urlparse(calls[0]["url"])
+    auth_query = {key: values[0] for key, values in parse_qs(auth_login.query).items()}
+    assert auth_query["previous_anonymous_id"] == "anonymous_11111111-1111-4111-8111-111111111111"
+    assert auth_query["visitorId"] == "fpVisitor1234567890"
+    assert auth_query["eventId"] == "1780217363226.fp1234"
+    assert "login_hint" not in auth_query
+    assert result["identifier_url"].endswith("/u/login/identifier?state=query-state")
+    assert any(item["name"] == "_vid_t" for item in client.cookie_records())
 
 
 def test_quickframe_headers_let_cookie_jar_scope_live_auth_cookies():

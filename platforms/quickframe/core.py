@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from http.cookiejar import Cookie
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 
 from curl_cffi.requests import Session
 
@@ -27,6 +27,11 @@ QUICKFRAME_TOKEN_AUDIENCE = "https://ai.quickframe.com"
 QUICKFRAME_TOKEN_SCOPE = "openid profile email"
 QUICKFRAME_TRPC_WSS_URL = "wss://server.cs.quickframe.com/trpc?connectionParams=1"
 QUICKFRAME_EFFECT_VIDEO_SUBSCRIPTION_PATH = "effects.effectVideoGenerationSubscription"
+QUICKFRAME_FINGERPRINT_API_KEY = "PR5rgU0BLe8In4lSgde3"
+QUICKFRAME_FINGERPRINT_ENDPOINT = "https://verify.quickframe.com"
+QUICKFRAME_FINGERPRINT_SCRIPT_URL = (
+    f"{QUICKFRAME_FINGERPRINT_ENDPOINT}/web/v4/{QUICKFRAME_FINGERPRINT_API_KEY}?ci=jsl/4.0.3"
+)
 QUICKFRAME_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
@@ -122,6 +127,33 @@ def _quickframe_visitor_id() -> str:
 
 def _quickframe_event_id() -> str:
     return f"{int(time.time() * 1000)}.{_random_token(6)}"
+
+
+def _normalize_proxy_url(proxy: str | None) -> str | None:
+    value = str(proxy or "").strip()
+    if not value:
+        return None
+    if value.lower().startswith("socks://"):
+        return f"socks5://{value.split('://', 1)[1]}"
+    return value
+
+
+def _playwright_proxy_config(proxy: str | None) -> dict[str, str] | None:
+    value = _normalize_proxy_url(proxy)
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.hostname:
+        return {"server": value}
+    server = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port:
+        server = f"{server}:{parsed.port}"
+    config: dict[str, str] = {"server": server}
+    if parsed.username:
+        config["username"] = unquote(parsed.username)
+    if parsed.password:
+        config["password"] = unquote(parsed.password)
+    return config
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -312,6 +344,87 @@ def _quickframe_session_active(session_info: dict[str, Any]) -> bool:
     return bool(user.get("id") or _session_user_email(user))
 
 
+def collect_quickframe_browser_auth_context(
+    *,
+    proxy: str | None = None,
+    log_fn: Callable[[str], None] = print,
+    timeout_ms: int = 30000,
+) -> dict[str, Any]:
+    """Collect the same FingerprintJS login context used by the captured frontend."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        raise RuntimeError(f"Playwright is not available: {exc}") from exc
+
+    proxy_config = _playwright_proxy_config(proxy)
+    with sync_playwright() as playwright:
+        launch_options: dict[str, Any] = {"headless": True}
+        if proxy_config:
+            launch_options["proxy"] = proxy_config
+        browser = playwright.chromium.launch(**launch_options)
+        try:
+            context = browser.new_context(
+                user_agent=QUICKFRAME_USER_AGENT,
+                locale="zh-HK",
+                viewport={"width": 1536, "height": 791},
+            )
+            try:
+                page = context.new_page()
+                page.goto(QUICKFRAME_RETURN_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+                result = page.evaluate(
+                    """
+                    async ({ apiKey, endpoint, scriptUrl }) => {
+                        const cookieName = "dd_anonymous_user_id";
+                        const cookieRe = /^anonymous_[0-9a-f-]{36}$/i;
+                        const readCookie = () => {
+                            for (const item of document.cookie.split("; ")) {
+                                if (item.startsWith(`${cookieName}=`)) {
+                                    return decodeURIComponent(item.slice(cookieName.length + 1));
+                                }
+                            }
+                            return "";
+                        };
+                        const writeCookie = (value) => {
+                            document.cookie = `${cookieName}=${encodeURIComponent(value)}; Max-Age=31536000; Path=/; SameSite=Lax; Secure; Domain=.quickframe.com`;
+                        };
+                        let previousAnonymousId = readCookie();
+                        if (!cookieRe.test(previousAnonymousId || "")) {
+                            previousAnonymousId = `anonymous_${crypto.randomUUID()}`;
+                            writeCookie(previousAnonymousId);
+                        }
+                        const module = await import(scriptUrl);
+                        const agent = module.start({ apiKey, endpoints: endpoint });
+                        const fp = await agent.get({ timeout: 10000 });
+                        return {
+                            previous_anonymous_id: previousAnonymousId,
+                            visitorId: fp.visitor_id || fp.visitorId || "",
+                            eventId: fp.event_id || fp.eventId || "",
+                        };
+                    }
+                    """,
+                    {
+                        "apiKey": QUICKFRAME_FINGERPRINT_API_KEY,
+                        "endpoint": QUICKFRAME_FINGERPRINT_ENDPOINT,
+                        "scriptUrl": QUICKFRAME_FINGERPRINT_SCRIPT_URL,
+                    },
+                )
+                cookies = context.cookies(
+                    [
+                        QUICKFRAME_APP_BASE,
+                        QUICKFRAME_SERVER_BASE,
+                        QUICKFRAME_LOGIN_BASE,
+                        QUICKFRAME_FINGERPRINT_ENDPOINT,
+                    ]
+                )
+                data = dict(result or {})
+                data["cookies"] = cookies
+                return data
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
 def quickframe_effect_subscription_messages(
     access_token: str,
     run_id: str,
@@ -416,9 +529,12 @@ class QuickFrameClient:
         challenge_url: str = "",
         return_url: str = QUICKFRAME_RETURN_URL,
         turnstile_solver: Callable[[str, str], str] | Any = None,
+        browser_fingerprint: bool = False,
+        fingerprint_collector: Callable[..., dict[str, Any]] | None = None,
     ):
         self._log = log_fn
         self._cookie_header = _cookie_header_from_any(cookie_header or cookies)
+        self.proxy = _normalize_proxy_url(proxy)
         self.access_token = str(access_token or "").strip()
         self.login_state = str(login_state or "").strip()
         self.login_identifier_url = str(login_identifier_url or "").strip()
@@ -432,7 +548,9 @@ class QuickFrameClient:
         self.visitor_id = ""
         self.event_id = ""
         self.turnstile_solver = turnstile_solver
-        proxies = {"http": proxy, "https": proxy} if proxy else None
+        self.browser_fingerprint = bool(browser_fingerprint)
+        self.fingerprint_collector = fingerprint_collector
+        proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         self.s = Session(impersonate="chrome", proxies=proxies, timeout=30)
         self.s.headers.update(
             {
@@ -472,6 +590,32 @@ class QuickFrameClient:
             except Exception:
                 continue
 
+    def _apply_browser_auth_context(self) -> None:
+        if not self.browser_fingerprint:
+            return
+        if self.previous_anonymous_id and self.visitor_id and self.event_id:
+            return
+        collector = self.fingerprint_collector or collect_quickframe_browser_auth_context
+        try:
+            data = collector(proxy=self.proxy, log_fn=self.log)
+        except Exception as exc:
+            self.log(f"QuickFrame FingerprintJS context unavailable, using generated context: {exc}")
+            return
+        if not isinstance(data, dict):
+            return
+        previous = str(data.get("previous_anonymous_id") or data.get("previousAnonymousId") or "").strip()
+        visitor_id = str(data.get("visitorId") or data.get("visitor_id") or "").strip()
+        event_id = str(data.get("eventId") or data.get("event_id") or "").strip()
+        if previous:
+            self.previous_anonymous_id = previous
+        if visitor_id:
+            self.visitor_id = visitor_id
+        if event_id:
+            self.event_id = event_id
+        self._seed_cookies(data.get("cookies"))
+        if visitor_id and event_id:
+            self.log("QuickFrame FingerprintJS context acquired")
+
     def _seed_login_cookie_header(self) -> None:
         target_url = self.challenge_url or self.login_identifier_url
         host = str(urlparse(target_url).hostname or "").strip().lower()
@@ -484,6 +628,7 @@ class QuickFrameClient:
                 continue
 
     def _ensure_auth_context(self) -> dict[str, str]:
+        self._apply_browser_auth_context()
         if not self.previous_anonymous_id:
             self.previous_anonymous_id = _quickframe_anonymous_id()
         if not self.visitor_id:
@@ -622,7 +767,7 @@ class QuickFrameClient:
         if not email:
             raise RuntimeError("QuickFrame login requires email")
         target_return_url = str(return_url or self.return_url or QUICKFRAME_RETURN_URL).strip()
-        params = {"returnUrl": target_return_url, "login_hint": email, **self._ensure_auth_context()}
+        params = {"returnUrl": target_return_url, **self._ensure_auth_context()}
         if screen_hint:
             params["screen_hint"] = str(screen_hint)
         url = f"{QUICKFRAME_SERVER_BASE}/auth/login?{urlencode(params)}"
