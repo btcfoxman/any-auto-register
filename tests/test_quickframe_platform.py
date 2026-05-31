@@ -75,6 +75,37 @@ def test_quickframe_begin_email_challenge_uses_captured_auth0_form():
     assert pending["quickframe_challenge_url"].endswith("/u/login/passwordless-email-challenge?state=state-123")
 
 
+def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_redirect():
+    calls: list[dict] = []
+    client = QuickFrameClient(log_fn=lambda message: None)
+    responses = [
+        Response(status_code=302, headers={"location": "https://login.quickframe.com/authorize?state=state-direct"}),
+        Response(status_code=302, headers={"location": "/u/login/passwordless-email-challenge?state=state-direct"}),
+        Response(status_code=200, text='<input type="hidden" name="state" value="state-direct">'),
+    ]
+
+    def fake_get(url, **kwargs):
+        calls.append({"method": "GET", "url": url, **kwargs})
+        return responses.pop(0)
+
+    def fake_post(url, **kwargs):
+        raise AssertionError("direct passwordless challenge should not post identifier form again")
+
+    client.s.get = fake_get
+    client.s.post = fake_post
+
+    pending = client.begin_email_challenge("new@example.com")
+
+    assert [item["url"] for item in calls] == [
+        "https://server.cs.quickframe.com/auth/login?returnUrl=https%3A%2F%2Fai.quickframe.com%2F&login_hint=new%40example.com",
+        "https://login.quickframe.com/authorize?state=state-direct",
+        "https://login.quickframe.com/u/login/passwordless-email-challenge?state=state-direct",
+    ]
+    assert pending["quickframe_login_state"] == "state-direct"
+    assert pending["quickframe_login_identifier_url"] == ""
+    assert pending["quickframe_challenge_url"].endswith("/u/login/passwordless-email-challenge?state=state-direct")
+
+
 def test_quickframe_summary_maps_captured_session_token_and_billing_shape():
     state = {
         "session_info": {

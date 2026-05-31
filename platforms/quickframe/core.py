@@ -420,6 +420,14 @@ class QuickFrameClient:
                 self.log(f"GET {urlparse(current_url).path} -> {response.status_code}")
                 continue
             break
+        if "/u/login/passwordless-email-challenge" in current_url:
+            state = _query_state(current_url) or _extract_html_state(_response_text(response))
+            if not state:
+                raise RuntimeError("QuickFrame passwordless challenge page did not include state")
+            self.login_state = state
+            self.login_identifier_url = ""
+            self.challenge_url = current_url
+            return {"state": state, "identifier_url": "", "challenge_url": current_url}
         if "/u/login/identifier" not in current_url:
             raise RuntimeError(f"QuickFrame login did not reach identifier page: {current_url}")
         state = _query_state(current_url) or _extract_html_state(_response_text(response))
@@ -430,8 +438,10 @@ class QuickFrameClient:
         return {"state": state, "identifier_url": current_url}
 
     def begin_email_challenge(self, email: str) -> dict[str, Any]:
-        if not self.login_state or not self.login_identifier_url:
+        if not self.login_state or (not self.login_identifier_url and not self.challenge_url):
             self.start_login(email)
+        if self.challenge_url and not self.login_identifier_url:
+            return self.pending_login_state()
         state = self.login_state
         identifier_url = self.login_identifier_url
         form = {
