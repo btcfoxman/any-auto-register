@@ -4,7 +4,9 @@ from __future__ import annotations
 import base64
 import json
 import re
+import secrets
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from http.cookiejar import Cookie
@@ -30,6 +32,7 @@ QUICKFRAME_USER_AGENT = (
 )
 QUICKFRAME_SEC_CH_UA = '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"'
 QUICKFRAME_COOKIE_DOMAINS = ("quickframe.com", "mountain.com")
+_QUICKFRAME_VISITOR_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
 def _now_iso() -> str:
@@ -102,6 +105,22 @@ def _cookie_pairs_from_header(value: Any) -> list[tuple[str, str]]:
         if pair:
             pairs.append(pair)
     return list(dict.fromkeys(pairs))
+
+
+def _random_token(length: int) -> str:
+    return "".join(secrets.choice(_QUICKFRAME_VISITOR_ALPHABET) for _ in range(length))
+
+
+def _quickframe_anonymous_id() -> str:
+    return f"anonymous_{uuid.uuid4()}"
+
+
+def _quickframe_visitor_id() -> str:
+    return _random_token(20)
+
+
+def _quickframe_event_id() -> str:
+    return f"{int(time.time() * 1000)}.{_random_token(6)}"
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -378,6 +397,9 @@ class QuickFrameClient:
         self.login_identifier_form: dict[str, str] = {}
         self.challenge_form: dict[str, str] = {}
         self.return_url = str(return_url or QUICKFRAME_RETURN_URL).strip()
+        self.previous_anonymous_id = ""
+        self.visitor_id = ""
+        self.event_id = ""
         proxies = {"http": proxy, "https": proxy} if proxy else None
         self.s = Session(impersonate="chrome", proxies=proxies, timeout=30)
         self.s.headers.update(
@@ -428,6 +450,23 @@ class QuickFrameClient:
                 self.s.cookies.set(name, cookie_value, domain=host, path="/")
             except Exception:
                 continue
+
+    def _ensure_auth_context(self) -> dict[str, str]:
+        if not self.previous_anonymous_id:
+            self.previous_anonymous_id = _quickframe_anonymous_id()
+        if not self.visitor_id:
+            self.visitor_id = _quickframe_visitor_id()
+        if not self.event_id:
+            self.event_id = _quickframe_event_id()
+        try:
+            self.s.cookies.set("dd_anonymous_user_id", self.previous_anonymous_id, domain=".quickframe.com", path="/")
+        except Exception:
+            pass
+        return {
+            "previous_anonymous_id": self.previous_anonymous_id,
+            "visitorId": self.visitor_id,
+            "eventId": self.event_id,
+        }
 
     def cookie_records(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -515,7 +554,7 @@ class QuickFrameClient:
         if not email:
             raise RuntimeError("QuickFrame login requires email")
         target_return_url = str(return_url or self.return_url or QUICKFRAME_RETURN_URL).strip()
-        params = {"returnUrl": target_return_url, "login_hint": email}
+        params = {"returnUrl": target_return_url, "login_hint": email, **self._ensure_auth_context()}
         if screen_hint:
             params["screen_hint"] = str(screen_hint)
         url = f"{QUICKFRAME_SERVER_BASE}/auth/login?{urlencode(params)}"

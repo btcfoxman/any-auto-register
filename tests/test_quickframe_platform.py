@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from sqlmodel import Session
 
@@ -169,9 +169,12 @@ def test_quickframe_begin_email_challenge_includes_auth0_submit_button_action():
     assert form["username"] == "new@example.com"
 
 
-def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_redirect():
+def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_redirect(monkeypatch):
     calls: list[dict] = []
     client = QuickFrameClient(log_fn=lambda message: None)
+    monkeypatch.setattr("platforms.quickframe.core._quickframe_anonymous_id", lambda: "anonymous_00000000-0000-4000-8000-000000000001")
+    monkeypatch.setattr("platforms.quickframe.core._quickframe_visitor_id", lambda: "visitor1234567890123")
+    monkeypatch.setattr("platforms.quickframe.core._quickframe_event_id", lambda: "1780217363226.Xaxk79")
     responses = [
         Response(status_code=302, headers={"location": "https://login.quickframe.com/authorize?state=state-direct"}),
         Response(status_code=302, headers={"location": "/u/login/passwordless-email-challenge?state=state-direct"}),
@@ -190,14 +193,24 @@ def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_
 
     pending = client.begin_email_challenge("new@example.com")
 
-    assert [item["url"] for item in calls] == [
-        "https://server.cs.quickframe.com/auth/login?returnUrl=https%3A%2F%2Fai.quickframe.com%2F&login_hint=new%40example.com",
+    auth_login = urlparse(calls[0]["url"])
+    auth_query = {key: values[0] for key, values in parse_qs(auth_login.query).items()}
+    assert f"{auth_login.scheme}://{auth_login.netloc}{auth_login.path}" == "https://server.cs.quickframe.com/auth/login"
+    assert auth_query == {
+        "returnUrl": "https://ai.quickframe.com/",
+        "login_hint": "new@example.com",
+        "previous_anonymous_id": "anonymous_00000000-0000-4000-8000-000000000001",
+        "visitorId": "visitor1234567890123",
+        "eventId": "1780217363226.Xaxk79",
+    }
+    assert [item["url"] for item in calls[1:]] == [
         "https://login.quickframe.com/authorize?state=state-direct",
         "https://login.quickframe.com/u/login/passwordless-email-challenge?state=state-direct",
     ]
     assert pending["quickframe_login_state"] == "state-direct"
     assert pending["quickframe_login_identifier_url"] == ""
     assert pending["quickframe_challenge_url"].endswith("/u/login/passwordless-email-challenge?state=state-direct")
+    assert any(item["name"] == "dd_anonymous_user_id" for item in pending["quickframe_pending_cookies"])
 
 
 def test_quickframe_headers_let_cookie_jar_scope_live_auth_cookies():
