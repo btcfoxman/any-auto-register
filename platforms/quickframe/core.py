@@ -6,6 +6,7 @@ import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from http.cookiejar import Cookie
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -118,6 +119,65 @@ def _json_from_response(response: Any) -> Any:
 def _extract_html_state(html: str) -> str:
     match = re.search(r'name=["\']state["\']\s+value=["\']([^"\']+)["\']', str(html or ""))
     return match.group(1).strip() if match else ""
+
+
+class _HtmlFormParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.forms: list[dict[str, Any]] = []
+        self._current: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        name = tag.lower()
+        values = {str(key).lower(): value for key, value in attrs}
+        if name == "form":
+            self._current = {
+                "action": str(values.get("action") or ""),
+                "method": str(values.get("method") or "GET").upper(),
+                "fields": {},
+            }
+            return
+        if name != "input":
+            return
+        field_name = str(values.get("name") or "").strip()
+        if not field_name:
+            return
+        target = self._current
+        if target is None:
+            if not self.forms or self.forms[-1].get("_implicit") is not True:
+                self.forms.append({"action": "", "method": "GET", "fields": {}, "_implicit": True})
+            target = self.forms[-1]
+        target["fields"][field_name] = str(values.get("value") or "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "form" and self._current is not None:
+            self.forms.append(self._current)
+            self._current = None
+
+    def close(self) -> None:
+        super().close()
+        if self._current is not None:
+            self.forms.append(self._current)
+            self._current = None
+
+
+def _extract_form(html: str, preferred_field: str) -> tuple[str, dict[str, str]]:
+    parser = _HtmlFormParser()
+    try:
+        parser.feed(str(html or ""))
+        parser.close()
+    except Exception:
+        return "", {}
+    preferred = str(preferred_field or "").strip()
+    for form in parser.forms:
+        fields = form.get("fields") if isinstance(form.get("fields"), dict) else {}
+        if preferred and preferred in fields:
+            return str(form.get("action") or ""), {str(key): str(value) for key, value in fields.items()}
+    for form in parser.forms:
+        fields = form.get("fields") if isinstance(form.get("fields"), dict) else {}
+        if "state" in fields:
+            return str(form.get("action") or ""), {str(key): str(value) for key, value in fields.items()}
+    return "", {}
 
 
 def _query_state(url: str) -> str:
@@ -271,6 +331,8 @@ class QuickFrameClient:
         self.login_state = str(login_state or "").strip()
         self.login_identifier_url = str(login_identifier_url or "").strip()
         self.challenge_url = str(challenge_url or "").strip()
+        self.login_identifier_form: dict[str, str] = {}
+        self.challenge_form: dict[str, str] = {}
         self.return_url = str(return_url or QUICKFRAME_RETURN_URL).strip()
         proxies = {"http": proxy, "https": proxy} if proxy else None
         self.s = Session(impersonate="chrome", proxies=proxies, timeout=30)
@@ -407,12 +469,13 @@ class QuickFrameClient:
                 location = str(response.headers.get("location") or "").strip()
                 if not location:
                     break
+                previous_url = current_url
                 current_url = urljoin(current_url, location)
                 response = self.s.get(
                     current_url,
                     headers=self._headers(
                         accept="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        referer=url,
+                        referer=previous_url,
                         include_cookie=True,
                     ),
                     allow_redirects=False,
@@ -421,21 +484,27 @@ class QuickFrameClient:
                 continue
             break
         if "/u/login/passwordless-email-challenge" in current_url:
-            state = _query_state(current_url) or _extract_html_state(_response_text(response))
+            html = _response_text(response)
+            action, fields = _extract_form(html, "code")
+            state = str(fields.get("state") or "").strip() or _query_state(current_url) or _extract_html_state(html)
             if not state:
                 raise RuntimeError("QuickFrame passwordless challenge page did not include state")
             self.login_state = state
             self.login_identifier_url = ""
-            self.challenge_url = current_url
+            self.challenge_form = fields
+            self.challenge_url = urljoin(current_url, action) if action else current_url
             return {"state": state, "identifier_url": "", "challenge_url": current_url}
         if "/u/login/identifier" not in current_url:
             raise RuntimeError(f"QuickFrame login did not reach identifier page: {current_url}")
-        state = _query_state(current_url) or _extract_html_state(_response_text(response))
+        html = _response_text(response)
+        action, fields = _extract_form(html, "username")
+        state = str(fields.get("state") or "").strip() or _query_state(current_url) or _extract_html_state(html)
         if not state:
             raise RuntimeError("QuickFrame login identifier page did not include state")
         self.login_state = state
-        self.login_identifier_url = current_url
-        return {"state": state, "identifier_url": current_url}
+        self.login_identifier_form = fields
+        self.login_identifier_url = urljoin(current_url, action) if action else current_url
+        return {"state": state, "identifier_url": self.login_identifier_url}
 
     def begin_email_challenge(self, email: str) -> dict[str, Any]:
         if not self.login_state or (not self.login_identifier_url and not self.challenge_url):
@@ -445,13 +514,14 @@ class QuickFrameClient:
         state = self.login_state
         identifier_url = self.login_identifier_url
         form = {
-            "state": state,
+            **self.login_identifier_form,
+            "state": self.login_identifier_form.get("state") or state,
             "username": str(email or "").strip(),
-            "js-available": "true",
-            "webauthn-available": "true",
-            "is-brave": "false",
-            "webauthn-platform-available": "true",
         }
+        form.setdefault("js-available", "true")
+        form.setdefault("webauthn-available", "true")
+        form.setdefault("is-brave", "false")
+        form.setdefault("webauthn-platform-available", "true")
         response = self.s.post(
             identifier_url,
             headers=self._headers(
@@ -484,8 +554,11 @@ class QuickFrameClient:
         self.log(f"GET /u/login/passwordless-email-challenge -> {challenge.status_code}")
         if challenge.status_code != 200:
             raise RuntimeError(f"QuickFrame passwordless challenge page failed: HTTP {challenge.status_code}")
-        self.challenge_url = challenge_url
-        self.login_state = _extract_html_state(_response_text(challenge)) or _query_state(challenge_url) or state
+        html = _response_text(challenge)
+        action, fields = _extract_form(html, "code")
+        self.challenge_form = fields
+        self.challenge_url = urljoin(challenge_url, action) if action else challenge_url
+        self.login_state = str(fields.get("state") or "").strip() or _extract_html_state(html) or _query_state(challenge_url) or state
         return self.pending_login_state()
 
     def complete_email_challenge(self, code: str) -> dict[str, Any]:
@@ -494,7 +567,7 @@ class QuickFrameClient:
             raise RuntimeError(f"QuickFrame email verification code is invalid: {code!r}")
         if not self.challenge_url or not self.login_state:
             raise RuntimeError("QuickFrame passwordless challenge state is missing; send login code first")
-        form = {"state": self.login_state, "code": code}
+        form = {**self.challenge_form, "state": self.challenge_form.get("state") or self.login_state, "code": code}
         response = self.s.post(
             self.challenge_url,
             headers=self._headers(
