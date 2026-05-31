@@ -125,6 +125,50 @@ def test_quickframe_begin_email_challenge_uses_identifier_form_action_and_hidden
     assert pending["quickframe_login_state"] == "hidden-state"
 
 
+def test_quickframe_begin_email_challenge_includes_auth0_submit_button_action():
+    calls: list[dict] = []
+    client = QuickFrameClient(log_fn=lambda message: None)
+    responses = [
+        Response(status_code=302, headers={"location": "https://login.quickframe.com/authorize?state=query-state"}),
+        Response(status_code=302, headers={"location": "/u/login/identifier?state=query-state"}),
+        Response(
+            status_code=200,
+            text=(
+                '<form method="post" action="/u/login/identifier?state=query-state">'
+                '<input type="hidden" name="state" value="query-state">'
+                '<input type="text" name="username" value="">'
+                '<button type="submit" name="action" value="default">Continue</button>'
+                "</form>"
+            ),
+        ),
+        Response(
+            status_code=200,
+            text='<form method="post"><input type="hidden" name="state" value="query-state"><input name="code"></form>',
+        ),
+    ]
+
+    def fake_get(url, **kwargs):
+        calls.append({"method": "GET", "url": url, **kwargs})
+        return responses.pop(0)
+
+    def fake_post(url, **kwargs):
+        calls.append({"method": "POST", "url": url, **kwargs})
+        return Response(
+            status_code=302,
+            headers={"location": "/u/login/passwordless-email-challenge?state=query-state"},
+        )
+
+    client.s.get = fake_get
+    client.s.post = fake_post
+
+    client.begin_email_challenge("new@example.com")
+
+    post_call = next(item for item in calls if item["method"] == "POST")
+    form = {key: values[0] for key, values in parse_qs(post_call["data"]).items()}
+    assert form["action"] == "default"
+    assert form["username"] == "new@example.com"
+
+
 def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_redirect():
     calls: list[dict] = []
     client = QuickFrameClient(log_fn=lambda message: None)

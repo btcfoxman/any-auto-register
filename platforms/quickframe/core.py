@@ -121,6 +121,13 @@ def _extract_html_state(html: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _html_text_summary(html: str, *, limit: int = 220) -> str:
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", str(html or ""))
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
+
 class _HtmlFormParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -137,7 +144,7 @@ class _HtmlFormParser(HTMLParser):
                 "fields": {},
             }
             return
-        if name != "input":
+        if name not in {"input", "button"}:
             return
         field_name = str(values.get("name") or "").strip()
         if not field_name:
@@ -147,7 +154,10 @@ class _HtmlFormParser(HTMLParser):
             if not self.forms or self.forms[-1].get("_implicit") is not True:
                 self.forms.append({"action": "", "method": "GET", "fields": {}, "_implicit": True})
             target = self.forms[-1]
-        target["fields"][field_name] = str(values.get("value") or "")
+        if name == "button":
+            target["fields"].setdefault(field_name, str(values.get("value") or ""))
+        else:
+            target["fields"][field_name] = str(values.get("value") or "")
 
     def handle_endtag(self, tag: str) -> None:
         if tag.lower() == "form" and self._current is not None:
@@ -536,7 +546,12 @@ class QuickFrameClient:
         )
         self.log(f"POST /u/login/identifier -> {response.status_code}")
         if not _is_redirect(response.status_code):
-            raise RuntimeError(f"QuickFrame identifier submit failed: HTTP {response.status_code} {_response_text(response)[:300]}")
+            body = _response_text(response)
+            field_names = ",".join(form.keys())
+            raise RuntimeError(
+                f"QuickFrame identifier submit failed: HTTP {response.status_code}; "
+                f"form_fields={field_names}; error={_html_text_summary(body) or body[:220]}"
+            )
         location = str(response.headers.get("location") or "").strip()
         challenge_url = urljoin(identifier_url, location)
         if "/u/login/passwordless-email-challenge" not in challenge_url:
@@ -582,7 +597,12 @@ class QuickFrameClient:
         )
         self.log(f"POST /u/login/passwordless-email-challenge -> {response.status_code}")
         if not _is_redirect(response.status_code):
-            raise RuntimeError(f"QuickFrame code submit failed: HTTP {response.status_code} {_response_text(response)[:300]}")
+            body = _response_text(response)
+            field_names = ",".join(form.keys())
+            raise RuntimeError(
+                f"QuickFrame code submit failed: HTTP {response.status_code}; "
+                f"form_fields={field_names}; error={_html_text_summary(body) or body[:220]}"
+            )
         next_url = urljoin(self.challenge_url, str(response.headers.get("location") or ""))
         self._follow_login_redirects(next_url, referer=self.challenge_url)
         return self.fetch_account_state(force_refresh=True)
