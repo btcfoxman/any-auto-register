@@ -252,6 +252,42 @@ def test_quickframe_email_code_pattern_matches_auth0_email_body_only_after_promp
     assert match.group(1) == "127861"
 
 
+def test_quickframe_email_code_pattern_matches_auth0_html_body():
+    body = """
+    <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+      <tbody><tr>
+        <td align="left" style="font-size:0px;padding:0 0 32px;word-break:break-word;">
+          <div style="font-family:Inter,Helvetica,Arial,sans-serif;font-size:16px;font-weight:500;line-height:24px;text-align:left;color:#c0c0c0;">
+            Enter the following verification code when prompted:
+          </div>
+        </td>
+      </tr>
+      <!-- OTP code -->
+      <tr>
+        <td align="left" style="font-size:0px;padding:0 0 32px;word-break:break-word;">
+          <div style="font-family:Inter,Helvetica,Arial,sans-serif;font-size:48px;font-weight:600;line-height:72px;text-align:left;color:#ffffff;">
+            579619
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td><div>To protect your account, do not share this code.</div></td>
+      </tr>
+      <tr>
+        <td><div>This code was requested from 136.143.254.61 at May 31, 2026, 7:25 PM UTC.</div></td>
+      </tr>
+      <tr>
+        <td><div>823 Congress Ave #1827 Austin, TX 78768</div></td>
+      </tr>
+    </tbody></table>
+    """
+
+    match = re.search(QUICKFRAME_EMAIL_CODE_PATTERN, body)
+
+    assert match
+    assert match.group(1) == "579619"
+
+
 def test_quickframe_send_login_code_persists_pending_auth0_state(monkeypatch):
     class FakeClient:
         def __init__(self, *args, **kwargs):

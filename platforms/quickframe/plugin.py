@@ -18,7 +18,8 @@ from platforms.quickframe.core import (
 
 QUICKFRAME_EMAIL_CODE_PATTERN = (
     r"(?is)(?:Enter\s+the\s+following\s+verification\s+code\s+when\s+prompted:"
-    r"|verification\s+code(?:\s+is)?[:\s])\D{0,200}(\d{6})"
+    r"|verification\s+code(?:\s+is)?[:\s])"
+    r"(?:(?:\s|&nbsp;|&#160;)|<!--.*?-->|<[^>]+>)*(\d{6})"
 )
 
 
