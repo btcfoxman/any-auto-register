@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs
 
 from sqlmodel import Session
@@ -17,6 +18,7 @@ from platforms.quickframe.core import (
     summarize_quickframe_account_state,
 )
 from platforms.quickframe.plugin import QuickFramePlatform
+from platforms.quickframe.plugin import QUICKFRAME_EMAIL_CODE_PATTERN
 from platforms.quickframe.protocol_mailbox import QuickFrameProtocolMailboxWorker
 
 
@@ -233,6 +235,21 @@ def test_quickframe_platform_declares_required_actions():
         "relogin_email_code",
         "sync_quickframe2api",
     } <= STATEFUL_ACTION_IDS
+
+
+def test_quickframe_email_code_pattern_matches_auth0_email_body_only_after_prompt():
+    body = (
+        "ticket 001234\n"
+        "Enter the following verification code when prompted:\n"
+        "127861\n"
+        "To protect your account, do not share this code.\n"
+        "This code was requested from 72.46.139.83 at May 31, 2026, 7:07 PM UTC."
+    )
+
+    match = re.search(QUICKFRAME_EMAIL_CODE_PATTERN, body)
+
+    assert match
+    assert match.group(1) == "127861"
 
 
 def test_quickframe_send_login_code_persists_pending_auth0_state(monkeypatch):

@@ -16,6 +16,12 @@ from platforms.quickframe.core import (
 )
 
 
+QUICKFRAME_EMAIL_CODE_PATTERN = (
+    r"(?is)(?:Enter\s+the\s+following\s+verification\s+code\s+when\s+prompted:"
+    r"|verification\s+code(?:\s+is)?[:\s])\D{0,200}(\d{6})"
+)
+
+
 def _truthy(value: Any, default: bool = False) -> bool:
     if value is None or value == "":
         return default
@@ -159,7 +165,7 @@ class QuickFramePlatform(BasePlatform):
             register_runner=_run_worker,
             otp_spec=OtpSpec(
                 keyword="",
-                code_pattern=r"\b(\d{6})\b",
+                code_pattern=QUICKFRAME_EMAIL_CODE_PATTERN,
                 wait_message="等待 QuickFrame 邮箱验证码...",
                 success_label="QuickFrame 邮箱验证码",
             ),
@@ -299,7 +305,7 @@ class QuickFramePlatform(BasePlatform):
             keyword=str(params.get("keyword") or "").strip(),
             timeout=timeout,
             before_ids=before_ids,
-            code_pattern=r"\b(\d{6})\b",
+            code_pattern=QUICKFRAME_EMAIL_CODE_PATTERN,
         )
         if not code:
             raise RuntimeError("未读取到 QuickFrame 邮箱验证码")
