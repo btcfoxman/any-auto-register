@@ -10,6 +10,12 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+QUICKFRAME2API_DEFAULT_API_KEY = "sk-test-api-key"
+
+
+class QuickFrame2ApiAuthError(RuntimeError):
+    pass
+
 
 class QuickFrame2ApiClient:
     def __init__(self, base_url: str, api_key: str = "", *, timeout: int = 15):
@@ -22,7 +28,17 @@ class QuickFrame2ApiClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
             headers["X-API-Key"] = self.api_key
+            headers["X-Admin-Token"] = self.api_key
         return headers
+
+    def _raise_for_status(self, response: requests.Response, path: str) -> None:
+        if response.status_code == 401:
+            key_state = "configured" if self.api_key else "missing"
+            raise QuickFrame2ApiAuthError(
+                f"HTTP 401 Unauthorized for {self.base_url}{path}; "
+                f"quickframe2api_api_key is {key_state} and must match the QuickFrame2API service key"
+            )
+        response.raise_for_status()
 
     def _post(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         response = requests.post(
@@ -31,7 +47,7 @@ class QuickFrame2ApiClient:
             headers=self._headers(),
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        self._raise_for_status(response, path)
         data = response.json()
         return data if isinstance(data, dict) else {"data": data}
 
@@ -41,7 +57,7 @@ class QuickFrame2ApiClient:
             headers=self._headers(),
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        self._raise_for_status(response, path)
         return response.json()
 
     def upsert_account(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -140,8 +156,10 @@ def _get_quickframe2api_config() -> tuple[str, str, int, bool]:
     try:
         from core.config_store import config_store
 
-        base_url = config_store.get("quickframe2api_url", "")
-        api_key = config_store.get("quickframe2api_api_key", "")
+        base_url = _text(config_store.get("quickframe2api_url", ""))
+        api_key = _text(config_store.get("quickframe2api_api_key", ""))
+        if base_url and not api_key:
+            api_key = QUICKFRAME2API_DEFAULT_API_KEY
         max_concurrency = _clamp_concurrency(config_store.get("quickframe2api_max_concurrency", "1"))
         auto_maintenance = _as_bool(config_store.get("quickframe2api_enable_auto_maintenance", ""), True)
         return base_url, api_key, max_concurrency, auto_maintenance

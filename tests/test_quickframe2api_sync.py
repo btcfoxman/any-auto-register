@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 from core.base_platform import Account
 from core.quickframe2api_sync import (
+    QUICKFRAME2API_DEFAULT_API_KEY,
     QuickFrame2ApiClient,
+    QuickFrame2ApiAuthError,
     build_quickframe2api_payload,
+    _get_quickframe2api_config,
     sync_account_to_quickframe2api,
 )
 
@@ -74,6 +79,36 @@ def test_quickframe2api_client_upserts_account_with_api_key_headers():
     assert post.call_args.args[0] == "http://localhost:8789/api/accounts"
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer sk-key"
     assert post.call_args.kwargs["headers"]["X-API-Key"] == "sk-key"
+    assert post.call_args.kwargs["headers"]["X-Admin-Token"] == "sk-key"
+
+
+def test_quickframe2api_client_reports_auth_error_on_401():
+    resp = Mock()
+    resp.status_code = 401
+
+    with patch("core.quickframe2api_sync.requests.post", return_value=resp):
+        client = QuickFrame2ApiClient("http://localhost:8789/", "bad-key")
+        with pytest.raises(QuickFrame2ApiAuthError, match="quickframe2api_api_key"):
+            client.upsert_account({"name": "new@example.com", "token": "tok_123"})
+
+
+def test_quickframe2api_config_uses_default_key_when_url_configured(monkeypatch):
+    import core.config_store as config_module
+
+    values = {
+        "quickframe2api_url": "http://localhost:8789",
+        "quickframe2api_api_key": "",
+        "quickframe2api_max_concurrency": "2",
+        "quickframe2api_enable_auto_maintenance": "true",
+    }
+    monkeypatch.setattr(config_module.config_store, "get", lambda key, default="": values.get(key, default))
+
+    base_url, api_key, max_concurrency, auto_maintenance = _get_quickframe2api_config()
+
+    assert base_url == "http://localhost:8789"
+    assert api_key == QUICKFRAME2API_DEFAULT_API_KEY
+    assert max_concurrency == 2
+    assert auto_maintenance is True
 
 
 def test_sync_account_to_quickframe2api_posts_heartbeat_and_check():
