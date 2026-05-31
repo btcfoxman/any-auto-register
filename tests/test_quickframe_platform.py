@@ -200,6 +200,94 @@ def test_quickframe_begin_email_challenge_accepts_direct_passwordless_challenge_
     assert pending["quickframe_challenge_url"].endswith("/u/login/passwordless-email-challenge?state=state-direct")
 
 
+def test_quickframe_headers_let_cookie_jar_scope_live_auth_cookies():
+    client = QuickFrameClient(log_fn=lambda message: None)
+    client.s.cookies.set("auth0", "sess", domain="login.quickframe.com", path="/")
+
+    headers = client._headers(include_cookie=True)
+
+    assert "cookie" not in headers
+    assert client.cookie_header() == "auth0=sess"
+
+
+def test_quickframe_headers_keep_raw_cookie_fallback_for_stored_api_session():
+    client = QuickFrameClient(log_fn=lambda message: None, cookie_header="cs_session=sess_123")
+
+    headers = client._headers(include_cookie=True)
+
+    assert headers["cookie"] == "cs_session=sess_123"
+
+
+def test_quickframe_pending_cookie_header_is_seeded_to_login_host():
+    client = QuickFrameClient(
+        log_fn=lambda message: None,
+        cookie_header="auth0=sess; did=device",
+        challenge_url="https://login.quickframe.com/u/login/passwordless-email-challenge?state=state-123",
+        login_state="state-123",
+    )
+
+    records = client.cookie_records()
+
+    assert {item["name"]: item["domain"] for item in records} == {
+        "auth0": "login.quickframe.com",
+        "did": "login.quickframe.com",
+    }
+    assert "cookie" not in client._headers(include_cookie=True, manual_cookie=False)
+
+
+def test_quickframe_follow_login_redirects_matches_captured_callback_headers():
+    calls: list[dict] = []
+    client = QuickFrameClient(log_fn=lambda message: None)
+    responses = [
+        Response(
+            status_code=302,
+            headers={"location": "https://server.cs.quickframe.com/auth/callback?code=code-123&state=state-123"},
+        ),
+        Response(status_code=302, headers={"location": "https://ai.quickframe.com/"}),
+        Response(status_code=200),
+    ]
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return responses.pop(0)
+
+    client.s.get = fake_get
+
+    client._follow_login_redirects(
+        "https://login.quickframe.com/authorize/resume?state=resume-123",
+        referer="https://login.quickframe.com/u/login/passwordless-email-challenge?state=challenge-123",
+    )
+
+    assert calls[0]["headers"]["origin"] == "https://login.quickframe.com"
+    assert calls[0]["headers"]["referer"].endswith("passwordless-email-challenge?state=challenge-123")
+    assert calls[1]["url"].startswith("https://server.cs.quickframe.com/auth/callback")
+    assert calls[1]["headers"]["origin"] == "https://login.quickframe.com"
+    assert "referer" not in calls[1]["headers"]
+    assert calls[2]["url"] == "https://ai.quickframe.com/"
+    assert calls[2]["headers"]["origin"] == "https://login.quickframe.com"
+    assert "referer" not in calls[2]["headers"]
+    assert all("cookie" not in item["headers"] for item in calls)
+
+
+def test_quickframe_follow_login_redirects_rejects_auth0_logout():
+    client = QuickFrameClient(log_fn=lambda message: None)
+
+    def fake_get(url, **kwargs):
+        return Response(status_code=302, headers={"location": "https://login.quickframe.com/v2/logout?client_id=client"})
+
+    client.s.get = fake_get
+
+    try:
+        client._follow_login_redirects(
+            "https://server.cs.quickframe.com/auth/callback?code=code-123&state=state-123",
+            referer="https://login.quickframe.com/authorize/resume?state=resume-123",
+        )
+    except RuntimeError as exc:
+        assert "Auth0 logout" in str(exc)
+    else:
+        raise AssertionError("expected Auth0 logout redirect to fail")
+
+
 def test_quickframe_summary_maps_captured_session_token_and_billing_shape():
     state = {
         "session_info": {

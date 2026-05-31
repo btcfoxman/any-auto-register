@@ -89,6 +89,21 @@ def _cookie_header_from_any(value: Any) -> str:
     return "; ".join(dict.fromkeys(pairs))
 
 
+def _cookie_pairs_from_header(value: Any) -> list[tuple[str, str]]:
+    header = _cookie_header_from_any(value)
+    if not header:
+        return []
+    pairs: list[tuple[str, str]] = []
+    for item in header.split(";"):
+        if "=" not in item:
+            continue
+        name, cookie_value = item.split("=", 1)
+        pair = _valid_cookie_pair(name.strip(), cookie_value.strip())
+        if pair:
+            pairs.append(pair)
+    return list(dict.fromkeys(pairs))
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         if value in (None, ""):
@@ -375,9 +390,17 @@ class QuickFrameClient:
             }
         )
         self._seed_cookies(cookies)
+        self._seed_login_cookie_header()
 
     def log(self, message: str) -> None:
         self._log(message)
+
+    def _default_cookie_domain(self) -> str:
+        target_url = self.challenge_url or self.login_identifier_url
+        host = str(urlparse(target_url).hostname or "").strip().lower()
+        if host == "login.quickframe.com":
+            return "login.quickframe.com"
+        return ".quickframe.com"
 
     def _seed_cookies(self, cookies: Any) -> None:
         if not isinstance(cookies, list):
@@ -388,10 +411,21 @@ class QuickFrameClient:
             pair = _valid_cookie_pair(item.get("name"), item.get("value"))
             if not pair:
                 continue
-            domain = str(item.get("domain") or "").strip() or ".quickframe.com"
+            domain = str(item.get("domain") or "").strip() or self._default_cookie_domain()
             path = str(item.get("path") or "/").strip() or "/"
             try:
                 self.s.cookies.set(pair[0], pair[1], domain=domain, path=path)
+            except Exception:
+                continue
+
+    def _seed_login_cookie_header(self) -> None:
+        target_url = self.challenge_url or self.login_identifier_url
+        host = str(urlparse(target_url).hostname or "").strip().lower()
+        if host != "login.quickframe.com":
+            return
+        for name, cookie_value in _cookie_pairs_from_header(self._cookie_header):
+            try:
+                self.s.cookies.set(name, cookie_value, domain=host, path="/")
             except Exception:
                 continue
 
@@ -451,26 +485,29 @@ class QuickFrameClient:
         origin: str = "",
         authorization: str = "",
         include_cookie: bool = True,
+        manual_cookie: bool = True,
+        document_navigation: bool = False,
     ) -> dict[str, str]:
         headers = {
             "accept": accept,
             "accept-language": "zh-HK,zh;q=0.9,en;q=0.8",
-            "referer": referer,
             "sec-ch-ua": QUICKFRAME_SEC_CH_UA,
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
             "user-agent": QUICKFRAME_USER_AGENT,
         }
+        if referer:
+            headers["referer"] = referer
         if content_type:
             headers["content-type"] = content_type
         if origin:
             headers["origin"] = origin
         if authorization:
             headers["authorization"] = authorization
-        if include_cookie:
-            cookie_header = self.cookie_header()
-            if cookie_header:
-                headers["cookie"] = cookie_header
+        if document_navigation:
+            headers["upgrade-insecure-requests"] = "1"
+        if include_cookie and manual_cookie and self._cookie_header and not self.cookie_records():
+            headers["cookie"] = self._cookie_header
         return headers
 
     def start_login(self, email: str, *, return_url: str | None = None, screen_hint: str = "") -> dict[str, Any]:
@@ -488,6 +525,8 @@ class QuickFrameClient:
                 accept="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 referer=target_return_url,
                 include_cookie=True,
+                manual_cookie=False,
+                document_navigation=True,
             ),
             allow_redirects=False,
         )
@@ -506,6 +545,8 @@ class QuickFrameClient:
                         accept="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                         referer=previous_url,
                         include_cookie=True,
+                        manual_cookie=False,
+                        document_navigation=True,
                     ),
                     allow_redirects=False,
                 )
@@ -559,6 +600,8 @@ class QuickFrameClient:
                 origin=QUICKFRAME_LOGIN_BASE,
                 referer=identifier_url,
                 include_cookie=True,
+                manual_cookie=False,
+                document_navigation=True,
             ),
             data=urlencode(form),
             allow_redirects=False,
@@ -582,6 +625,8 @@ class QuickFrameClient:
                 origin=QUICKFRAME_LOGIN_BASE,
                 referer=identifier_url,
                 include_cookie=True,
+                manual_cookie=False,
+                document_navigation=True,
             ),
             allow_redirects=False,
         )
@@ -610,6 +655,8 @@ class QuickFrameClient:
                 origin=QUICKFRAME_LOGIN_BASE,
                 referer=self.challenge_url,
                 include_cookie=True,
+                manual_cookie=False,
+                document_navigation=True,
             ),
             data=urlencode(form),
             allow_redirects=False,
@@ -639,13 +686,20 @@ class QuickFrameClient:
         current_url = start_url
         current_referer = referer
         for _ in range(10):
+            current = urlparse(current_url)
+            if current.hostname == "login.quickframe.com" and current.path.startswith("/v2/logout"):
+                raise RuntimeError("QuickFrame auth callback redirected to Auth0 logout; session was not established")
+            previous = urlparse(current_referer)
+            referer_header = current_referer if current.hostname == previous.hostname else ""
             response = self.s.get(
                 current_url,
                 headers=self._headers(
                     accept="text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    origin=QUICKFRAME_LOGIN_BASE if "login.quickframe.com" in current_referer else "",
-                    referer=current_referer,
+                    origin=QUICKFRAME_LOGIN_BASE,
+                    referer=referer_header,
                     include_cookie=True,
+                    manual_cookie=False,
+                    document_navigation=True,
                 ),
                 allow_redirects=False,
             )
