@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from core.base_platform import Account, RegisterConfig
+from core.base_platform import Account, BasePlatform, RegisterConfig
 from infrastructure.provider_settings_repository import ProviderSettingsRepository
 from providers.captcha.local_solver import LocalSolverCaptcha
 from platforms.windsurf.plugin import WindsurfPlatform
@@ -513,6 +513,68 @@ def test_local_solver_surfaces_unsolvable_error(monkeypatch):
     else:
         raise AssertionError("expected LocalSolver error")
     assert calls["count"] == 2
+
+
+def test_local_solver_forwards_proxy_to_solver(monkeypatch):
+    class FakeResponse:
+        def __init__(self, payload: dict):
+            self._payload = payload
+            self.status_code = 200
+            self.text = str(payload)
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    calls: list[dict] = []
+
+    def fake_get(url, params=None, timeout=0):
+        calls.append({"url": url, "params": dict(params or {})})
+        if url.endswith("/turnstile"):
+            return FakeResponse({"taskId": "task-123"})
+        return FakeResponse({"errorId": 0, "status": "ready", "solution": {"token": "tok_123"}})
+
+    import requests as requests_module
+    import time as time_module
+
+    monkeypatch.setattr(requests_module, "get", fake_get)
+    monkeypatch.setattr(time_module, "sleep", lambda seconds: None)
+
+    solver = LocalSolverCaptcha("http://localhost:8889", proxy_url="socks://127.0.0.1:20003")
+
+    assert solver.solve_turnstile("https://login.quickframe.com/u/login/identifier", "sitekey") == "tok_123"
+    assert calls[0]["params"]["proxy"] == "socks5://127.0.0.1:20003"
+
+
+def test_make_captcha_includes_register_proxy(monkeypatch):
+    captured: dict = {}
+
+    class DummyPlatform(BasePlatform):
+        name = "dummy"
+        display_name = "Dummy"
+        supported_executors = ["protocol"]
+        supported_identity_modes = ["mailbox"]
+
+        def check_valid(self, account):
+            return True
+
+    monkeypatch.setattr("core.registry.get_platform_capabilities", lambda name: {})
+    monkeypatch.setattr(DummyPlatform, "_prepare_captcha_provider", lambda self, provider_key: None)
+
+    def fake_create_captcha_solver(provider_key, extra=None):
+        captured["provider_key"] = provider_key
+        captured["extra"] = dict(extra or {})
+        return object()
+
+    monkeypatch.setattr("core.base_captcha.create_captcha_solver", fake_create_captcha_solver)
+
+    platform = DummyPlatform(RegisterConfig(executor_type="protocol", proxy="socks://127.0.0.1:20003"))
+    platform._make_captcha(provider_key="local_solver")
+
+    assert captured["provider_key"] == "local_solver"
+    assert captured["extra"]["proxy"] == "socks://127.0.0.1:20003"
 
 
 def test_windsurf_default_name_strips_digits_from_email_localpart():

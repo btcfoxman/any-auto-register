@@ -10,19 +10,33 @@ DEFAULT_SOLVER_URL = "http://localhost:8889"
 class LocalSolverCaptcha(BaseCaptcha):
     """调用本地 api_solver 服务解 Turnstile（Camoufox/patchright）"""
 
-    def __init__(self, solver_url: str = ""):
+    def __init__(self, solver_url: str = "", proxy_url: str = ""):
         self.solver_url = (solver_url or DEFAULT_SOLVER_URL).rstrip("/")
+        self.proxy_url = self._normalize_proxy_url(proxy_url)
 
     @classmethod
     def from_config(cls, config: dict) -> 'LocalSolverCaptcha':
-        return cls(str(config.get("solver_url", "") or ""))
+        return cls(
+            str(config.get("solver_url", "") or ""),
+            proxy_url=str(config.get("proxy") or config.get("proxy_url") or config.get("proxyUrl") or ""),
+        )
+
+    @staticmethod
+    def _normalize_proxy_url(value: str) -> str:
+        proxy = str(value or "").strip()
+        if proxy.lower().startswith("socks://"):
+            return f"socks5://{proxy.split('://', 1)[1]}"
+        return proxy
 
     def solve_turnstile(self, page_url: str, site_key: str) -> str:
         import requests, time
+        params = {"url": page_url, "sitekey": site_key}
+        if self.proxy_url:
+            params["proxy"] = self.proxy_url
         # 提交任务
         r = requests.get(
             f"{self.solver_url}/turnstile",
-            params={"url": page_url, "sitekey": site_key},
+            params=params,
             timeout=15,
         )
         r.raise_for_status()

@@ -335,7 +335,10 @@ class BasePlatform(ABC):
         if not provider_key:
             provider_key = self._resolve_captcha_solver()
         self._prepare_captcha_provider(provider_key)
-        return create_captcha_solver(provider_key, self.config.extra)
+        captcha_extra = dict(self.config.extra or {})
+        if self.config.proxy and not any(captcha_extra.get(key) for key in ("proxy", "proxy_url", "proxyUrl")):
+            captcha_extra["proxy"] = self.config.proxy
+        return create_captcha_solver(provider_key, captcha_extra)
 
     def _has_configured_captcha(self, solver_name: str) -> bool:
         from .base_captcha import has_captcha_configured

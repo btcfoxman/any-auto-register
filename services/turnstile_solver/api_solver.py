@@ -59,6 +59,15 @@ handler = logging.StreamHandler(sys.stdout)
 logger.addHandler(handler)
 
 
+def _normalize_proxy_url(value: Optional[str]) -> Optional[str]:
+    proxy = str(value or "").strip()
+    if not proxy:
+        return None
+    if proxy.lower().startswith("socks://"):
+        return f"socks5://{proxy.split('://', 1)[1]}"
+    return proxy
+
+
 class TurnstileAPIServer:
 
     def __init__(self, headless: bool, useragent: Optional[str], debug: bool, browser_type: str, thread: int, proxy_support: bool, use_random_config: bool = False, browser_name: Optional[str] = None, browser_version: Optional[str] = None):
@@ -621,9 +630,17 @@ class TurnstileAPIServer:
                 logger.debug(f"Browser {index}: Injected new CAPTCHA widget with sitekey: {websiteKey}")
         return result
 
-    async def _solve_turnstile(self, task_id: str, url: str, sitekey: str, action: Optional[str] = None, cdata: Optional[str] = None):
+    async def _solve_turnstile(
+        self,
+        task_id: str,
+        url: str,
+        sitekey: str,
+        action: Optional[str] = None,
+        cdata: Optional[str] = None,
+        proxy: Optional[str] = None,
+    ):
         """Solve the Turnstile challenge."""
-        proxy = None
+        proxy = _normalize_proxy_url(proxy)
 
         index, browser, browser_config = await self.browser_pool.get()
         
@@ -638,26 +655,27 @@ class TurnstileAPIServer:
             if self.debug:
                 logger.warning(f"Browser {index}: Cannot check browser state: {str(e)}")
 
-        if self.proxy_support:
+        if proxy or self.proxy_support:
             proxy_file_path = os.path.join(os.getcwd(), "proxies.txt")
 
-            try:
-                with open(proxy_file_path) as proxy_file:
-                    proxies = [line.strip() for line in proxy_file if line.strip()]
+            if not proxy and self.proxy_support:
+                try:
+                    with open(proxy_file_path) as proxy_file:
+                        proxies = [line.strip() for line in proxy_file if line.strip()]
 
-                proxy = random.choice(proxies) if proxies else None
-                
-                if self.debug and proxy:
-                    logger.debug(f"Browser {index}: Selected proxy: {proxy}")
-                elif self.debug and not proxy:
-                    logger.debug(f"Browser {index}: No proxies available")
-                    
-            except FileNotFoundError:
-                logger.warning(f"Proxy file not found: {proxy_file_path}")
-                proxy = None
-            except Exception as e:
-                logger.error(f"Error reading proxy file: {str(e)}")
-                proxy = None
+                    proxy = _normalize_proxy_url(random.choice(proxies) if proxies else None)
+
+                    if self.debug and proxy:
+                        logger.debug(f"Browser {index}: Selected proxy: {proxy}")
+                    elif self.debug and not proxy:
+                        logger.debug(f"Browser {index}: No proxies available")
+
+                except FileNotFoundError:
+                    logger.warning(f"Proxy file not found: {proxy_file_path}")
+                    proxy = None
+                except Exception as e:
+                    logger.error(f"Error reading proxy file: {str(e)}")
+                    proxy = None
 
             if proxy:
                 if '@' in proxy:
@@ -953,6 +971,7 @@ class TurnstileAPIServer:
         sitekey = request.args.get('sitekey')
         action = request.args.get('action')
         cdata = request.args.get('cdata')
+        proxy = _normalize_proxy_url(request.args.get('proxy'))
 
         if not url or not sitekey:
             return jsonify({
@@ -968,11 +987,21 @@ class TurnstileAPIServer:
             "url": url,
             "sitekey": sitekey,
             "action": action,
-            "cdata": cdata
+            "cdata": cdata,
+            "proxy": proxy
         })
 
         try:
-            asyncio.create_task(self._solve_turnstile(task_id=task_id, url=url, sitekey=sitekey, action=action, cdata=cdata))
+            asyncio.create_task(
+                self._solve_turnstile(
+                    task_id=task_id,
+                    url=url,
+                    sitekey=sitekey,
+                    action=action,
+                    cdata=cdata,
+                    proxy=proxy,
+                )
+            )
 
             if self.debug:
                 logger.debug(f"Request completed with taskid {task_id}.")
