@@ -3,12 +3,15 @@ from core.base_captcha import BaseCaptcha
 from providers.registry import register_provider
 
 
+DEFAULT_SOLVER_URL = "http://localhost:8889"
+
+
 @register_provider("captcha", "local_solver")
 class LocalSolverCaptcha(BaseCaptcha):
     """调用本地 api_solver 服务解 Turnstile（Camoufox/patchright）"""
 
     def __init__(self, solver_url: str = ""):
-        self.solver_url = solver_url.rstrip("/")
+        self.solver_url = (solver_url or DEFAULT_SOLVER_URL).rstrip("/")
 
     @classmethod
     def from_config(cls, config: dict) -> 'LocalSolverCaptcha':

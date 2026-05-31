@@ -11,9 +11,10 @@ class QuickFrameProtocolMailboxWorker:
         self,
         *,
         proxy: str | None = None,
+        turnstile_solver: Callable[[str, str], str] | None = None,
         log_fn: Callable[[str], None] = print,
     ):
-        self.client = QuickFrameClient(proxy=proxy, log_fn=log_fn)
+        self.client = QuickFrameClient(proxy=proxy, log_fn=log_fn, turnstile_solver=turnstile_solver)
         self.log = log_fn
 
     def run(self, *, email: str, otp_callback: Callable[[], str] | None) -> dict[str, Any]:

@@ -109,6 +109,7 @@ class QuickFramePlatform(BasePlatform):
     version = "1.0.0"
     supported_executors = ["protocol"]
     supported_identity_modes = ["mailbox"]
+    protocol_captcha_order = ("local_solver", "twocaptcha_api", "yescaptcha_api")
 
     def __init__(self, config: RegisterConfig = None, mailbox: BaseMailbox = None):
         super().__init__(config)
@@ -155,7 +156,11 @@ class QuickFramePlatform(BasePlatform):
         def _build_worker(ctx, artifacts):
             from platforms.quickframe.protocol_mailbox import QuickFrameProtocolMailboxWorker
 
-            return QuickFrameProtocolMailboxWorker(proxy=ctx.proxy, log_fn=ctx.log)
+            return QuickFrameProtocolMailboxWorker(
+                proxy=ctx.proxy,
+                turnstile_solver=ctx.platform.solve_turnstile_with_fallback,
+                log_fn=ctx.log,
+            )
 
         def _run_worker(worker, ctx, artifacts):
             return worker.run(email=ctx.identity.email, otp_callback=artifacts.otp_callback)
@@ -283,6 +288,7 @@ class QuickFramePlatform(BasePlatform):
             login_state=str(extra.get("quickframe_login_state") or ""),
             login_identifier_url=str(extra.get("quickframe_login_identifier_url") or ""),
             challenge_url=str(extra.get("quickframe_challenge_url") or ""),
+            turnstile_solver=self.solve_turnstile_with_fallback,
         )
 
     def _resolve_relogin_code(self, account: Account, params: dict[str, Any], client: QuickFrameClient, *, email: str) -> str:
@@ -419,7 +425,11 @@ class QuickFramePlatform(BasePlatform):
             email = str(params.get("email") or account.email or "").strip()
             if not email:
                 return {"ok": False, "error": "缺少 QuickFrame 邮箱地址"}
-            client = QuickFrameClient(proxy=self._proxy_for_account(account, params), log_fn=self.log)
+            client = QuickFrameClient(
+                proxy=self._proxy_for_account(account, params),
+                log_fn=self.log,
+                turnstile_solver=self.solve_turnstile_with_fallback,
+            )
             pending = client.begin_email_challenge(email)
             return {
                 "ok": True,

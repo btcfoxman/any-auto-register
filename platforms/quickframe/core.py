@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import html as html_lib
 import json
 import re
 import secrets
@@ -224,6 +225,33 @@ def _extract_form(html: str, preferred_field: str) -> tuple[str, dict[str, str]]
     return "", {}
 
 
+def _extract_turnstile_sitekey(html: str) -> str:
+    text = str(html or "")
+    candidates = [text]
+    try:
+        unescaped = html_lib.unescape(text)
+        if unescaped != text:
+            candidates.append(unescaped)
+    except Exception:
+        pass
+
+    patterns = (
+        r'data-captcha-sitekey=["\']([^"\']+)["\']',
+        r'data-sitekey=["\']([^"\']+)["\']',
+        r'["\']siteKey["\']\s*:\s*["\']([^"\']+)["\']',
+        r'["\']sitekey["\']\s*:\s*["\']([^"\']+)["\']',
+        r'["\']captchaSiteKey["\']\s*:\s*["\']([^"\']+)["\']',
+        r'["\']site_key["\']\s*:\s*["\']([^"\']+)["\']',
+        r"\b(0x4[A-Za-z0-9_-]{20,})\b",
+    )
+    for candidate in candidates:
+        for pattern in patterns:
+            match = re.search(pattern, candidate, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+    return ""
+
+
 def _query_state(url: str) -> str:
     try:
         parsed = urlparse(url)
@@ -387,6 +415,7 @@ class QuickFrameClient:
         login_identifier_url: str = "",
         challenge_url: str = "",
         return_url: str = QUICKFRAME_RETURN_URL,
+        turnstile_solver: Callable[[str, str], str] | Any = None,
     ):
         self._log = log_fn
         self._cookie_header = _cookie_header_from_any(cookie_header or cookies)
@@ -396,10 +425,13 @@ class QuickFrameClient:
         self.challenge_url = str(challenge_url or "").strip()
         self.login_identifier_form: dict[str, str] = {}
         self.challenge_form: dict[str, str] = {}
+        self.login_identifier_html = ""
+        self.challenge_html = ""
         self.return_url = str(return_url or QUICKFRAME_RETURN_URL).strip()
         self.previous_anonymous_id = ""
         self.visitor_id = ""
         self.event_id = ""
+        self.turnstile_solver = turnstile_solver
         proxies = {"http": proxy, "https": proxy} if proxy else None
         self.s = Session(impersonate="chrome", proxies=proxies, timeout=30)
         self.s.headers.update(
@@ -467,6 +499,42 @@ class QuickFrameClient:
             "visitorId": self.visitor_id,
             "eventId": self.event_id,
         }
+
+    def _solve_turnstile(self, page_url: str, sitekey: str) -> str:
+        solver = self.turnstile_solver
+        if not solver:
+            raise RuntimeError(
+                "QuickFrame Auth0 security challenge requires Turnstile captcha provider; "
+                "enable a captcha provider or use a browser-backed flow"
+            )
+        if callable(solver):
+            token = solver(page_url, sitekey)
+        elif hasattr(solver, "solve_turnstile"):
+            token = solver.solve_turnstile(page_url, sitekey)
+        else:
+            raise RuntimeError("QuickFrame Turnstile solver does not expose solve_turnstile")
+        token = str(token or "").strip()
+        if not token:
+            raise RuntimeError("QuickFrame Turnstile solver returned an empty token")
+        return token
+
+    def _prepare_auth0_captcha(self, form: dict[str, str], *, page_url: str, html: str, label: str) -> None:
+        captcha_fields = [
+            name
+            for name in ("captcha", "cf-turnstile-response")
+            if name in form and not str(form.get(name) or "").strip()
+        ]
+        if not captcha_fields:
+            return
+        sitekey = _extract_turnstile_sitekey(html)
+        if not sitekey:
+            raise RuntimeError(
+                f"QuickFrame Auth0 {label} requires captcha but the page did not expose a Turnstile sitekey"
+            )
+        self.log(f"QuickFrame Auth0 {label}: detected Turnstile security challenge")
+        token = self._solve_turnstile(page_url, sitekey)
+        for name in captcha_fields:
+            form[name] = token
 
     def cookie_records(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -601,6 +669,7 @@ class QuickFrameClient:
             self.login_state = state
             self.login_identifier_url = ""
             self.challenge_form = fields
+            self.challenge_html = html
             self.challenge_url = urljoin(current_url, action) if action else current_url
             return {"state": state, "identifier_url": "", "challenge_url": current_url}
         if "/u/login/identifier" not in current_url:
@@ -612,6 +681,7 @@ class QuickFrameClient:
             raise RuntimeError("QuickFrame login identifier page did not include state")
         self.login_state = state
         self.login_identifier_form = fields
+        self.login_identifier_html = html
         self.login_identifier_url = urljoin(current_url, action) if action else current_url
         return {"state": state, "identifier_url": self.login_identifier_url}
 
@@ -631,6 +701,7 @@ class QuickFrameClient:
         form.setdefault("webauthn-available", "true")
         form.setdefault("is-brave", "false")
         form.setdefault("webauthn-platform-available", "true")
+        self._prepare_auth0_captcha(form, page_url=identifier_url, html=self.login_identifier_html, label="identifier page")
         response = self.s.post(
             identifier_url,
             headers=self._headers(
@@ -675,6 +746,7 @@ class QuickFrameClient:
         html = _response_text(challenge)
         action, fields = _extract_form(html, "code")
         self.challenge_form = fields
+        self.challenge_html = html
         self.challenge_url = urljoin(challenge_url, action) if action else challenge_url
         self.login_state = str(fields.get("state") or "").strip() or _extract_html_state(html) or _query_state(challenge_url) or state
         return self.pending_login_state()
@@ -686,6 +758,12 @@ class QuickFrameClient:
         if not self.challenge_url or not self.login_state:
             raise RuntimeError("QuickFrame passwordless challenge state is missing; send login code first")
         form = {**self.challenge_form, "state": self.challenge_form.get("state") or self.login_state, "code": code}
+        self._prepare_auth0_captcha(
+            form,
+            page_url=self.challenge_url,
+            html=self.challenge_html,
+            label="passwordless challenge page",
+        )
         response = self.s.post(
             self.challenge_url,
             headers=self._headers(
