@@ -933,6 +933,13 @@ def _int_config(value: Any, default: int) -> int:
         return default
 
 
+def _normalize_proxy_url(value: Any) -> str:
+    proxy = str(value or "").strip()
+    if proxy.lower().startswith("socks://"):
+        return f"socks5://{proxy.split('://', 1)[1]}"
+    return proxy
+
+
 def _looks_like_proxy_network_error(error: Any) -> bool:
     text = str(error or "").strip().lower()
     if not text:
@@ -1054,7 +1061,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     email = payload.get("email") or None
     password = payload.get("password") or None
     extra = dict(payload.get("extra") or {})
-    proxy = str(payload.get("proxy") or "").strip() or None
+    proxy = _normalize_proxy_url(payload.get("proxy")) or None
     use_proxy_pool = _bool_config(
         payload.get("use_proxy_pool")
         or extra.get("use_proxy_pool")
@@ -1119,7 +1126,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     def _do_one(index: int) -> bool | str:
         if logger.is_cancel_requested():
             return "__cancel_requested__"
-        resolved_proxy = proxy or (proxy_pool.get_next() if use_proxy_pool else None)
+        resolved_proxy = proxy or (_normalize_proxy_url(proxy_pool.get_next()) if use_proxy_pool else None)
         platform = _build_platform_instance(platform_name, payload, logger, resolved_proxy=resolved_proxy, shared_mailbox=shared_mailbox)
         try:
             logger.log(f"开始注册第 {index + 1}/{count} 个账号")
@@ -1183,7 +1190,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
         elif use_proxy_pool:
             seen: set[str] = set()
             for _ in range(proxy_retry_attempts):
-                candidate = proxy_pool.get_next()
+                candidate = _normalize_proxy_url(proxy_pool.get_next())
                 if not candidate or candidate in seen:
                     continue
                 seen.add(candidate)

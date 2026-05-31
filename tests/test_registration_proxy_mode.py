@@ -114,6 +114,30 @@ def test_register_task_can_use_proxy_pool_and_persists_resolved_proxy(monkeypatc
     assert ("success", "http://user:pass@1.2.3.4:8080") in events
 
 
+def test_register_task_normalizes_socks_proxy_alias(monkeypatch):
+    saved: list[Account] = []
+    resolved: list[str | None] = []
+    _patch_register_task_common(monkeypatch, saved, resolved)
+    monkeypatch.setattr("core.proxy_pool.proxy_pool.get_next", lambda region="": (_ for _ in ()).throw(AssertionError("proxy pool called")))
+
+    logger = _Logger()
+    tasks._execute_register_task(
+        {
+            "platform": "lingya_qq",
+            "count": 1,
+            "concurrency": 1,
+            "executor_type": "manual_assisted",
+            "proxy": "socks://127.0.0.1:20003",
+            "extra": {"identity_provider": "manual_phone"},
+        },
+        logger,
+    )
+
+    assert logger.finished == tasks.TASK_STATUS_SUCCEEDED
+    assert resolved == ["socks5://127.0.0.1:20003"]
+    assert saved[0].extra["proxy_url"] == "socks5://127.0.0.1:20003"
+
+
 def test_register_task_prefetches_four_proxy_candidates_by_default(monkeypatch):
     saved: list[Account] = []
     resolved: list[str | None] = []
