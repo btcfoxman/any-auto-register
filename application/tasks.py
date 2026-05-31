@@ -521,6 +521,29 @@ def _auto_sync_freebeat2api(task_logger: TaskLogger, account) -> None:
         task_logger.log(f"  [Freebeat2API] auto sync error: {exc}", level="warning")
 
 
+def _auto_sync_quickframe2api(task_logger: TaskLogger, account) -> None:
+    if getattr(account, "platform", "") != "quickframe":
+        return
+    try:
+        from core.quickframe2api_sync import is_quickframe2api_configured, sync_account_to_quickframe2api
+
+        result = sync_account_to_quickframe2api(
+            account,
+            log_fn=task_logger.log,
+            heartbeat=True,
+            check=True,
+        )
+        if result:
+            task_logger.log("  [QuickFrame2API] QuickFrame account synced")
+        elif is_quickframe2api_configured():
+            task_logger.log(
+                "  [QuickFrame2API] auto sync skipped or failed; check quickframe2api_url/API key and previous warning logs",
+                level="warning",
+            )
+    except Exception as exc:
+        task_logger.log(f"  [QuickFrame2API] auto sync error: {exc}", level="warning")
+
+
 def _freebeat_has_sign_in_state(account) -> bool:
     extra = dict(getattr(account, "extra", {}) or {})
     overview = extra.get("account_overview") if isinstance(extra.get("account_overview"), dict) else {}
@@ -1045,7 +1068,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     target_success = count
     max_success = count + hero_extra_max if herosms_enabled and hero_reuse_to_max else count
     progress_total = max_success if herosms_enabled else count
-    proxy_retry_attempts = max(_int_config(payload.get("proxy_retry_attempts") or extra.get("proxy_retry_attempts"), 3), 1)
+    proxy_retry_attempts = max(_int_config(payload.get("proxy_retry_attempts") or extra.get("proxy_retry_attempts"), 4), 1)
     proxy_direct_fallback_value = payload.get("proxy_direct_fallback")
     if proxy_direct_fallback_value in (None, ""):
         proxy_direct_fallback_value = extra.get("proxy_direct_fallback")
@@ -1115,6 +1138,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 logger.log(f"  [Accounts] saved account id={saved_account_id} ({save_mode})")
             _auto_sync_lingya2api(logger, account)
             _auto_sync_freebeat2api(logger, account)
+            _auto_sync_quickframe2api(logger, account)
             _auto_followup_windsurf_payment(
                 platform_name=platform_name,
                 payload=payload,
@@ -1198,6 +1222,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                     logger.log(f"  [Accounts] saved account id={saved_account_id} ({save_mode})")
                 _auto_sync_lingya2api(logger, account)
                 _auto_sync_freebeat2api(logger, account)
+                _auto_sync_quickframe2api(logger, account)
                 _auto_followup_windsurf_payment(
                     platform_name=platform_name,
                     payload=payload,

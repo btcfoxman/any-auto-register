@@ -57,6 +57,14 @@ PERSISTED_ACTION_DATA_KEYS = {
     "vusession_expire_timestamp",
     "vusession_expire_in",
     "cookies",
+    "cookie_header",
+    "quickframe_cookies",
+    "quickframe_cookie_header",
+    "quickframe_pending_cookies",
+    "quickframe_pending_cookie_header",
+    "quickframe_login_state",
+    "quickframe_login_identifier_url",
+    "quickframe_challenge_url",
     *LINGYA_QQ_COOKIE_NAMES,
 }
 
@@ -69,6 +77,7 @@ STATEFUL_ACTION_IDS = {
     "keepalive_sync",
     "sync_lingya2api",
     "sync_freebeat2api",
+    "sync_quickframe2api",
     "daily_sign_in",
     "claim_questionnaire",
     "refresh_session",
@@ -280,6 +289,18 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             "freebeat_daily_sign_in_disabled_reason",
             "freebeat_daily_sign_in_disabled_at",
             "freebeat_daily_sign_in_resumed_at",
+            "freebeat_keepalive_disabled",
+            "freebeat_keepalive_state",
+            "freebeat_keepalive_disabled_reason",
+            "freebeat_keepalive_disabled_at",
+            "freebeat_keepalive_resumed_at",
+            "freebeat2api_enable_auto_maintenance",
+            "freebeat_retired",
+            "freebeat_retire_reason",
+            "freebeat_retire_credit_balance",
+            "freebeat_retire_credit_threshold",
+            "freebeat_retire_after_hours",
+            "freebeat_retired_at",
         ):
             if key in data and data.get(key) not in (None, ""):
                 overview[key] = data.get(key)
@@ -307,6 +328,57 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             overview["chips"].append("自动签到已停止")
         elif data.get("freebeat_daily_sign_in_disabled") is False:
             overview["chips"].append("自动签到已恢复")
+
+        if data.get("freebeat_keepalive_disabled") is True:
+            overview["chips"].append("自动保活已停止")
+        elif data.get("freebeat_keepalive_disabled") is False:
+            overview["chips"].append("自动保活已恢复")
+        if data.get("freebeat_retired") is True:
+            overview["chips"].append("低积分已退休")
+
+    if platform == "quickframe":
+        for key in (
+            "workspace_id",
+            "workspaceId",
+            "session_id",
+            "session_status",
+            "has_active_subscription",
+            "free_exports_remaining",
+            "token_type",
+            "token_expires_in",
+            "token_expires_at",
+            "last_keepalive_at",
+            "signup_source",
+            "has_premier_account",
+            "session_refreshed",
+            "quickframe2api_synced",
+            "quickframe_keepalive_disabled",
+            "quickframe_keepalive_state",
+            "quickframe_keepalive_disabled_reason",
+            "quickframe_keepalive_disabled_at",
+            "quickframe_keepalive_resumed_at",
+            "quickframe2api_enable_auto_maintenance",
+        ):
+            if key in data and data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if isinstance(data.get("usage_limits"), dict):
+            overview["usage_limits"] = data.get("usage_limits")
+        if isinstance(data.get("subscription_status"), dict):
+            overview["subscription_status"] = data.get("subscription_status")
+        if data.get("email"):
+            overview["remote_email"] = str(data.get("email") or "")
+        if data.get("free_exports_remaining") not in (None, ""):
+            overview["remaining_credits"] = str(data.get("free_exports_remaining"))
+        fixed_chips: list[str] = []
+        if data.get("free_exports_remaining") not in (None, ""):
+            fixed_chips.append(f"导出剩余 {data.get('free_exports_remaining')}")
+        if data.get("session_refreshed"):
+            fixed_chips.append("会话已刷新")
+        if data.get("quickframe_keepalive_disabled") is True:
+            fixed_chips.append("自动保活已停止")
+        elif data.get("quickframe_keepalive_disabled") is False:
+            fixed_chips.append("自动保活已恢复")
+        overview["chips"].extend(fixed_chips)
 
     if platform == "lingya_qq":
         for key in (
@@ -390,7 +462,14 @@ def _redact_cookie_result_data(data: Any) -> Any:
     if not isinstance(data, dict):
         return data
     redacted = dict(data)
-    for key in ("cookies", "cookie_header", "freebeat_cookies"):
+    for key in (
+        "cookies",
+        "cookie_header",
+        "freebeat_cookies",
+        "quickframe_cookies",
+        "quickframe_pending_cookies",
+        "quickframe_pending_cookie_header",
+    ):
         if key in redacted:
             redacted[key] = "***" if redacted.get(key) else ""
     return redacted

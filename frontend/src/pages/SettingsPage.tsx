@@ -367,8 +367,8 @@ export default function SettingsPage({
   const [searchParams] = useSearchParams()
   const tab = searchParams.get('tab') || 'general'
 
-  // Config center sub-tabs: register, mailbox, captcha, sms, lingya_qq, freebeat, chatgpt
-  const configTabs = ['register', 'mailbox', 'captcha', 'sms', 'lingya_qq', 'freebeat', 'chatgpt']
+  // Config center sub-tabs: register, mailbox, captcha, sms, lingya_qq, freebeat, quickframe, chatgpt
+  const configTabs = ['register', 'mailbox', 'captcha', 'sms', 'lingya_qq', 'freebeat', 'quickframe', 'chatgpt']
   const isConfigTab = configTabs.includes(tab)
 
   // Page title mapping

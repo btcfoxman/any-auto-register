@@ -54,6 +54,25 @@ def test_build_freebeat2api_payload_can_disable_remote_maintenance():
     assert payload["enable_auto_maintenance"] is False
 
 
+def test_build_freebeat2api_payload_disables_maintenance_for_retired_account():
+    account = Account(
+        platform="freebeat",
+        email="user@example.com",
+        password="",
+        extra={
+            "access_token": "tok_123",
+            "account_overview": {
+                "freebeat_retired": True,
+                "freebeat_keepalive_disabled": True,
+            },
+        },
+    )
+
+    payload = build_freebeat2api_payload(account, auto_maintenance_default=True)
+
+    assert payload["enable_auto_maintenance"] is False
+
+
 def test_build_freebeat2api_payload_accepts_proxy_aliases():
     account = Account(
         platform="freebeat",

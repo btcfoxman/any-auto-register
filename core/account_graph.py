@@ -69,6 +69,7 @@ PRIMARY_TOKEN_WRITE_KEYS: dict[str, str] = {
     "openblocklabs": "wos_session",
     "lingya_qq": "vusession",
     "freebeat": "access_token",
+    "quickframe": "access_token",
 }
 
 NON_LEGACY_EXTRA_KEYS = {

@@ -1,8 +1,8 @@
-"""Sync Freebeat accounts to a freebeat2api instance."""
+"""Sync QuickFrame accounts to a quickframe2api instance."""
 from __future__ import annotations
 
-import logging
 import json
+import logging
 from typing import Any
 
 import requests
@@ -11,7 +11,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 
-class Freebeat2ApiClient:
+class QuickFrame2ApiClient:
     def __init__(self, base_url: str, api_key: str = "", *, timeout: int = 15):
         self.base_url = str(base_url or "").rstrip("/")
         self.api_key = str(api_key or "").strip()
@@ -53,13 +53,6 @@ class Freebeat2ApiClient:
 
     def heartbeat(self, account_id: int) -> dict[str, Any]:
         return self._post(f"/api/accounts/{int(account_id)}/heartbeat")
-
-    def refresh_balance(self, account_id: int) -> dict[str, Any]:
-        data = self._get(f"/api/accounts/{int(account_id)}/balance")
-        return data if isinstance(data, dict) else {"data": data}
-
-    def sign_in(self, account_id: int) -> dict[str, Any]:
-        return self._post(f"/api/accounts/{int(account_id)}/sign-in")
 
     def check_account(self, account_id: int) -> dict[str, Any]:
         return self._post(f"/api/accounts/{int(account_id)}/check")
@@ -112,13 +105,6 @@ def _cookie_header_from_any(value: Any) -> str:
     return "; ".join(dict.fromkeys(pairs))
 
 
-def _auth_token_cookie(token: str) -> str:
-    token_text = _text(token)
-    if not token_text or any(ch in token_text for ch in ";\r\n"):
-        return ""
-    return f"authToken={token_text}"
-
-
 def _as_bool(value: Any, default: bool = True) -> bool:
     if value in (None, ""):
         return default
@@ -150,25 +136,25 @@ def _merged_extra(account: Any, extra_overrides: dict[str, Any] | None = None) -
     return extra
 
 
-def _get_freebeat2api_config() -> tuple[str, str, int, bool]:
+def _get_quickframe2api_config() -> tuple[str, str, int, bool]:
     try:
         from core.config_store import config_store
 
-        base_url = config_store.get("freebeat2api_url", "")
-        api_key = config_store.get("freebeat2api_api_key", "")
-        max_concurrency = _clamp_concurrency(config_store.get("freebeat2api_max_concurrency", "1"))
-        auto_maintenance = _as_bool(config_store.get("freebeat2api_enable_auto_maintenance", ""), True)
+        base_url = config_store.get("quickframe2api_url", "")
+        api_key = config_store.get("quickframe2api_api_key", "")
+        max_concurrency = _clamp_concurrency(config_store.get("quickframe2api_max_concurrency", "1"))
+        auto_maintenance = _as_bool(config_store.get("quickframe2api_enable_auto_maintenance", ""), True)
         return base_url, api_key, max_concurrency, auto_maintenance
     except Exception:
         return "", "", 1, True
 
 
-def is_freebeat2api_configured() -> bool:
-    base_url, _, _, _ = _get_freebeat2api_config()
+def is_quickframe2api_configured() -> bool:
+    base_url, _, _, _ = _get_quickframe2api_config()
     return bool(_text(base_url))
 
 
-def build_freebeat2api_payload(
+def build_quickframe2api_payload(
     account: Any,
     *,
     max_concurrency: int = 1,
@@ -179,14 +165,18 @@ def build_freebeat2api_payload(
     token = _first_text(
         extra.get("access_token"),
         extra.get("accessToken"),
+        extra.get("quickframe_access_token"),
         extra.get("token"),
         getattr(account, "token", ""),
-        extra.get("legacy_token"),
-        extra.get("device_token"),
-        extra.get("deviceToken"),
     )
-    if not token:
-        raise ValueError("Freebeat account is missing token; relogin before syncing to freebeat2api")
+    cookies = _cookie_header_from_any(
+        extra.get("cookies")
+        or extra.get("cookie_header")
+        or extra.get("quickframe_cookies")
+        or extra.get("quickframe_cookie_header")
+    )
+    if not token and not cookies:
+        raise ValueError("QuickFrame account is missing token/cookies; relogin before syncing to quickframe2api")
 
     email = _first_text(extra.get("email"), getattr(account, "email", ""))
     user_id = _first_text(
@@ -195,144 +185,105 @@ def build_freebeat2api_payload(
         extra.get("account_id"),
         getattr(account, "user_id", ""),
     )
-    name = _first_text(extra.get("freebeat2api_name"), email, user_id)
+    workspace_id = _first_text(extra.get("workspace_id"), extra.get("workspaceId"))
+    name = _first_text(extra.get("quickframe2api_name"), email, user_id, workspace_id)
     if not name:
-        raise ValueError("Freebeat account has no usable freebeat2api account name")
-    cookies = _cookie_header_from_any(
-        extra.get("cookies")
-        or extra.get("cookie_header")
-        or extra.get("freebeat_cookies")
-        or extra.get("freebeat_cookie_header")
-    ) or _auth_token_cookie(token)
+        raise ValueError("QuickFrame account has no usable quickframe2api account name")
+
     auto_maintenance_enabled = _as_bool(
-        extra.get("freebeat2api_enable_auto_maintenance"),
+        extra.get("quickframe2api_enable_auto_maintenance"),
         auto_maintenance_default,
     )
-    if _as_bool(extra.get("freebeat_keepalive_disabled"), False) or _as_bool(extra.get("freebeat_retired"), False):
+    if _as_bool(extra.get("quickframe_keepalive_disabled"), False) or _as_bool(extra.get("quickframe_retired"), False):
         auto_maintenance_enabled = False
 
     return {
         "name": name[:80],
         "token": token,
+        "access_token": token,
         "email": email,
         "user_id": user_id,
+        "workspace_id": workspace_id,
         "user_agent": _text(extra.get("user_agent")),
         "sec_ch_ua": _text(extra.get("sec_ch_ua")),
         "sec_ch_ua_platform": _text(extra.get("sec_ch_ua_platform")),
         "cookies": cookies,
         "cookie_header": cookies,
         "proxy_url": _text(
-            extra.get("freebeat2api_proxy_url")
+            extra.get("quickframe2api_proxy_url")
             or extra.get("proxy_url")
             or extra.get("proxyUrl")
             or extra.get("resolved_proxy")
             or extra.get("proxy")
         ),
-        "enabled": _as_bool(extra.get("freebeat2api_enabled"), True),
+        "enabled": _as_bool(extra.get("quickframe2api_enabled"), True),
         "enable_auto_maintenance": auto_maintenance_enabled,
-        "max_concurrency": _clamp_concurrency(extra.get("freebeat2api_max_concurrency"), max_concurrency),
+        "max_concurrency": _clamp_concurrency(extra.get("quickframe2api_max_concurrency"), max_concurrency),
+        "session_id": _text(extra.get("session_id")),
+        "session_status": _text(extra.get("session_status")),
+        "free_exports_remaining": extra.get("free_exports_remaining"),
+        "has_active_subscription": bool(extra.get("has_active_subscription")),
+        "token_expires_at": _text(extra.get("token_expires_at")),
     }
 
 
-def sync_account_to_freebeat2api(
+def sync_account_to_quickframe2api(
     account: Any,
     *,
     log_fn=None,
     heartbeat: bool = False,
-    balance: bool = False,
-    sign_in: bool = False,
     check: bool = False,
     extra_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any] | bool:
     log = log_fn or logger.info
-    base_url, api_key, max_concurrency, auto_maintenance_default = _get_freebeat2api_config()
+    base_url, api_key, max_concurrency, auto_maintenance_default = _get_quickframe2api_config()
     if not base_url:
         return False
 
     try:
-        payload = build_freebeat2api_payload(
+        payload = build_quickframe2api_payload(
             account,
             max_concurrency=max_concurrency,
             auto_maintenance_default=auto_maintenance_default,
             extra_overrides=extra_overrides,
         )
-        client = Freebeat2ApiClient(base_url, api_key)
+        client = QuickFrame2ApiClient(base_url, api_key)
         account_result = client.upsert_account(payload)
         account_id = int(account_result.get("id") or account_result.get("account_id") or 0)
         heartbeat_result = (
-            _optional_freebeat2api_call(log, "heartbeat", lambda: client.heartbeat(account_id))
+            _optional_quickframe2api_call(log, "heartbeat", lambda: client.heartbeat(account_id))
             if heartbeat and account_id > 0
             else None
         )
-        balance_result = (
-            _optional_freebeat2api_call(log, "balance", lambda: client.refresh_balance(account_id))
-            if balance and account_id > 0
-            else None
-        )
-        sign_in_result = (
-            _optional_freebeat2api_call(log, "sign-in", lambda: client.sign_in(account_id))
-            if sign_in and account_id > 0
-            else None
-        )
         check_result = (
-            _optional_freebeat2api_call(log, "check", lambda: client.check_account(account_id))
+            _optional_quickframe2api_call(log, "check", lambda: client.check_account(account_id))
             if check and account_id > 0
             else None
         )
-        log(f"  [Freebeat2API] synced Freebeat account: {payload['name']}")
+        log(f"  [QuickFrame2API] synced QuickFrame account: {payload['name']}")
         return {
             "ok": True,
             "account": account_result,
             "heartbeat": heartbeat_result,
-            "balance": balance_result,
-            "sign_in": sign_in_result,
             "check": check_result,
             "payload": {
                 **payload,
-                "token": "***",
+                "token": "***" if payload.get("token") else "",
+                "access_token": "***" if payload.get("access_token") else "",
                 "cookies": "***" if payload.get("cookies") else "",
                 "cookie_header": "***" if payload.get("cookie_header") else "",
             },
         }
     except Exception as exc:
-        log(f"  [Freebeat2API] sync failed: {exc}")
+        log(f"  [QuickFrame2API] sync failed: {exc}")
         return False
 
 
-def _optional_freebeat2api_call(log_fn, label: str, call) -> dict[str, Any]:
+def _optional_quickframe2api_call(log_fn, label: str, call) -> dict[str, Any]:
     try:
         data = call()
         return data if isinstance(data, dict) else {"data": data}
     except Exception as exc:
         error = str(exc)
-        log_fn(f"  [Freebeat2API] {label} refresh failed after account sync: {error}")
+        log_fn(f"  [QuickFrame2API] {label} failed after account sync: {error}")
         return {"ok": False, "error": error}
-
-
-def get_freebeat2api_account_snapshot(account: Any, *, log_fn=None) -> dict[str, Any] | None:
-    log = log_fn or logger.info
-    base_url, api_key, max_concurrency, auto_maintenance_default = _get_freebeat2api_config()
-    if not base_url:
-        return None
-    try:
-        payload = build_freebeat2api_payload(
-            account,
-            max_concurrency=max_concurrency,
-            auto_maintenance_default=auto_maintenance_default,
-        )
-        expected_name = _text(payload.get("name"))
-        expected_email = _text(payload.get("email"))
-        expected_user_id = _text(payload.get("user_id"))
-        client = Freebeat2ApiClient(base_url, api_key)
-        for item in client.list_accounts():
-            if not isinstance(item, dict):
-                continue
-            if expected_name and _text(item.get("name")) == expected_name:
-                return item
-            if expected_email and _text(item.get("email")) == expected_email:
-                return item
-            if expected_user_id and _text(item.get("user_id")) == expected_user_id:
-                return item
-    except Exception as exc:
-        log(f"  [Freebeat2API] account snapshot failed: {exc}")
-    return None

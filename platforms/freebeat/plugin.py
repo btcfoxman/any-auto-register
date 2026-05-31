@@ -250,6 +250,14 @@ class FreebeatPlatform(BasePlatform):
                 ],
             },
             {
+                "id": "stop_keepalive",
+                "label": "停止自动保活",
+                "params": [
+                    {"key": "reason", "label": "原因", "type": "text"},
+                ],
+            },
+            {"id": "resume_keepalive", "label": "恢复自动保活", "params": []},
+            {
                 "id": "sync_freebeat2api",
                 "label": "同步到 Freebeat2API",
                 "params": [
@@ -417,6 +425,30 @@ class FreebeatPlatform(BasePlatform):
             data["freebeat2api"] = sync_result
         return {"ok": True, "data": data}
 
+    def _handle_keepalive_preference(self, account: Account, params: dict | None = None, *, disabled: bool) -> dict:
+        params = dict(params or {})
+        now = _utcnow_iso()
+        reason = str(params.get("reason") or "manual").strip()
+        data: dict[str, Any] = {
+            "valid": True,
+            "email": account.email,
+            "freebeat_keepalive_disabled": bool(disabled),
+            "freebeat_keepalive_state": "disabled" if disabled else "enabled",
+            "freebeat_keepalive_disabled_reason": reason if disabled else "",
+            "freebeat_keepalive_disabled_at": now if disabled else "",
+            "freebeat_keepalive_resumed_at": "" if disabled else now,
+            "freebeat2api_enable_auto_maintenance": not disabled,
+            "message": "Freebeat 自动保活已停止" if disabled else "Freebeat 自动保活已恢复",
+        }
+        sync_result = sync_account_to_freebeat2api(
+            _account_with_extra(account, {**dict(account.extra or {}), **_with_sync_proxy(account, params, data)}),
+            log_fn=self.log,
+        )
+        data["freebeat2api_synced"] = bool(sync_result)
+        if sync_result:
+            data["freebeat2api"] = sync_result
+        return {"ok": True, "data": data}
+
     def execute_action(self, action_id: str, account: Account, params: dict) -> dict:
         params = dict(params or {})
 
@@ -425,6 +457,20 @@ class FreebeatPlatform(BasePlatform):
             return {"ok": True, "data": _attach_auth_state(dict(state.get("summary") or {}), state)}
 
         if action_id == "keepalive_sync":
+            overview = dict((account.extra or {}).get("account_overview") or {})
+            if _truthy(overview.get("freebeat_keepalive_disabled"), False) and not _truthy(params.get("force"), False):
+                return {
+                    "ok": True,
+                    "data": {
+                        "valid": True,
+                        "email": account.email,
+                        "freebeat_keepalive_disabled": True,
+                        "freebeat_keepalive_state": "disabled",
+                        "freebeat_keepalive_disabled_reason": str(overview.get("freebeat_keepalive_disabled_reason") or ""),
+                        "freebeat2api_enable_auto_maintenance": False,
+                        "message": "Freebeat 自动保活已停止",
+                    },
+                }
             state = self._load_state(
                 account,
                 force_refresh=_truthy(params.get("force_refresh"), False),
@@ -445,6 +491,12 @@ class FreebeatPlatform(BasePlatform):
             if sync_result:
                 data["freebeat2api"] = sync_result
             return {"ok": True, "data": data}
+
+        if action_id == "stop_keepalive":
+            return self._handle_keepalive_preference(account, params, disabled=True)
+
+        if action_id == "resume_keepalive":
+            return self._handle_keepalive_preference(account, params, disabled=False)
 
         if action_id == "daily_sign_in":
             context_state = self._load_state(account)

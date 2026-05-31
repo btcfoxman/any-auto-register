@@ -114,6 +114,52 @@ def test_register_task_can_use_proxy_pool_and_persists_resolved_proxy(monkeypatc
     assert ("success", "http://user:pass@1.2.3.4:8080") in events
 
 
+def test_register_task_prefetches_four_proxy_candidates_by_default(monkeypatch):
+    saved: list[Account] = []
+    resolved: list[str | None] = []
+    _patch_register_task_common(monkeypatch, saved, resolved)
+
+    proxies = iter([
+        "http://proxy-1:8080",
+        "http://proxy-2:8080",
+        "http://proxy-3:8080",
+        "http://proxy-4:8080",
+        "http://proxy-5:8080",
+    ])
+    calls: list[str] = []
+
+    def fake_get_next(region: str = ""):
+        proxy = next(proxies)
+        calls.append(proxy)
+        return proxy
+
+    monkeypatch.setattr("core.proxy_pool.proxy_pool.get_next", fake_get_next)
+    monkeypatch.setattr("core.proxy_pool.proxy_pool.report_success", lambda url: None)
+    monkeypatch.setattr("core.proxy_pool.proxy_pool.report_fail", lambda url: None)
+
+    logger = _Logger()
+    tasks._execute_register_task(
+        {
+            "platform": "lingya_qq",
+            "count": 1,
+            "concurrency": 1,
+            "executor_type": "manual_assisted",
+            "use_proxy_pool": True,
+            "extra": {"identity_provider": "manual_phone"},
+        },
+        logger,
+    )
+
+    assert logger.finished == tasks.TASK_STATUS_SUCCEEDED
+    assert calls == [
+        "http://proxy-1:8080",
+        "http://proxy-2:8080",
+        "http://proxy-3:8080",
+        "http://proxy-4:8080",
+    ]
+    assert resolved == ["http://proxy-1:8080"]
+
+
 def test_freebeat_register_falls_back_direct_after_proxy_network_failure(monkeypatch):
     saved: list[Account] = []
     resolved: list[str | None] = []

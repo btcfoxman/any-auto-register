@@ -20,10 +20,13 @@ def _create_freebeat_account(
     lifecycle_status: str = "registered",
     valid: bool | None = True,
     with_token: bool = True,
+    created_at: datetime | None = None,
     overview_updates: dict | None = None,
 ) -> int:
     with Session(engine) as session:
         model = AccountModel(platform="freebeat", email=email, password="")
+        if created_at is not None:
+            model.created_at = created_at
         session.add(model)
         session.commit()
         session.refresh(model)
@@ -140,3 +143,49 @@ def test_freebeat_daily_signin_skips_signed_until_future_refresh():
 
     assert account_id not in set(FreebeatDailySignInWorker()._target_account_ids())
 
+
+def test_freebeat_daily_signin_retires_old_low_credit_accounts(monkeypatch):
+    old_created_at = datetime.now(timezone.utc) - timedelta(hours=25)
+    low_id = _create_freebeat_account(
+        "old-low-credit@example.com",
+        created_at=old_created_at,
+        overview_updates={"total_credits": 299},
+    )
+    fresh_id = _create_freebeat_account(
+        "fresh-low-credit@example.com",
+        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        overview_updates={"total_credits": 299},
+    )
+    enough_id = _create_freebeat_account(
+        "old-enough-credit@example.com",
+        created_at=old_created_at,
+        overview_updates={"total_credits": 300},
+    )
+
+    worker = FreebeatDailySignInWorker()
+    monkeypatch.setattr(worker, "_config", lambda: {
+        "freebeat_retire_low_credit_enabled": "true",
+        "freebeat_retire_credit_threshold": "300",
+        "freebeat_retire_after_hours": "24",
+    })
+    monkeypatch.setattr(worker, "_sync_retired_remote_auto_maintenance", lambda account_id: None)
+
+    targets = set(worker._target_account_ids())
+
+    assert low_id not in targets
+    assert fresh_id in targets
+    assert enough_id in targets
+
+    with Session(engine) as session:
+        graph = load_account_graphs(session, [low_id])[low_id]
+        overview = graph["overview"]
+
+    assert graph["lifecycle_status"] == "expired"
+    assert overview["freebeat_retired"] is True
+    assert overview["freebeat_retire_reason"] == "low_credits_after_age"
+    assert overview["freebeat_retire_credit_balance"] == 299
+    assert overview["freebeat_retire_credit_threshold"] == 300
+    assert overview["freebeat_retire_after_hours"] == 24
+    assert overview["freebeat_daily_sign_in_disabled"] is True
+    assert overview["freebeat_keepalive_disabled"] is True
+    assert overview["freebeat2api_enable_auto_maintenance"] is False

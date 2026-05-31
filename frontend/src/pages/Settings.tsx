@@ -337,6 +337,26 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
     }],
   },
   {
+    id: 'quickframe', label: 'QuickFrame', icon: Shield,
+    sections: [{
+      section: 'QuickFrame 自动心跳保活',
+      desc: '按捕获记录执行 /session、/token、auth.checkSession 保活链路，并同步下游状态。',
+      items: [
+        { key: 'quickframe_keepalive_enabled', label: '启用自动保活', placeholder: 'true' },
+        { key: 'quickframe_heartbeat_interval_seconds', label: '心跳间隔秒数', placeholder: '300' },
+      ],
+    }, {
+      section: 'QuickFrame2API',
+      desc: '同步 QuickFrame token、Cookie、账号状态到 quickframe2api，供下游自动化使用。',
+      items: [
+        { key: 'quickframe2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8789' },
+        { key: 'quickframe2api_api_key', label: '接口密钥', placeholder: 'sk-test-api-key', secret: true },
+        { key: 'quickframe2api_max_concurrency', label: '最大并发', placeholder: '1' },
+        { key: 'quickframe2api_enable_auto_maintenance', label: '启用远端维护', placeholder: 'true' },
+      ],
+    }],
+  },
+  {
     id: 'platform_caps', label: '高级：平台能力', icon: Sliders,
     sections: [],
   },

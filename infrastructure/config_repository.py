@@ -28,6 +28,9 @@ class ConfigRepository:
         "freebeat_auto_questionnaire",
         "freebeat2api_url", "freebeat2api_api_key", "freebeat2api_max_concurrency",
         "freebeat2api_enable_auto_maintenance",
+        "quickframe_keepalive_enabled", "quickframe_heartbeat_interval_seconds",
+        "quickframe2api_url", "quickframe2api_api_key", "quickframe2api_max_concurrency",
+        "quickframe2api_enable_auto_maintenance",
     }
 
     def __init__(self, definitions: ProviderDefinitionsRepository | None = None):

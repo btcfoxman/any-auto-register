@@ -1036,3 +1036,47 @@ def test_freebeat_stop_and_resume_daily_signin_persist_account_marker():
         graph = load_account_graphs(session, [account_id])[account_id]
     assert graph["overview"]["freebeat_daily_sign_in_disabled"] is False
     assert graph["overview"]["freebeat_daily_sign_in_state"] == "enabled"
+
+
+def test_freebeat_stop_and_resume_keepalive_persist_account_marker(monkeypatch):
+    monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", lambda *args, **kwargs: False)
+    with Session(engine) as session:
+        model = AccountModel(platform="freebeat", email="keepalive@example.com", password="")
+        session.add(model)
+        session.commit()
+        session.refresh(model)
+        account_id = int(model.id or 0)
+
+    runtime = PlatformRuntime()
+
+    stop_result = runtime.execute_action(
+        ActionExecutionCommand(
+            platform="freebeat",
+            account_id=account_id,
+            action_id="stop_keepalive",
+            params={"reason": "manual"},
+        )
+    )
+
+    assert stop_result.ok is True
+    with Session(engine) as session:
+        graph = load_account_graphs(session, [account_id])[account_id]
+    assert graph["overview"]["freebeat_keepalive_disabled"] is True
+    assert graph["overview"]["freebeat_keepalive_state"] == "disabled"
+    assert graph["overview"]["freebeat2api_enable_auto_maintenance"] is False
+
+    resume_result = runtime.execute_action(
+        ActionExecutionCommand(
+            platform="freebeat",
+            account_id=account_id,
+            action_id="resume_keepalive",
+            params={},
+        )
+    )
+
+    assert resume_result.ok is True
+    with Session(engine) as session:
+        graph = load_account_graphs(session, [account_id])[account_id]
+    assert graph["overview"]["freebeat_keepalive_disabled"] is False
+    assert graph["overview"]["freebeat_keepalive_state"] == "enabled"
+    assert graph["overview"]["freebeat2api_enable_auto_maintenance"] is True
