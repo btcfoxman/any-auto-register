@@ -233,6 +233,51 @@ def test_quickframe_summary_maps_captured_session_token_and_billing_shape():
     assert "Workspace 47784" in summary["chips"]
 
 
+def test_quickframe_fetch_account_state_issues_token_when_session_has_user_without_active_flag(monkeypatch):
+    calls: list[str] = []
+    client = QuickFrameClient(log_fn=lambda message: None)
+
+    def fake_issue_token():
+        calls.append("token")
+        client.access_token = "tok_123"
+        return {"accessToken": "tok_123", "tokenType": "Bearer", "expiresIn": 86387}
+
+    def fake_trpc_get(procedures, input_data=None, *, token=""):
+        calls.append(str(procedures))
+        if procedures == "auth.checkSession":
+            return [{"result": {"data": {"email": "new@example.com", "id": 108334, "workspaceId": 47784}}}]
+        if isinstance(procedures, list) and "billing.getSubscriptionStatus" in procedures:
+            return [
+                {"result": {"data": []}},
+                {"result": {"data": {"hasActiveSubscription": False, "freeExportsRemaining": 1}}},
+                {"result": {"data": {"email": "new@example.com", "id": 108334, "workspaceId": 47784}}},
+            ]
+        return [{"result": {"data": {}}}, {"result": {"data": {}}}]
+
+    monkeypatch.setattr(
+        client,
+        "get_session",
+        lambda: {
+            "user": {
+                "id": "email|abc",
+                "email": "new@example.com",
+                "primaryEmailAddress": {"emailAddress": "new@example.com"},
+            },
+            "session": {"id": "sess_123"},
+        },
+    )
+    monkeypatch.setattr(client, "issue_token", fake_issue_token)
+    monkeypatch.setattr(client, "trpc_get", fake_trpc_get)
+
+    state = client.fetch_account_state(force_refresh=True)
+
+    assert calls[0] == "token"
+    assert state["access_token"] == "tok_123"
+    assert state["summary"]["valid"] is True
+    assert state["summary"]["email"] == "new@example.com"
+    assert state["summary"]["workspace_id"] == "47784"
+
+
 def test_quickframe_wss_subscription_helpers_follow_captured_terminal_rules():
     frames = quickframe_effect_subscription_messages("jwt_123", "eg-107384-1780242096729", subscription_id=12)
 

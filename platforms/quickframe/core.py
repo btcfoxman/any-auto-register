@@ -231,6 +231,25 @@ def _first_trpc_data(payload: Any, index: int = 0) -> Any:
     return None
 
 
+def _session_user_email(user: dict[str, Any]) -> str:
+    primary = user.get("primaryEmailAddress")
+    primary_email = primary.get("emailAddress") if isinstance(primary, dict) else primary
+    return str(user.get("email") or primary_email or "").strip()
+
+
+def _quickframe_session_active(session_info: dict[str, Any]) -> bool:
+    session = session_info.get("session") if isinstance(session_info.get("session"), dict) else {}
+    user = session_info.get("user") if isinstance(session_info.get("user"), dict) else {}
+    status = str(session.get("status") or session_info.get("status") or "").strip().lower()
+    if status in {"inactive", "expired", "invalid", "unauthenticated", "anonymous"}:
+        return False
+    if bool(session.get("active") or session_info.get("active") or session_info.get("authenticated") or session_info.get("isAuthenticated")):
+        return True
+    if status in {"active", "authenticated", "valid"}:
+        return True
+    return bool(user.get("id") or _session_user_email(user))
+
+
 def quickframe_effect_subscription_messages(
     access_token: str,
     run_id: str,
@@ -706,15 +725,20 @@ class QuickFrameClient:
 
     def fetch_account_state(self, *, force_refresh: bool = False) -> dict[str, Any]:
         session_info = self.get_session()
-        session = session_info.get("session") if isinstance(session_info.get("session"), dict) else {}
-        active = bool(session.get("active") or str(session.get("status") or "").lower() == "active")
+        active = _quickframe_session_active(session_info)
         token_info: dict[str, Any] = {}
         if active and (force_refresh or not self.access_token):
             token_info = self.issue_token()
         elif self.access_token:
             token_info = {"accessToken": self.access_token, "tokenType": "Bearer", "expiresIn": 0}
         if not self.access_token:
-            raise RuntimeError("QuickFrame active session did not produce an access token")
+            session = session_info.get("session") if isinstance(session_info.get("session"), dict) else {}
+            user = session_info.get("user") if isinstance(session_info.get("user"), dict) else {}
+            raise RuntimeError(
+                "QuickFrame session did not produce an access token; "
+                f"session_status={session.get('status') or session_info.get('status') or '-'}; "
+                f"has_user={bool(user.get('id') or _session_user_email(user))}"
+            )
 
         check_payload = self.trpc_get("auth.checkSession")
         combined_payload: Any = []
@@ -763,13 +787,13 @@ def summarize_quickframe_account_state(state: dict[str, Any], *, fallback_email:
     token_info = state.get("token_info") if isinstance(state.get("token_info"), dict) else {}
     token = str(state.get("access_token") or token_info.get("accessToken") or "").strip()
     jwt = _jwt_payload(token)
-    active = bool(session.get("active") or str(session.get("status") or "").lower() == "active")
+    active = _quickframe_session_active(session_info)
     user_id = str(check_session.get("id") or check_session.get("actualUserId") or "").strip()
     workspace_id = str(check_session.get("workspaceId") or "").strip()
     email = str(
         check_session.get("email")
         or session_user.get("email")
-        or session_user.get("primaryEmailAddress")
+        or _session_user_email(session_user)
         or jwt.get("mntn_email")
         or fallback_email
         or ""
