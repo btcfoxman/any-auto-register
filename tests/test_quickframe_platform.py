@@ -441,6 +441,38 @@ def test_quickframe_follow_login_redirects_rejects_auth0_logout():
         raise AssertionError("expected Auth0 logout redirect to fail")
 
 
+def test_quickframe_follow_login_redirects_reports_signup_unavailable():
+    calls: list[str] = []
+    client = QuickFrameClient(log_fn=lambda message: None)
+    responses = [
+        Response(
+            status_code=302,
+            headers={"location": "https://server.cs.quickframe.com/auth/callback?code=code-123&state=state-123"},
+        ),
+        Response(status_code=302, headers={"location": "https://login.quickframe.com/v2/logout?client_id=client"}),
+        Response(status_code=302, headers={"location": "https://ai.quickframe.com/?auth_error=signup_unavailable"}),
+    ]
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        return responses.pop(0)
+
+    client.s.get = fake_get
+
+    try:
+        client._follow_login_redirects(
+            "https://login.quickframe.com/authorize/resume?state=resume-123",
+            referer="https://login.quickframe.com/u/login/passwordless-email-challenge?state=challenge-123",
+        )
+    except RuntimeError as exc:
+        assert "signup_unavailable" in str(exc)
+        assert "not usable" in str(exc)
+    else:
+        raise AssertionError("expected signup_unavailable redirect to fail")
+
+    assert calls[-1].startswith("https://login.quickframe.com/v2/logout")
+
+
 def test_quickframe_summary_maps_captured_session_token_and_billing_shape():
     state = {
         "session_info": {

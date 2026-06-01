@@ -41,6 +41,14 @@ QUICKFRAME_COOKIE_DOMAINS = ("quickframe.com", "mountain.com")
 _QUICKFRAME_VISITOR_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 
+class QuickFrameAuthError(RuntimeError):
+    pass
+
+
+class QuickFrameSignupUnavailableError(QuickFrameAuthError):
+    pass
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -54,6 +62,39 @@ def _response_text(response: Any) -> str:
         return str(response.text or "")
     except Exception:
         return ""
+
+
+def _quickframe_auth_error_from_url(value: Any, *, include_nested: bool = True) -> str:
+    pending = [str(value or "").strip()]
+    seen: set[str] = set()
+    while pending:
+        url = pending.pop(0)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+        for key in ("auth_error", "error"):
+            error = str((query.get(key) or [""])[0] or "").strip()
+            if error:
+                return unquote(error)
+        if not include_nested:
+            continue
+        for key in ("returnTo", "return_to", "redirect_uri", "post_logout_redirect_uri"):
+            for nested in query.get(key) or []:
+                nested_url = unquote(str(nested or "").strip())
+                if nested_url and nested_url not in seen:
+                    pending.append(nested_url)
+    return ""
+
+
+def _raise_quickframe_auth_error(error: Any) -> None:
+    error_text = str(error or "").strip() or "unknown"
+    if error_text == "signup_unavailable":
+        raise QuickFrameSignupUnavailableError(
+            "QuickFrame signup unavailable (auth_error=signup_unavailable); account is not usable"
+        )
+    raise QuickFrameAuthError(f"QuickFrame auth failed: auth_error={error_text}")
 
 
 def _valid_cookie_pair(name: Any, value: Any) -> tuple[str, str] | None:
@@ -949,8 +990,10 @@ class QuickFrameClient:
         current_referer = referer
         for _ in range(10):
             current = urlparse(current_url)
-            if current.hostname == "login.quickframe.com" and current.path.startswith("/v2/logout"):
-                raise RuntimeError("QuickFrame auth callback redirected to Auth0 logout; session was not established")
+            auth_error = _quickframe_auth_error_from_url(current_url, include_nested=False)
+            if auth_error:
+                _raise_quickframe_auth_error(auth_error)
+            is_auth0_logout = current.hostname == "login.quickframe.com" and current.path.startswith("/v2/logout")
             previous = urlparse(current_referer)
             referer_header = current_referer if current.hostname == previous.hostname else ""
             response = self.s.get(
@@ -969,9 +1012,22 @@ class QuickFrameClient:
             if _is_redirect(response.status_code):
                 location = str(response.headers.get("location") or "").strip()
                 if not location:
+                    if is_auth0_logout:
+                        auth_error = _quickframe_auth_error_from_url(current_url, include_nested=True)
+                        if auth_error:
+                            _raise_quickframe_auth_error(auth_error)
+                        raise RuntimeError("QuickFrame auth callback redirected to Auth0 logout; session was not established")
                     return
                 current_referer = current_url
                 current_url = urljoin(current_url, location)
+                auth_error = _quickframe_auth_error_from_url(current_url, include_nested=False)
+                if auth_error:
+                    _raise_quickframe_auth_error(auth_error)
+                if is_auth0_logout:
+                    auth_error = _quickframe_auth_error_from_url(current_referer, include_nested=True)
+                    if auth_error:
+                        _raise_quickframe_auth_error(auth_error)
+                    raise RuntimeError("QuickFrame auth callback redirected to Auth0 logout; session was not established")
                 continue
             return
 
