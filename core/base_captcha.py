@@ -8,6 +8,10 @@ class BaseCaptcha(ABC):
         """返回 Turnstile token"""
         ...
 
+    def solve_recaptcha(self, page_url: str, site_key: str, *, enterprise: bool = False, action: str = "") -> str:
+        """返回 reCAPTCHA token"""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support reCAPTCHA")
+
     @abstractmethod
     def solve_image(self, image_b64: str) -> str:
         """返回图片验证码文字"""

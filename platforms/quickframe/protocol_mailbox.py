@@ -12,12 +12,14 @@ class QuickFrameProtocolMailboxWorker:
         *,
         proxy: str | None = None,
         turnstile_solver: Callable[[str, str], str] | None = None,
+        recaptcha_solver: Callable[..., str] | None = None,
         log_fn: Callable[[str], None] = print,
     ):
         self.client = QuickFrameClient(
             proxy=proxy,
             log_fn=log_fn,
             turnstile_solver=turnstile_solver,
+            recaptcha_solver=recaptcha_solver,
             browser_fingerprint=True,
         )
         self.log = log_fn

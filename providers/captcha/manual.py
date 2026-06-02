@@ -14,5 +14,9 @@ class ManualCaptcha(BaseCaptcha):
     def solve_turnstile(self, page_url: str, site_key: str) -> str:
         return input(f"请手动获取 Turnstile token ({page_url}): ").strip()
 
+    def solve_recaptcha(self, page_url: str, site_key: str, *, enterprise: bool = False, action: str = "") -> str:
+        kind = "reCAPTCHA Enterprise" if enterprise else "reCAPTCHA"
+        return input(f"请手动获取 {kind} token ({page_url}): ").strip()
+
     def solve_image(self, image_b64: str) -> str:
         return input("请输入图片验证码: ").strip()

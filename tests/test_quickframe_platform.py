@@ -226,6 +226,66 @@ def test_quickframe_begin_email_challenge_solves_auth0_turnstile_captcha():
     ]
 
 
+def test_quickframe_begin_email_challenge_solves_auth0_recaptcha_captcha():
+    calls: list[dict] = []
+    solved: list[dict] = []
+
+    def fake_solver(page_url: str, sitekey: str, *, enterprise: bool = False, action: str = "") -> str:
+        solved.append({"page_url": page_url, "sitekey": sitekey, "enterprise": enterprise, "action": action})
+        return "recaptcha-token-123"
+
+    client = QuickFrameClient(log_fn=lambda message: None, recaptcha_solver=fake_solver)
+    responses = [
+        Response(status_code=302, headers={"location": "https://login.quickframe.com/authorize?state=query-state"}),
+        Response(status_code=302, headers={"location": "/u/login/identifier?state=query-state"}),
+        Response(
+            status_code=200,
+            text=(
+                '<form method="post" action="/u/login/identifier?state=query-state">'
+                '<input type="hidden" name="state" value="query-state">'
+                '<input type="text" name="username" value="">'
+                '<input type="hidden" name="captcha" value="">'
+                '<button type="submit" name="action" value="default">Continue</button>'
+                "</form>"
+                '<script src="https://www.google.com/recaptcha/enterprise.js"></script>'
+                '<div class="g-recaptcha" data-sitekey="6LcQuickFrameSiteKey1234567890" data-action="login"></div>'
+            ),
+        ),
+        Response(
+            status_code=200,
+            text='<form method="post"><input type="hidden" name="state" value="query-state"><input name="code"></form>',
+        ),
+    ]
+
+    def fake_get(url, **kwargs):
+        calls.append({"method": "GET", "url": url, **kwargs})
+        return responses.pop(0)
+
+    def fake_post(url, **kwargs):
+        calls.append({"method": "POST", "url": url, **kwargs})
+        return Response(
+            status_code=302,
+            headers={"location": "/u/login/passwordless-email-challenge?state=query-state"},
+        )
+
+    client.s.get = fake_get
+    client.s.post = fake_post
+
+    client.begin_email_challenge("new@example.com")
+
+    post_call = next(item for item in calls if item["method"] == "POST")
+    form = {key: values[0] for key, values in parse_qs(post_call["data"]).items()}
+    assert form["captcha"] == "recaptcha-token-123"
+    assert solved == [
+        {
+            "page_url": "https://login.quickframe.com/u/login/identifier?state=query-state",
+            "sitekey": "6LcQuickFrameSiteKey1234567890",
+            "enterprise": True,
+            "action": "login",
+        }
+    ]
+
+
 def test_quickframe_begin_email_challenge_reports_missing_captcha_solver_before_submit():
     client = QuickFrameClient(log_fn=lambda message: None)
     responses = [

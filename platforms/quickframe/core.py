@@ -298,7 +298,7 @@ def _extract_form(html: str, preferred_field: str) -> tuple[str, dict[str, str]]
     return "", {}
 
 
-def _extract_turnstile_sitekey(html: str) -> str:
+def _html_candidates(html: str) -> list[str]:
     text = str(html or "")
     candidates = [text]
     try:
@@ -307,6 +307,11 @@ def _extract_turnstile_sitekey(html: str) -> str:
             candidates.append(unescaped)
     except Exception:
         pass
+    return candidates
+
+
+def _extract_turnstile_sitekey(html: str) -> str:
+    candidates = _html_candidates(html)
 
     patterns = (
         r'data-captcha-sitekey=["\']([^"\']+)["\']',
@@ -323,6 +328,64 @@ def _extract_turnstile_sitekey(html: str) -> str:
             if match:
                 return match.group(1).strip()
     return ""
+
+
+def _extract_recaptcha_sitekey(html: str) -> str:
+    patterns = (
+        r'data-captcha-sitekey=["\']([^"\']+)["\']',
+        r'data-sitekey=["\']([^"\']+)["\']',
+        r'["\']siteKey["\']\s*:\s*["\']([^"\']+)["\']',
+        r'["\']sitekey["\']\s*:\s*["\']([^"\']+)["\']',
+        r'["\']captchaSiteKey["\']\s*:\s*["\']([^"\']+)["\']',
+        r'["\']recaptchaSiteKey["\']\s*:\s*["\']([^"\']+)["\']',
+        r'[?&]render=([^&"\']+)',
+        r'[?&]k=([^&"\']+)',
+        r"\b(6L[0-9A-Za-z_-]{20,})\b",
+    )
+    for candidate in _html_candidates(html):
+        for pattern in patterns:
+            match = re.search(pattern, candidate, flags=re.IGNORECASE)
+            if match:
+                return unquote(match.group(1)).strip()
+    return ""
+
+
+def _extract_recaptcha_action(html: str) -> str:
+    patterns = (
+        r'data-action=["\']([^"\']+)["\']',
+        r'["\']action["\']\s*:\s*["\']([^"\']+)["\']',
+        r"grecaptcha(?:\.enterprise)?\.execute\([^)]*action\s*:\s*['\"]([^'\"]+)['\"]",
+    )
+    for candidate in _html_candidates(html):
+        for pattern in patterns:
+            match = re.search(pattern, candidate, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+    return ""
+
+
+def _html_has_recaptcha(html: str) -> bool:
+    lowered = str(html or "").lower()
+    return any(
+        needle in lowered
+        for needle in (
+            "recaptcha",
+            "grecaptcha",
+            "google.com/recaptcha",
+            "recaptcha.net/recaptcha",
+            "g-recaptcha",
+        )
+    )
+
+
+def _html_has_turnstile(html: str) -> bool:
+    lowered = str(html or "").lower()
+    return "turnstile" in lowered or "challenges.cloudflare.com" in lowered or bool(_extract_turnstile_sitekey(html))
+
+
+def _html_has_recaptcha_enterprise(html: str) -> bool:
+    lowered = str(html or "").lower()
+    return "recaptcha/enterprise" in lowered or "grecaptcha.enterprise" in lowered
 
 
 def _query_state(url: str) -> str:
@@ -570,6 +633,7 @@ class QuickFrameClient:
         challenge_url: str = "",
         return_url: str = QUICKFRAME_RETURN_URL,
         turnstile_solver: Callable[[str, str], str] | Any = None,
+        recaptcha_solver: Callable[..., str] | Any = None,
         browser_fingerprint: bool = False,
         fingerprint_collector: Callable[..., dict[str, Any]] | None = None,
     ):
@@ -589,6 +653,7 @@ class QuickFrameClient:
         self.visitor_id = ""
         self.event_id = ""
         self.turnstile_solver = turnstile_solver
+        self.recaptcha_solver = recaptcha_solver
         self.browser_fingerprint = bool(browser_fingerprint)
         self.fingerprint_collector = fingerprint_collector
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
@@ -704,21 +769,63 @@ class QuickFrameClient:
             raise RuntimeError("QuickFrame Turnstile solver returned an empty token")
         return token
 
+    def _solve_recaptcha(self, page_url: str, sitekey: str, *, enterprise: bool = False, action: str = "") -> str:
+        solver = self.recaptcha_solver
+        if not solver:
+            raise RuntimeError(
+                "QuickFrame Auth0 security challenge requires reCAPTCHA captcha provider; "
+                "enable 2Captcha/YesCaptcha or use a browser-backed flow"
+            )
+        if callable(solver):
+            try:
+                token = solver(page_url, sitekey, enterprise=enterprise, action=action)
+            except TypeError:
+                token = solver(page_url, sitekey)
+        elif hasattr(solver, "solve_recaptcha"):
+            token = solver.solve_recaptcha(page_url, sitekey, enterprise=enterprise, action=action)
+        else:
+            raise RuntimeError("QuickFrame reCAPTCHA solver does not expose solve_recaptcha")
+        token = str(token or "").strip()
+        if not token:
+            raise RuntimeError("QuickFrame reCAPTCHA solver returned an empty token")
+        return token
+
     def _prepare_auth0_captcha(self, form: dict[str, str], *, page_url: str, html: str, label: str) -> None:
         captcha_fields = [
             name
-            for name in ("captcha", "cf-turnstile-response")
-            if name in form and not str(form.get(name) or "").strip()
+            for name, value in form.items()
+            if (
+                name in {"captcha", "cf-turnstile-response", "g-recaptcha-response"}
+                or "recaptcha" in name.lower()
+            )
+            and not str(value or "").strip()
         ]
         if not captcha_fields:
             return
-        sitekey = _extract_turnstile_sitekey(html)
-        if not sitekey:
+        is_recaptcha = _html_has_recaptcha(html) or any("recaptcha" in name.lower() for name in captcha_fields)
+        is_turnstile = _html_has_turnstile(html)
+        if is_recaptcha:
+            sitekey = _extract_recaptcha_sitekey(html)
+            if not sitekey:
+                raise RuntimeError(
+                    f"QuickFrame Auth0 {label} requires reCAPTCHA but the page did not expose a reCAPTCHA sitekey"
+                )
+            enterprise = _html_has_recaptcha_enterprise(html)
+            action = _extract_recaptcha_action(html)
+            self.log(f"QuickFrame Auth0 {label}: detected reCAPTCHA security challenge")
+            token = self._solve_recaptcha(page_url, sitekey, enterprise=enterprise, action=action)
+        elif is_turnstile:
+            sitekey = _extract_turnstile_sitekey(html)
+            if not sitekey:
+                raise RuntimeError(
+                    f"QuickFrame Auth0 {label} requires captcha but the page did not expose a Turnstile sitekey"
+                )
+            self.log(f"QuickFrame Auth0 {label}: detected Turnstile security challenge")
+            token = self._solve_turnstile(page_url, sitekey)
+        else:
             raise RuntimeError(
-                f"QuickFrame Auth0 {label} requires captcha but the page did not expose a Turnstile sitekey"
+                f"QuickFrame Auth0 {label} requires captcha but the page did not expose a supported captcha sitekey"
             )
-        self.log(f"QuickFrame Auth0 {label}: detected Turnstile security challenge")
-        token = self._solve_turnstile(page_url, sitekey)
         for name in captcha_fields:
             form[name] = token
 

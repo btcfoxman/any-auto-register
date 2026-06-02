@@ -159,6 +159,7 @@ class QuickFramePlatform(BasePlatform):
             return QuickFrameProtocolMailboxWorker(
                 proxy=ctx.proxy,
                 turnstile_solver=ctx.platform.solve_turnstile_with_fallback,
+                recaptcha_solver=ctx.platform.solve_recaptcha_with_fallback,
                 log_fn=ctx.log,
             )
 
@@ -289,6 +290,7 @@ class QuickFramePlatform(BasePlatform):
             login_identifier_url=str(extra.get("quickframe_login_identifier_url") or ""),
             challenge_url=str(extra.get("quickframe_challenge_url") or ""),
             turnstile_solver=self.solve_turnstile_with_fallback,
+            recaptcha_solver=self.solve_recaptcha_with_fallback,
             browser_fingerprint=True,
         )
 
@@ -430,6 +432,7 @@ class QuickFramePlatform(BasePlatform):
                 proxy=self._proxy_for_account(account, params),
                 log_fn=self.log,
                 turnstile_solver=self.solve_turnstile_with_fallback,
+                recaptcha_solver=self.solve_recaptcha_with_fallback,
                 browser_fingerprint=True,
             )
             pending = client.begin_email_challenge(email)
