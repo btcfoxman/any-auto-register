@@ -1082,6 +1082,8 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     if proxy_direct_fallback_value in (None, ""):
         proxy_direct_fallback_value = extra.get("freebeat_proxy_direct_fallback")
     proxy_direct_fallback = _bool_config(proxy_direct_fallback_value, platform_name == "freebeat")
+    proxy_leases: dict[str, int] = {}
+    proxy_lease_lock = threading.Lock()
 
     logger.set_progress(0, progress_total)
     if herosms_enabled:
@@ -1089,6 +1091,8 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             f"HeroSMS 模式: 成功目标 {target_success}，失败自动补尝试，"
             f"号码仍可复用时最多额外成功 {hero_extra_max} 个"
         )
+    if use_proxy_pool and not proxy and concurrency > 1:
+        logger.log(f"代理池均衡: {concurrency} 并发优先分配不同代理，代理失败时再切换出口重试")
 
     try:
         get(platform_name)
@@ -1183,37 +1187,83 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             _save_task_log(platform_name, email or "", "failed", error=error)
             return error
 
-    def _proxy_candidates() -> list[str | None]:
-        candidates: list[str | None] = []
+    def _reserve_pooled_proxy(exclude: set[str]) -> str | None:
+        if not use_proxy_pool:
+            return None
+        seen = set(exclude)
+        fallback: str | None = None
+        max_draws = max(proxy_retry_attempts * max(concurrency, 1) * 2, 8)
+        for _ in range(max_draws):
+            candidate = _normalize_proxy_url(proxy_pool.get_next())
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            if fallback is None:
+                fallback = candidate
+            with proxy_lease_lock:
+                if proxy_leases.get(candidate, 0) <= 0:
+                    proxy_leases[candidate] = 1
+                    return candidate
+        if fallback:
+            with proxy_lease_lock:
+                proxy_leases[fallback] = proxy_leases.get(fallback, 0) + 1
+            return fallback
+        return None
+
+    def _release_pooled_proxy(resolved_proxy: str | None) -> None:
+        if not resolved_proxy or proxy or not use_proxy_pool:
+            return
+        with proxy_lease_lock:
+            remaining = proxy_leases.get(resolved_proxy, 0) - 1
+            if remaining > 0:
+                proxy_leases[resolved_proxy] = remaining
+            else:
+                proxy_leases.pop(resolved_proxy, None)
+
+    def _candidate_attempts() -> list[str | None]:
         if proxy:
-            candidates.append(proxy)
-        elif use_proxy_pool:
-            seen: set[str] = set()
-            for _ in range(proxy_retry_attempts):
-                candidate = _normalize_proxy_url(proxy_pool.get_next())
-                if not candidate or candidate in seen:
-                    continue
-                seen.add(candidate)
-                candidates.append(candidate)
-        if not candidates:
-            candidates.append(None)
-        if proxy_direct_fallback and None not in candidates:
-            candidates.append(None)
-        return candidates
+            attempts: list[str | None] = [proxy]
+            if proxy_direct_fallback:
+                attempts.append(None)
+            return attempts
+        if not use_proxy_pool:
+            return [None]
+        return []
 
     def _do_one_with_retries(index: int) -> bool | str:
         if logger.is_cancel_requested():
             return "__cancel_requested__"
-        candidates = _proxy_candidates()
         logger.log(f"开始注册第 {index + 1}/{count} 个账号")
         last_error = ""
-        for attempt, resolved_proxy in enumerate(candidates, start=1):
+        attempted_proxies: set[str] = set()
+        attempts = _candidate_attempts()
+        attempt = 0
+        while True:
+            if attempts:
+                resolved_proxy = attempts.pop(0)
+            elif use_proxy_pool:
+                if attempt >= proxy_retry_attempts:
+                    if proxy_direct_fallback:
+                        resolved_proxy = None
+                    else:
+                        break
+                else:
+                    resolved_proxy = _reserve_pooled_proxy(attempted_proxies)
+                    if resolved_proxy:
+                        attempted_proxies.add(resolved_proxy)
+                    else:
+                        if attempted_proxies and not proxy_direct_fallback:
+                            break
+                        resolved_proxy = None
+            else:
+                break
+            attempt += 1
             try:
                 if resolved_proxy:
-                    suffix = f" (尝试 {attempt}/{len(candidates)})" if len(candidates) > 1 else ""
+                    suffix = f" (尝试 {attempt}/{proxy_retry_attempts})" if use_proxy_pool and proxy_retry_attempts > 1 else ""
                     logger.log(f"使用代理: {resolved_proxy}{suffix}")
                 elif attempt > 1:
-                    logger.log("代理不可用，尝试直连 Freebeat")
+                    logger.log("代理不可用，尝试直连")
                 _preflight_platform_proxy(platform_name, resolved_proxy, logger)
                 platform = _build_platform_instance(platform_name, payload, logger, resolved_proxy=resolved_proxy, shared_mailbox=shared_mailbox)
                 account = platform.register(email=email, password=password)
@@ -1263,13 +1313,18 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                     proxy_pool.report_fail(resolved_proxy)
                 error = str(exc)
                 last_error = error
-                if attempt < len(candidates) and _looks_like_proxy_network_error(error):
+                can_retry_proxy = bool(resolved_proxy and use_proxy_pool and attempt < proxy_retry_attempts)
+                can_retry_direct = bool(resolved_proxy and proxy_direct_fallback)
+                can_retry_fixed = bool(attempts)
+                if (can_retry_proxy or can_retry_direct or can_retry_fixed) and _looks_like_proxy_network_error(error):
                     logger.log(f"代理连接失败，切换出口重试: {error}", level="warning")
                     continue
                 logger.record_error(error)
                 logger.log(f"✗ 注册失败: {error}", level="error")
                 _save_task_log(platform_name, email or "", "failed", error=error)
                 return error
+            finally:
+                _release_pooled_proxy(resolved_proxy)
         logger.record_error(last_error)
         logger.log(f"✗ 注册失败: {last_error}", level="error")
         _save_task_log(platform_name, email or "", "failed", error=last_error)
