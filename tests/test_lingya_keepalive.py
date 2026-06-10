@@ -21,7 +21,7 @@ from services.lingya_keepalive import (
 def test_lingya_keepalive_defaults_match_lingya2api_lifecycle():
     assert DEFAULT_HEARTBEAT_INTERVAL_SECONDS == 300
     assert DEFAULT_BALANCE_INTERVAL_SECONDS == 60
-    assert DEFAULT_KEEPALIVE_CONCURRENCY == 3
+    assert DEFAULT_KEEPALIVE_CONCURRENCY == 1
     assert DEFAULT_RETIRE_QUOTA_THRESHOLD == 57
     assert DEFAULT_RETIRE_AFTER_HOURS == 24
 
