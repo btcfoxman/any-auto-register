@@ -1894,6 +1894,9 @@ class LingYaQQPlatform(BasePlatform):
         refresh_quota = _as_bool(params.get("refresh_quota"), True)
         run_hello = _as_bool(params.get("run_hello"), True)
         sync_lingya2api = _as_bool(params.get("sync_lingya2api"), True)
+        if sync_lingya2api and not refresh_quota:
+            self.log("LingYaQQ keepalive: forcing quota refresh before lingya2api sync")
+            refresh_quota = True
         main_login = str(
             source.get("v_main_login")
             or source.get("main_login")
@@ -1966,6 +1969,10 @@ class LingYaQQPlatform(BasePlatform):
                     quota = {}
                 break
         quota_overview = _quota_summary(quota)
+        quota_refreshed = (
+            quota_overview.get("quota_balance") not in (None, "")
+            or quota_overview.get("quota_sum") not in (None, "")
+        )
 
         data: dict[str, Any] = {
             **cookie_fields,
@@ -1982,7 +1989,7 @@ class LingYaQQPlatform(BasePlatform):
             data["vusession_expire_timestamp"] = str(refresh_response.get("vusession_expire_timestamp") or "")
             data["vusession_expire_in"] = int(refresh_response.get("vusession_expire_in") or 0)
 
-        if sync_lingya2api:
+        if sync_lingya2api and quota_refreshed:
             sync_extra = {**source, **data}
             sync_result = sync_account_to_lingya2api(
                 _account_with_extra(account, sync_extra),
@@ -1992,6 +1999,11 @@ class LingYaQQPlatform(BasePlatform):
             data["lingya2api_synced"] = bool(sync_result)
             if sync_result:
                 data["lingya2api"] = sync_result
+        elif sync_lingya2api:
+            self.log("LingYaQQ keepalive: lingya2api sync skipped because quota refresh did not return balance")
+            data["lingya2api_synced"] = False
+            data["lingya2api_sync_skipped"] = True
+            data["lingya2api_sync_skip_reason"] = "quota_refresh_failed"
         else:
             data["lingya2api_synced"] = False
             data["lingya2api_sync_skipped"] = True

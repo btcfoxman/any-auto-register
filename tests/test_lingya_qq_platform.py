@@ -1127,9 +1127,12 @@ def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkey
             return dict(self._cookies)
 
         def get_user_quota(self):
+            events.append(("quota",))
             return {"quota_balance": "8", "quota_sum": "10"}
 
     def fake_sync(account, *, log_fn=None, heartbeat=False, check=False, extra_overrides=None):
+        assert account.extra.get("quota_balance") == "8"
+        assert account.extra.get("quota_sum") == "10"
         events.append(("sync", heartbeat, account.extra.get("v_vusession")))
         return {"ok": True}
 
@@ -1154,8 +1157,52 @@ def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkey
     assert result["data"]["session_refreshed"] is True
     assert result["data"]["hello_token_ok"] is True
     assert result["data"]["v_vusession"] == "session-new"
+    assert result["data"]["quota_balance"] == "8"
     assert events[:3] == [("hello", 1), ("refresh", "wx"), ("hello", 2)]
+    assert events.index(("quota",)) < events.index(("sync", False, "session-new"))
     assert any(event == ("sync", False, "session-new") for event in events)
+
+
+def test_lingya_qq_keepalive_skips_lingya2api_sync_when_forced_quota_refresh_fails(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid or "device-old"
+
+        def hello(self):
+            events.append(("hello",))
+            return {"timestamp": "1778223000", "token": "hello-token"}
+
+        def get_user_quota(self):
+            events.append(("quota",))
+            raise RuntimeError("quota unavailable")
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, check=False, extra_overrides=None):
+        raise AssertionError("lingya2api sync should wait for a fresh quota")
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr("platforms.lingya_qq.plugin.sync_account_to_lingya2api", fake_sync)
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid-old",
+        extra={
+            "cookies": "v_vusession=session-old; v_vurefresh=refresh-old; v_vuserid=vuid-old; vdevice_guid=device-old",
+            "v_main_login": "phone",
+        },
+    )
+
+    result = platform.execute_action("keepalive_sync", account, {"refresh_quota": "false"})
+
+    assert result["ok"] is True
+    assert result["data"]["lingya2api_synced"] is False
+    assert result["data"]["lingya2api_sync_skipped"] is True
+    assert result["data"]["lingya2api_sync_skip_reason"] == "quota_refresh_failed"
+    assert events == [("hello",), ("quota",)]
 
 
 def test_lingya_qq_keepalive_refreshes_and_retries_on_quota_session_error(monkeypatch):
