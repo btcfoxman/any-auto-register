@@ -173,7 +173,11 @@ def build_lingya2api_payload(
     if not name:
         raise ValueError("LingYaQQ account has no usable lingya2api account name")
 
-    return {
+    quota = extra.get("quota") if isinstance(extra.get("quota"), dict) else {}
+    last_balance = _first_text(extra.get("quota_balance"), quota.get("quota_balance"), extra.get("last_balance"))
+    last_quota_sum = _first_text(extra.get("quota_sum"), quota.get("quota_sum"), extra.get("last_quota_sum"))
+
+    payload = {
         "name": name[:80],
         "cookie": cookie_header,
         "vuserid": vuserid,
@@ -188,6 +192,11 @@ def build_lingya2api_payload(
         "enable_auto_maintenance": _as_bool(extra.get("lingya2api_enable_auto_maintenance"), False),
         "max_concurrency": _clamp_concurrency(extra.get("lingya2api_max_concurrency"), max_concurrency),
     }
+    if last_balance:
+        payload["last_balance"] = last_balance
+    if last_quota_sum:
+        payload["last_quota_sum"] = last_quota_sum
+    return payload
 
 
 def sync_account_to_lingya2api(

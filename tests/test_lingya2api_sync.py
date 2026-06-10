@@ -55,6 +55,24 @@ def test_build_lingya2api_payload_can_explicitly_enable_remote_auto_maintenance(
     assert payload["enable_auto_maintenance"] is True
 
 
+def test_build_lingya2api_payload_maps_refreshed_quota_to_remote_balance_fields():
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        extra={
+            "cookies": "v_vusession=session; v_vurefresh=refresh; v_vuserid=vuid; vdevice_guid=device",
+            "quota_balance": 88,
+            "quota_sum": 100,
+        },
+    )
+
+    payload = build_lingya2api_payload(account)
+
+    assert payload["last_balance"] == "88"
+    assert payload["last_quota_sum"] == "100"
+
+
 def test_build_lingya2api_payload_reads_account_overview_legacy_extra():
     account = Account(
         platform="lingya_qq",
@@ -171,6 +189,7 @@ def test_sync_account_to_lingya2api_posts_and_heartbeats():
     assert body["vdevice_guid"] == "device"
     assert body["vuserid"] == "vuid"
     assert body["enable_auto_maintenance"] is False
+    assert "last_balance" not in body
     assert "vdevice_guid=device" in body["cookie"]
     assert post.call_args_list[0].args[0] == "http://localhost:8000/api/accounts"
     assert post.call_args_list[1].args[0] == "http://localhost:8000/api/accounts/9/heartbeat"
