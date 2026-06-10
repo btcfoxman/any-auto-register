@@ -23,6 +23,7 @@ class ConfigRepository:
         "lingya_qq_publish_source_timeout", "lingya_qq_publish_generation_timeout",
         "lingya_qq_publish_generation_poll_interval", "lingya_qq_publish_initial_delay",
         "lingya_qq_publish_poll_interval", "lingya_qq_publish_timeout",
+        "lingya_qq_publish_post_quota_delay",
         "freebeat_daily_sign_in_enabled", "freebeat_daily_sign_in_min_interval_seconds",
         "freebeat_daily_sign_in_max_interval_seconds", "freebeat_auto_daily_sign_in",
         "freebeat_auto_questionnaire",

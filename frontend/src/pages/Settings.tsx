@@ -305,6 +305,7 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'lingya_qq_publish_generation_poll_interval', label: '生成轮询间隔秒数', placeholder: '5' },
         { key: 'lingya_qq_publish_credit_timeout', label: '首发积分等待秒数', placeholder: '1800' },
         { key: 'lingya_qq_publish_credit_poll_interval', label: '首发积分轮询秒数', placeholder: '30' },
+        { key: 'lingya_qq_publish_post_quota_delay', label: '发布后额度刷新等待秒数', placeholder: '10' },
       ],
     }],
   },

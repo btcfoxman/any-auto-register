@@ -22,6 +22,7 @@ from core.db import AccountModel, TaskEventModel, TaskLog, TaskModel, engine, sa
 from core.platform_accounts import build_platform_account
 from core.registry import get
 from infrastructure.platform_runtime import PlatformRuntime
+from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES
 
 TASK_TYPE_REGISTER = "register"
 TASK_TYPE_ACCOUNT_CHECK = "account_check"
@@ -59,6 +60,7 @@ LINGYA_STATUS_LABELS = {
     "succeeded": "成功",
     "failed": "失败",
 }
+LINGYA_POST_PUBLISH_QUOTA_DELAY_SECONDS = 10
 
 _task_locks: dict[str, threading.Lock] = {}
 _task_locks_guard = threading.Lock()
@@ -588,6 +590,26 @@ def _task_config_value(extra: dict[str, Any], key: str, default: Any = "") -> An
 def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
     extra = dict(getattr(account, "extra", {}) or {})
     overview = dict(extra.get("account_overview") or {})
+    credential_keys = {
+        "cookies",
+        "cookie_header",
+        "vuid",
+        "vusession",
+        "vurefresh",
+        "vdevice_guid",
+        "v_main_login",
+        "video_appid",
+        "video_platform",
+        "vversion_platform",
+        "vusession_expire_timestamp",
+        "vusession_expire_in",
+        *LINGYA_QQ_COOKIE_NAMES,
+    }
+    for key in credential_keys:
+        if data.get(key) not in (None, ""):
+            extra[key] = data.get(key)
+    if data.get("vuid") not in (None, ""):
+        account.user_id = str(data.get("vuid"))
     compact_keys = {
         "daily_sign_in_status",
         "daily_sign_in_at",
@@ -658,6 +680,40 @@ def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
         overview["chips"] = [chip for chip in chips if chip and not (chip in seen or seen.add(chip))]
     extra["account_overview"] = overview
     account.extra = extra
+
+
+def _lingya_post_publish_quota_delay(extra_cfg: dict[str, Any]) -> int:
+    value = _task_config_value(
+        extra_cfg,
+        "lingya_qq_publish_post_quota_delay",
+        LINGYA_POST_PUBLISH_QUOTA_DELAY_SECONDS,
+    )
+    return max(0, min(300, _int_config(value, LINGYA_POST_PUBLISH_QUOTA_DELAY_SECONDS)))
+
+
+def _refresh_lingya_quota_after_publish(*, platform, account, logger: "TaskLogger") -> bool:
+    try:
+        result = platform.execute_action(
+            "keepalive_sync",
+            account,
+            {
+                "force_refresh": "false",
+                "refresh_quota": "true",
+                "run_hello": "false",
+                "sync_lingya2api": "false",
+            },
+        )
+    except Exception as exc:
+        logger.log(f"  [LingYaQQ] 发布后额度刷新异常: {exc}", level="warning")
+        return False
+    if not result.get("ok"):
+        logger.log(f"  [LingYaQQ] 发布后额度刷新失败: {result.get('error')}", level="warning")
+        return False
+
+    data = dict(result.get("data") or {})
+    _merge_lingya_followup_data(account, data)
+    save_account(account)
+    return data.get("quota_balance") not in (None, "") or data.get("quota_sum") not in (None, "")
 
 
 def _auto_followup_lingya_qq_rewards(
@@ -755,7 +811,17 @@ def _run_auto_followup_lingya_qq_rewards(
         if result.get("ok"):
             _merge_lingya_followup_data(account, dict(result.get("data") or {}))
             save_account(account)
-            logger.log("  [LingYaQQ] 发布完成并已刷新额度")
+            post_quota_delay = _lingya_post_publish_quota_delay(extra_cfg)
+            if post_quota_delay > 0:
+                logger.log(f"  [LingYaQQ] 发布完成，等待 {post_quota_delay} 秒后刷新额度")
+                time.sleep(post_quota_delay)
+            if logger.is_cancel_requested():
+                logger.log("  [LingYaQQ] 发布后额度刷新已取消", level="warning")
+                return
+            if _refresh_lingya_quota_after_publish(platform=platform, account=account, logger=logger):
+                logger.log("  [LingYaQQ] 发布完成并已刷新额度")
+            else:
+                logger.log("  [LingYaQQ] 发布完成，额度刷新未返回新额度，继续同步下游", level="warning")
             logger.log("  [Lingya2API] 发布完成后再次同步 LingYaQQ 账号")
             _auto_sync_lingya2api(logger, account)
         else:

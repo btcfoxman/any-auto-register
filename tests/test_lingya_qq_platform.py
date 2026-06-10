@@ -1034,6 +1034,51 @@ def test_lingya_qq_keepalive_quota_ping_can_skip_hello(monkeypatch):
     assert events == [("quota",), ("sync", False, "session-old")]
 
 
+def test_lingya_qq_keepalive_can_skip_internal_lingya2api_sync(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid or "device-old"
+
+        def hello(self):
+            raise AssertionError("quota-only keepalive should not call hello")
+
+        def get_user_quota(self):
+            events.append(("quota",))
+            return {"quota_balance": "8", "quota_sum": "10"}
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, check=False, extra_overrides=None):
+        raise AssertionError("internal lingya2api sync should be skipped")
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr("platforms.lingya_qq.plugin.sync_account_to_lingya2api", fake_sync)
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid-old",
+        extra={
+            "cookies": "v_vusession=session-old; v_vurefresh=refresh-old; v_vuserid=vuid-old; vdevice_guid=device-old",
+            "v_main_login": "phone",
+        },
+    )
+
+    result = platform.execute_action(
+        "keepalive_sync",
+        account,
+        {"refresh_quota": "true", "run_hello": "false", "sync_lingya2api": "false"},
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["quota_balance"] == "8"
+    assert result["data"]["lingya2api_synced"] is False
+    assert result["data"]["lingya2api_sync_skipped"] is True
+    assert events == [("quota",)]
+
+
 def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkeypatch):
     events = []
 
@@ -1662,6 +1707,36 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert data["last_publish_initial_first_post_credit_granted"] is False
     assert data["last_publish_first_post_credit_granted"] is True
     assert data["last_publish_first_post_credit_text"] == "first post credit"
+
+
+def test_lingya_qq_upload_work_retries_readframe_transient():
+    calls = []
+
+    class FakeClient:
+        def upload_work(self, payload):
+            calls.append(payload["request_type"])
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "/trpc.caotai.publish.PublishService/UploadWork: "
+                    "tcp client transport ReadFrame, cost: 999.980426ms"
+                )
+            return {"ret": 0, "data": {}}
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    logs = []
+    platform.set_logger(logs.append)
+
+    result = platform._upload_work_with_retries(
+        FakeClient(),
+        {"request_type": 1},
+        label="submitting work for audit",
+        retries=2,
+        retry_delay=0,
+    )
+
+    assert result == {"ret": 0, "data": {}}
+    assert calls == [1, 1]
+    assert any("UploadWork transient failure" in message for message in logs)
 
 
 def test_lingya_qq_extracts_first_highlight_segment_from_scene_list():

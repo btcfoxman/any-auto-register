@@ -32,6 +32,21 @@ from platforms.lingya_qq.publish import DEFAULT_CREATION_PROCESS_TEXT, fetch_lin
 
 LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS = 300
 LINGYA_QQ_SESSION_RETRY_CODES = {20447, 20409, 20433, 20431, 20411}
+LINGYA_QQ_UPLOAD_WORK_TRANSIENT_KEYWORDS = (
+    "readframe",
+    "tcp client transport",
+    "timeout",
+    "timed out",
+    "deadline exceeded",
+    "temporarily unavailable",
+    "connection reset",
+    "connection aborted",
+    "remote end closed",
+    "bad gateway",
+    "502",
+    "503",
+    "504",
+)
 DEFAULT_CREATION_TOOL = {
     "id": "tag_8Hy4Gy2MCZ",
     "title": "Seedance 2.0",
@@ -104,6 +119,15 @@ def _session_error_code(value: Any) -> int:
 
 def _is_session_retry_error(value: Any) -> bool:
     return _session_error_code(value) in LINGYA_QQ_SESSION_RETRY_CODES
+
+
+def _is_upload_work_transient_error(value: Any) -> bool:
+    if isinstance(value, (TimeoutError, ConnectionError)):
+        return True
+    text = str(value or "").lower()
+    if "uploadwork" not in text and "upload work" not in text:
+        return False
+    return any(keyword in text for keyword in LINGYA_QQ_UPLOAD_WORK_TRANSIENT_KEYWORDS)
 
 
 def _global_config_value(key: str, default: Any = "") -> Any:
@@ -594,7 +618,9 @@ class LingYaQQPlatform(BasePlatform):
                 "sync": False,
                 "params": [
                     {"key": "force_refresh", "label": "强制刷新会话（true/false）", "type": "text"},
+                    {"key": "refresh_quota", "label": "刷新额度（true/false）", "type": "text"},
                     {"key": "run_hello", "label": "执行 Hello 心跳（true/false）", "type": "text"},
+                    {"key": "sync_lingya2api", "label": "同步到 lingya2api（true/false）", "type": "text"},
                 ],
             }
         )
@@ -643,6 +669,8 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "source_url", "label": "第三方 GET 内容接口", "type": "text"},
                     {"key": "source_timeout", "label": "内容接口超时秒数", "type": "number"},
                     {"key": "source_retries", "label": "内容接口重试次数", "type": "number"},
+                    {"key": "upload_work_retries", "label": "作品提交重试次数", "type": "number"},
+                    {"key": "upload_work_retry_delay", "label": "作品提交重试间隔秒数", "type": "number"},
                     {"key": "upload_service_id", "label": "视频上传 serviceId", "type": "text"},
                     {"key": "creation_process_text", "label": "创作过程文本", "type": "text"},
                     {"key": "credit_timeout", "label": "首发积分等待秒数", "type": "number"},
@@ -1001,6 +1029,38 @@ class LingYaQQPlatform(BasePlatform):
             if callable(cancel_check) and cancel_check():
                 raise RuntimeError("LingYaQQ follow-up cancelled")
             time.sleep(min(5.0, max(0.0, end_at - time.time())))
+
+    def _upload_work_with_retries(
+        self,
+        client: LingYaQQClient,
+        payload: dict[str, Any],
+        *,
+        label: str,
+        retries: int = 3,
+        retry_delay: float = 2.0,
+        cancel_check=None,
+    ) -> dict[str, Any]:
+        attempts = max(_as_int(retries, 3), 1)
+        delay = max(_as_float(retry_delay, 2.0), 0.0)
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            if callable(cancel_check) and cancel_check():
+                raise RuntimeError("LingYaQQ follow-up cancelled")
+            try:
+                return client.upload_work(payload)
+            except Exception as exc:
+                last_exc = exc
+                transient = _is_upload_work_transient_error(exc)
+                if attempt >= attempts or not transient:
+                    raise
+                self.log(
+                    f"LingYaQQ publish: {label} UploadWork transient failure, "
+                    f"retrying {attempt}/{attempts}: {exc}"
+                )
+                self._sleep_with_cancel(delay, cancel_check)
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("LingYaQQ UploadWork failed without exception")
 
     def _daily_sign_item(self, panel: dict[str, Any]) -> dict[str, Any]:
         data = panel.get("data") if isinstance(panel.get("data"), dict) else panel
@@ -1519,6 +1579,14 @@ class LingYaQQPlatform(BasePlatform):
             _first_value(params.get("source_retries"), self._runtime_value(source, params, "lingya_qq_publish_source_retries", 3)),
             3,
         )
+        upload_work_retries = _as_int(
+            _first_value(params.get("upload_work_retries"), self._runtime_value(source, params, "lingya_qq_upload_work_retries", 3)),
+            3,
+        )
+        upload_work_retry_delay = _as_float(
+            _first_value(params.get("upload_work_retry_delay"), self._runtime_value(source, params, "lingya_qq_upload_work_retry_delay", 2.0)),
+            2.0,
+        )
         upload_service_id = str(
             _first_value(
                 params.get("upload_service_id"),
@@ -1573,6 +1641,8 @@ class LingYaQQPlatform(BasePlatform):
             "lingya_qq_publish_source_url": source_url,
             "lingya_qq_publish_source_timeout": source_timeout,
             "lingya_qq_publish_source_retries": source_retries,
+            "lingya_qq_upload_work_retries": upload_work_retries,
+            "lingya_qq_upload_work_retry_delay": upload_work_retry_delay,
             "lingya_qq_publish_initial_delay": initial_delay,
             "lingya_qq_publish_poll_interval": poll_interval,
             "lingya_qq_publish_timeout": publish_timeout,
@@ -1731,9 +1801,28 @@ class LingYaQQPlatform(BasePlatform):
             ai_content_types=[1, 2, 3],
         )
         self.log("LingYaQQ publish: saving draft")
-        client.upload_work(draft_payload)
+        try:
+            self._upload_work_with_retries(
+                client,
+                draft_payload,
+                label="saving draft",
+                retries=upload_work_retries,
+                retry_delay=upload_work_retry_delay,
+                cancel_check=cancel_check,
+            )
+        except Exception as exc:
+            if not _is_upload_work_transient_error(exc):
+                raise
+            self.log(f"LingYaQQ publish: draft UploadWork skipped after transient failures: {exc}")
         self.log("LingYaQQ publish: submitting work for audit")
-        client.upload_work(final_payload)
+        self._upload_work_with_retries(
+            client,
+            final_payload,
+            label="submitting work for audit",
+            retries=upload_work_retries,
+            retry_delay=upload_work_retry_delay,
+            cancel_check=cancel_check,
+        )
         self.log("LingYaQQ publish: waiting for released status")
         work = self._wait_publish_success(
             client,
@@ -1804,6 +1893,7 @@ class LingYaQQPlatform(BasePlatform):
         source, cookie_fields, client = self._client_from_account(account)
         refresh_quota = _as_bool(params.get("refresh_quota"), True)
         run_hello = _as_bool(params.get("run_hello"), True)
+        sync_lingya2api = _as_bool(params.get("sync_lingya2api"), True)
         main_login = str(
             source.get("v_main_login")
             or source.get("main_login")
@@ -1892,15 +1982,19 @@ class LingYaQQPlatform(BasePlatform):
             data["vusession_expire_timestamp"] = str(refresh_response.get("vusession_expire_timestamp") or "")
             data["vusession_expire_in"] = int(refresh_response.get("vusession_expire_in") or 0)
 
-        sync_extra = {**source, **data}
-        sync_result = sync_account_to_lingya2api(
-            _account_with_extra(account, sync_extra),
-            log_fn=self.log,
-            heartbeat=False,
-        )
-        data["lingya2api_synced"] = bool(sync_result)
-        if sync_result:
-            data["lingya2api"] = sync_result
+        if sync_lingya2api:
+            sync_extra = {**source, **data}
+            sync_result = sync_account_to_lingya2api(
+                _account_with_extra(account, sync_extra),
+                log_fn=self.log,
+                heartbeat=False,
+            )
+            data["lingya2api_synced"] = bool(sync_result)
+            if sync_result:
+                data["lingya2api"] = sync_result
+        else:
+            data["lingya2api_synced"] = False
+            data["lingya2api_sync_skipped"] = True
         return {"ok": True, "data": data}
 
     def _load_state(self, account: Account) -> dict[str, Any]:

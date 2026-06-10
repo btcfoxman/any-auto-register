@@ -183,6 +183,17 @@ body {
   color: var(--text-muted);
 }
 
+select option,
+select optgroup {
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+}
+
+select option:checked {
+  background-color: var(--accent);
+  color: #ffffff;
+}
+
 .control-surface-compact {
   padding: 0.4rem 0.6rem;
   border-radius: 6px;

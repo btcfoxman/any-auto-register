@@ -74,6 +74,7 @@ Useful extra fields:
 - `lingya_qq_publish_timeout`: defaults to `7200`
 - `lingya_qq_publish_credit_timeout`: defaults to `1800`, waits for the first-post 500-credit grant
 - `lingya_qq_publish_credit_poll_interval`: defaults to `30`
+- `lingya_qq_publish_post_quota_delay`: defaults to `10`, waits after a successful publish before refreshing quota and syncing downstream
 
 The third-party publish source URL is fetched by direct connection. Account
 proxy settings are still used for Lingya account requests and uploads, but they
