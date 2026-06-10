@@ -11,6 +11,7 @@ from infrastructure.platform_runtime import PlatformRuntime
 from services.lingya_keepalive import (
     DEFAULT_BALANCE_INTERVAL_SECONDS,
     DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+    DEFAULT_KEEPALIVE_CONCURRENCY,
     DEFAULT_RETIRE_AFTER_HOURS,
     DEFAULT_RETIRE_QUOTA_THRESHOLD,
     LingYaKeepaliveWorker,
@@ -20,6 +21,7 @@ from services.lingya_keepalive import (
 def test_lingya_keepalive_defaults_match_lingya2api_lifecycle():
     assert DEFAULT_HEARTBEAT_INTERVAL_SECONDS == 300
     assert DEFAULT_BALANCE_INTERVAL_SECONDS == 60
+    assert DEFAULT_KEEPALIVE_CONCURRENCY == 3
     assert DEFAULT_RETIRE_QUOTA_THRESHOLD == 57
     assert DEFAULT_RETIRE_AFTER_HOURS == 24
 
@@ -53,6 +55,53 @@ def test_lingya_keepalive_runs_keepalive_action_with_quota_flag(monkeypatch):
             {"force_refresh": "false", "refresh_quota": "true", "run_hello": "false"},
         ),
     ]
+
+
+def test_lingya_keepalive_uses_configured_account_concurrency(monkeypatch):
+    calls = []
+    max_workers_list = []
+
+    class FakeFuture:
+        def result(self):
+            return None
+
+    class RecordingExecutor:
+        def __init__(self, *, max_workers: int, thread_name_prefix: str | None = None):
+            max_workers_list.append(max_workers)
+            self.thread_name_prefix = thread_name_prefix
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, account_id, **kwargs):
+            calls.append((account_id, dict(kwargs)))
+            fn(account_id, **kwargs)
+            return FakeFuture()
+
+    worker = LingYaKeepaliveWorker()
+    monkeypatch.setattr(worker, "_config", lambda: {"lingya_qq_keepalive_concurrency": "2"})
+    monkeypatch.setattr(worker, "_target_account_ids", lambda **kwargs: [1, 2, 3])
+    monkeypatch.setattr(worker, "_run_for_account", lambda account_id, **kwargs: None)
+    monkeypatch.setattr("services.lingya_keepalive.ThreadPoolExecutor", RecordingExecutor)
+
+    worker._run_for_accounts(refresh_quota=True, run_hello=False)
+
+    assert max_workers_list == [2]
+    assert calls == [
+        (1, {"refresh_quota": True, "run_hello": False}),
+        (2, {"refresh_quota": True, "run_hello": False}),
+        (3, {"refresh_quota": True, "run_hello": False}),
+    ]
+
+
+def test_lingya_keepalive_config_allows_env_concurrency(monkeypatch):
+    worker = LingYaKeepaliveWorker()
+    monkeypatch.setenv("LINGYA_QQ_KEEPALIVE_CONCURRENCY", "7")
+
+    assert worker._config()["lingya_qq_keepalive_concurrency"] == "7"
 
 
 def _create_lingya_account(

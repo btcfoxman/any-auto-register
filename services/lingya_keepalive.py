@@ -1,8 +1,10 @@
 """Background keepalive loop for LingYaQQ accounts."""
 from __future__ import annotations
 
+import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,8 +20,15 @@ from infrastructure.platform_runtime import PlatformRuntime
 ACTIVE_LIFECYCLE_STATUSES = {"registered", "trial", "subscribed"}
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 300
 DEFAULT_BALANCE_INTERVAL_SECONDS = 60
+DEFAULT_KEEPALIVE_CONCURRENCY = 3
 DEFAULT_RETIRE_QUOTA_THRESHOLD = 57
 DEFAULT_RETIRE_AFTER_HOURS = 24
+ENV_CONFIG_KEYS = {
+    "lingya_qq_keepalive_enabled",
+    "lingya_qq_heartbeat_interval_seconds",
+    "lingya_qq_balance_interval_seconds",
+    "lingya_qq_keepalive_concurrency",
+}
 
 
 class LingYaKeepaliveWorker:
@@ -91,9 +100,16 @@ class LingYaKeepaliveWorker:
         try:
             from core.config_store import config_store
 
-            return config_store.get_all()
+            config = config_store.get_all()
         except Exception:
-            return {}
+            config = {}
+        for key in ENV_CONFIG_KEYS:
+            value = os.environ.get(key)
+            if value is None:
+                value = os.environ.get(key.upper())
+            if value is not None:
+                config[key] = value
+        return config
 
     def _target_account_ids(self, *, refresh_quota: bool = False) -> list[int]:
         config = self._config()
@@ -204,28 +220,60 @@ class LingYaKeepaliveWorker:
         )
 
     def _run_for_accounts(self, *, refresh_quota: bool, run_hello: bool = True) -> None:
-        runtime = PlatformRuntime()
-        for account_id in self._target_account_ids(refresh_quota=refresh_quota):
-            if not self._try_lock_account(account_id):
-                continue
-            try:
-                command = ActionExecutionCommand(
-                    platform="lingya_qq",
-                    account_id=account_id,
-                    action_id="keepalive_sync",
-                    params={
-                        "force_refresh": "false",
-                        "refresh_quota": "true" if refresh_quota else "false",
-                        "run_hello": "true" if run_hello else "false",
-                    },
-                )
-                result = runtime.execute_action(command, log_fn=lambda message: print(f"[LingYaKeepalive] {message}"))
-                if not getattr(result, "ok", False):
-                    print(f"[LingYaKeepalive] account {account_id} failed: {getattr(result, 'error', '')}")
-            except Exception as exc:
-                print(f"[LingYaKeepalive] account {account_id} failed: {exc}")
-            finally:
-                self._unlock_account(account_id)
+        account_ids = self._target_account_ids(refresh_quota=refresh_quota)
+        if not account_ids:
+            return
+        config = self._config()
+        concurrency = min(
+            len(account_ids),
+            _bounded_int(
+                config.get("lingya_qq_keepalive_concurrency"),
+                1,
+                20,
+                DEFAULT_KEEPALIVE_CONCURRENCY,
+            ),
+        )
+        started = time.time()
+        print(
+            "[LingYaKeepalive] running "
+            f"{len(account_ids)} account(s), concurrency={concurrency}, "
+            f"refresh_quota={refresh_quota}, run_hello={run_hello}"
+        )
+        if concurrency <= 1 or len(account_ids) == 1:
+            for account_id in account_ids:
+                self._run_for_account(account_id, refresh_quota=refresh_quota, run_hello=run_hello)
+        else:
+            with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="lingya-keepalive-account") as pool:
+                futures = [
+                    pool.submit(self._run_for_account, account_id, refresh_quota=refresh_quota, run_hello=run_hello)
+                    for account_id in account_ids
+                ]
+                for future in futures:
+                    future.result()
+        print(f"[LingYaKeepalive] finished in {time.time() - started:.1f}s")
+
+    def _run_for_account(self, account_id: int, *, refresh_quota: bool, run_hello: bool) -> None:
+        if not self._try_lock_account(account_id):
+            return
+        try:
+            runtime = PlatformRuntime()
+            command = ActionExecutionCommand(
+                platform="lingya_qq",
+                account_id=account_id,
+                action_id="keepalive_sync",
+                params={
+                    "force_refresh": "false",
+                    "refresh_quota": "true" if refresh_quota else "false",
+                    "run_hello": "true" if run_hello else "false",
+                },
+            )
+            result = runtime.execute_action(command, log_fn=lambda message: print(f"[LingYaKeepalive] {message}"))
+            if not getattr(result, "ok", False):
+                print(f"[LingYaKeepalive] account {account_id} failed: {getattr(result, 'error', '')}")
+        except Exception as exc:
+            print(f"[LingYaKeepalive] account {account_id} failed: {exc}")
+        finally:
+            self._unlock_account(account_id)
 
     def _try_lock_account(self, account_id: int) -> bool:
         with self._lock:
