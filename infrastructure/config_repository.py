@@ -33,6 +33,7 @@ class ConfigRepository:
         "quickframe_keepalive_enabled", "quickframe_heartbeat_interval_seconds",
         "quickframe2api_url", "quickframe2api_api_key", "quickframe2api_max_concurrency",
         "quickframe2api_enable_auto_maintenance",
+        "account_low_quota_delete_ranges",
     }
 
     def __init__(self, definitions: ProviderDefinitionsRepository | None = None):

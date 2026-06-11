@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -60,6 +60,11 @@ class BatchExportRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+
+
+class LowQuotaRangeUpdateRequest(BaseModel):
+    min_exclusive: int
+    max_exclusive: int
 
 
 def _stream_artifact(artifact: ExportArtifact) -> StreamingResponse:
@@ -214,6 +219,11 @@ def import_accounts(body: ImportRequest):
     return service.import_accounts(body.platform, body.lines)
 
 
+@router.get("/low-quota-ranges")
+def get_low_quota_ranges():
+    return service.get_low_quota_delete_ranges()
+
+
 @router.get("/{account_id}")
 def get_account(account_id: int):
     item = service.get_account(account_id)
@@ -228,6 +238,34 @@ def update_account(account_id: int, body: AccountUpdateRequest):
     if not item:
         raise HTTPException(404, "账号不存在")
     return item
+
+
+@router.put("/platform/{platform}/low-quota-range")
+def update_platform_low_quota_range(platform: str, body: LowQuotaRangeUpdateRequest):
+    try:
+        return service.update_low_quota_delete_range(
+            platform,
+            min_exclusive=body.min_exclusive,
+            max_exclusive=body.max_exclusive,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.delete("/platform/{platform}/low-quota")
+def delete_platform_low_quota_accounts(
+    platform: str,
+    min_exclusive: Optional[int] = Query(default=None),
+    max_exclusive: Optional[int] = Query(default=None),
+):
+    try:
+        return service.delete_low_quota_accounts(
+            platform,
+            min_exclusive=min_exclusive,
+            max_exclusive=max_exclusive,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.delete("/{account_id}")

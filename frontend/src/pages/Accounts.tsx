@@ -11,7 +11,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { getTaskStatusText, TASK_STATUS_VARIANTS } from '@/lib/tasks'
-import { RefreshCw, Copy, ExternalLink, Download, Upload, Plus, X, Mail, Trash2, Zap, ChevronLeft, ChevronRight } from 'lucide-react'
+import { RefreshCw, Copy, ExternalLink, Download, Upload, Plus, X, Mail, Trash2, Zap, ChevronLeft, ChevronRight, Save } from 'lucide-react'
+
+type LowQuotaRange = { min_exclusive: number; max_exclusive: number }
 
 const STATUS_VARIANT: Record<string, any> = {
   registered: 'default', trial: 'success', subscribed: 'success',
@@ -93,6 +95,70 @@ function getPlanState(acc: any) {
 
 function getValidityStatus(acc: any) {
   return getDisplaySummary(acc)?.status?.validity || acc?.validity_status || acc?.overview?.validity_status || 'unknown'
+}
+
+function optionalNumber(value: any): number | null {
+  if (value === undefined || value === null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function getAccountQuotaBalance(acc: any): number | null {
+  const overview = getAccountOverview(acc)
+  const quota = overview?.quota && typeof overview.quota === 'object' ? overview.quota : {}
+  const credits = overview?.credits && typeof overview.credits === 'object' ? overview.credits : {}
+  const candidates = [
+    overview?.quota_balance,
+    quota?.quota_balance,
+    overview?.remaining_credits,
+    overview?.total_credits,
+    overview?.free_exports_remaining,
+    credits?.totalCredits,
+    credits?.total_credits,
+  ]
+  for (const value of candidates) {
+    const parsed = optionalNumber(value)
+    if (parsed !== null) return parsed
+  }
+  return null
+}
+
+function isLowQuotaAccount(acc: any, minExclusive: number, maxExclusive: number) {
+  const balance = getAccountQuotaBalance(acc)
+  return balance !== null && balance > minExclusive && balance < maxExclusive
+}
+
+function parseLowQuotaRanges(raw: any): Record<string, LowQuotaRange> {
+  let data = raw
+  if (typeof raw === 'string') {
+    try {
+      data = raw.trim() ? JSON.parse(raw) : {}
+    } catch {
+      data = {}
+    }
+  }
+  if (!data || typeof data !== 'object') return {}
+  const ranges: Record<string, LowQuotaRange> = {}
+  Object.entries(data).forEach(([platform, value]: [string, any]) => {
+    if (!value || typeof value !== 'object') return
+    const min = optionalNumber(value.min_exclusive)
+    const max = optionalNumber(value.max_exclusive)
+    if (min === null || max === null || max <= min) return
+    ranges[platform] = { min_exclusive: min, max_exclusive: max }
+  })
+  return ranges
+}
+
+function parseLowQuotaRange(raw: any): LowQuotaRange | null {
+  if (!raw || typeof raw !== 'object') return null
+  const min = optionalNumber(raw.min_exclusive)
+  const max = optionalNumber(raw.max_exclusive)
+  if (min === null || max === null || max <= min) return null
+  return { min_exclusive: min, max_exclusive: max }
+}
+
+function getLowQuotaRange(platform: string, ranges: Record<string, LowQuotaRange>, fallback: LowQuotaRange | null) {
+  return ranges[platform] || fallback
 }
 
 function getCompactStatusMeta(acc: any) {
@@ -1705,10 +1771,15 @@ export default function Accounts() {
   const [showAdd, setShowAdd] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
   const [platformsMap, setPlatformsMap] = useState<Record<string, any>>({})
+  const [lowQuotaRanges, setLowQuotaRanges] = useState<Record<string, LowQuotaRange>>({})
+  const [lowQuotaFallback, setLowQuotaFallback] = useState<LowQuotaRange | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [actionResult, setActionResult] = useState<{ title: string; payload: any } | null>(null)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [batchRefreshing, setBatchRefreshing] = useState(false)
+  const [lowQuotaDeleting, setLowQuotaDeleting] = useState(false)
+  const [lowQuotaSaving, setLowQuotaSaving] = useState(false)
+  const [lowQuotaDrafts, setLowQuotaDrafts] = useState<Record<string, { min: string; max: string }>>({})
   const [batchTask, setBatchTask] = useState<{ taskId: string; title: string } | null>(null)
   const [batchTaskStatus, setBatchTaskStatus] = useState<string | null>(null)
 
@@ -1722,6 +1793,22 @@ export default function Accounts() {
       }
     }).catch(() => {})
   }, [platform, tab])
+
+  useEffect(() => {
+    let active = true
+    apiFetch('/accounts/low-quota-ranges')
+      .then((data: any) => {
+        if (!active) return
+        setLowQuotaRanges(parseLowQuotaRanges(data?.effective))
+        setLowQuotaFallback(parseLowQuotaRange(data?.fallback))
+      })
+      .catch(() => {
+        if (!active) return
+        setLowQuotaRanges({})
+        setLowQuotaFallback(null)
+      })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 400)
@@ -1785,6 +1872,71 @@ export default function Accounts() {
   const pageIds = accounts.map(acc => acc.id)
   const allSelectedOnPage = pageIds.length > 0 && pageIds.every(id => selectedIds.has(id))
   const selectedCount = selectedIds.size
+  const configuredLowQuotaRange = getLowQuotaRange(tab, lowQuotaRanges, lowQuotaFallback)
+
+  useEffect(() => {
+    if (!tab || !configuredLowQuotaRange) return
+    setLowQuotaDrafts(current => {
+      if (current[tab] && (current[tab].min !== '' || current[tab].max !== '')) return current
+      return {
+        ...current,
+        [tab]: {
+          min: String(configuredLowQuotaRange.min_exclusive),
+          max: String(configuredLowQuotaRange.max_exclusive),
+        },
+      }
+    })
+  }, [tab, configuredLowQuotaRange?.min_exclusive, configuredLowQuotaRange?.max_exclusive])
+
+  const currentLowQuotaDraft = lowQuotaDrafts[tab] || {
+    min: configuredLowQuotaRange ? String(configuredLowQuotaRange.min_exclusive) : '',
+    max: configuredLowQuotaRange ? String(configuredLowQuotaRange.max_exclusive) : '',
+  }
+  const lowQuotaMin = optionalNumber(currentLowQuotaDraft.min)
+  const lowQuotaMax = optionalNumber(currentLowQuotaDraft.max)
+  const lowQuotaMinValue = lowQuotaMin ?? 0
+  const lowQuotaMaxValue = lowQuotaMax ?? 0
+  const lowQuotaRangeValid = lowQuotaMin !== null && lowQuotaMax !== null && lowQuotaMaxValue > lowQuotaMinValue
+
+  const updateLowQuotaDraft = (field: 'min' | 'max', value: string) => {
+    setLowQuotaDrafts(current => ({
+      ...current,
+      [tab]: {
+        min: field === 'min' ? value : currentLowQuotaDraft.min,
+        max: field === 'max' ? value : currentLowQuotaDraft.max,
+      },
+    }))
+  }
+
+  const saveLowQuotaRange = async (range?: LowQuotaRange) => {
+    if (!tab) throw new Error('缺少平台')
+    const nextRange = range || {
+      min_exclusive: Number(currentLowQuotaDraft.min),
+      max_exclusive: Number(currentLowQuotaDraft.max),
+    }
+    if (!Number.isFinite(nextRange.min_exclusive) || !Number.isFinite(nextRange.max_exclusive) || nextRange.max_exclusive <= nextRange.min_exclusive) {
+      throw new Error('低额度删除区间必须满足 min < max')
+    }
+    setLowQuotaSaving(true)
+    try {
+      const data = await apiFetch(`/accounts/platform/${encodeURIComponent(tab)}/low-quota-range`, {
+        method: 'PUT',
+        body: JSON.stringify(nextRange),
+      })
+      setLowQuotaRanges(parseLowQuotaRanges(data?.effective))
+      setLowQuotaFallback(parseLowQuotaRange(data?.fallback))
+      setLowQuotaDrafts(current => ({
+        ...current,
+        [tab]: {
+          min: String(nextRange.min_exclusive),
+          max: String(nextRange.max_exclusive),
+        },
+      }))
+      return nextRange
+    } finally {
+      setLowQuotaSaving(false)
+    }
+  }
 
   const toggleOne = (id: number) => {
     setSelectedIds(prev => {
@@ -1814,6 +1966,9 @@ export default function Accounts() {
   const visibleTrial = accounts.filter(acc => getPlanState(acc) === 'trial').length
   const visibleSubscribed = accounts.filter(acc => getPlanState(acc) === 'subscribed').length
   const visibleInvalid = accounts.filter(acc => getValidityStatus(acc) === 'invalid' || getLifecycleStatus(acc) === 'invalid').length
+  const visibleLowQuota = lowQuotaRangeValid
+    ? accounts.filter(acc => isLowQuotaAccount(acc, lowQuotaMinValue, lowQuotaMaxValue)).length
+    : 0
   const linkedCashier = accounts.filter(acc => Boolean(getCashierUrl(acc))).length
 
   return (
@@ -1858,7 +2013,7 @@ export default function Accounts() {
               {selectedCount > 0 && <span className="flex items-center rounded-full bg-[var(--text-primary)]/10 px-2 py-0.5 font-medium text-[var(--text-primary)] ring-1 ring-inset ring-[var(--text-primary)]/20">已选 {selectedCount}</span>}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button size="sm" onClick={() => setShowRegister(true)} className="h-8 shadow-sm">
               <Plus className="mr-1.5 h-3.5 w-3.5" />
               自动注册
@@ -1944,6 +2099,76 @@ export default function Accounts() {
             >
               <Zap className={`mr-1 h-3.5 w-3.5 ${batchRefreshing ? 'animate-pulse' : ''}`} />
               {batchRefreshing ? '刷新中...' : '刷新额度'}
+            </Button>
+            <div className="flex h-7 items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-1.5">
+              <input
+                type="number"
+                value={currentLowQuotaDraft.min}
+                onChange={e => updateLowQuotaDraft('min', e.target.value)}
+                className="h-5 w-12 bg-transparent text-center text-xs text-[var(--text-primary)] outline-none"
+                title="低额度删除区间下限，不包含"
+              />
+              <span className="text-[11px] text-[var(--text-muted)]">&lt; 额度 &lt;</span>
+              <input
+                type="number"
+                value={currentLowQuotaDraft.max}
+                onChange={e => updateLowQuotaDraft('max', e.target.value)}
+                className="h-5 w-12 bg-transparent text-center text-xs text-[var(--text-primary)] outline-none"
+                title="低额度删除区间上限，不包含"
+              />
+              <button
+                type="button"
+                disabled={!tab || lowQuotaSaving || !lowQuotaRangeValid}
+                className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                title="保存当前平台低额度删除区间"
+                onClick={async () => {
+                  try {
+                    await saveLowQuotaRange()
+                  } catch (error: any) {
+                    alert(error?.message || '保存低额度删除区间失败')
+                  }
+                }}
+              >
+                <Save className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!tab || lowQuotaDeleting || loading || !lowQuotaRangeValid}
+              className="h-7 px-2.5 text-red-500 hover:bg-red-500/10 hover:text-red-600"
+              title="删除当前平台中额度处于配置区间内的账号"
+              onClick={async () => {
+                if (!lowQuotaRangeValid) {
+                  alert('低额度删除区间必须满足 min < max')
+                  return
+                }
+                const visibleHint = visibleLowQuota > 0 ? `当前页可见 ${visibleLowQuota} 个；` : ''
+                const rangeText = `${lowQuotaMinValue} < 额度 < ${lowQuotaMaxValue}`
+                if (!confirm(`${visibleHint}确认删除所有 ${platformLabel} 中 ${rangeText} 的账号？此操作不可撤销，且不只限当前页。`)) return
+                setLowQuotaDeleting(true)
+                try {
+                  const range = await saveLowQuotaRange({
+                    min_exclusive: lowQuotaMinValue,
+                    max_exclusive: lowQuotaMaxValue,
+                  })
+                  const params = new URLSearchParams({
+                    min_exclusive: String(range.min_exclusive),
+                    max_exclusive: String(range.max_exclusive),
+                  })
+                  const res = await apiFetch(`/accounts/platform/${encodeURIComponent(tab)}/low-quota?${params}`, { method: 'DELETE' })
+                  setSelectedIds(new Set())
+                  setActionResult({ title: `${platformLabel} 低额度账号删除结果`, payload: res })
+                  load()
+                } catch (error: any) {
+                  alert(error?.message || '删除低额度账号失败')
+                } finally {
+                  setLowQuotaDeleting(false)
+                }
+              }}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              {lowQuotaDeleting ? '删除中...' : '删除低额度'}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => load()} disabled={loading} className="h-7 w-7 p-0 text-[var(--text-muted)] hover:text-[var(--text-primary)]">
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />

@@ -6,6 +6,7 @@ import json
 import re
 
 from core.datetime_utils import serialize_datetime
+from core.config_store import config_store
 from domain.accounts import (
     AccountCreateCommand,
     AccountImportLine,
@@ -22,6 +23,52 @@ IMPORT_LINE_RE = re.compile(
     r'\s+(?P<password>"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|\S+)'
     r'(?:\s+(?P<extra>.*))?\s*$'
 )
+
+
+LOW_QUOTA_DELETE_DEFAULT_RANGES: dict[str, tuple[int, int]] = {
+    "lingya_qq": (0, 73),
+    "freebeat": (-1, 80),
+}
+LOW_QUOTA_DELETE_CONFIG_KEY = "account_low_quota_delete_ranges"
+FALLBACK_LOW_QUOTA_DELETE_RANGE = (0, 73)
+
+
+def _range_dict(min_exclusive: int, max_exclusive: int) -> dict[str, int]:
+    return {
+        "min_exclusive": int(min_exclusive),
+        "max_exclusive": int(max_exclusive),
+    }
+
+
+def _default_low_quota_ranges() -> dict[str, dict[str, int]]:
+    return {
+        platform: _range_dict(min_value, max_value)
+        for platform, (min_value, max_value) in LOW_QUOTA_DELETE_DEFAULT_RANGES.items()
+    }
+
+
+def _parse_low_quota_ranges(raw: str) -> dict[str, dict[str, int]]:
+    try:
+        data = json.loads(raw) if str(raw or "").strip() else {}
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return {}
+    ranges: dict[str, dict[str, int]] = {}
+    for platform, value in data.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            min_value = int(value.get("min_exclusive"))
+            max_value = int(value.get("max_exclusive"))
+        except (TypeError, ValueError):
+            continue
+        if max_value <= min_value:
+            continue
+        platform_key = str(platform or "").strip()
+        if platform_key:
+            ranges[platform_key] = _range_dict(min_value, max_value)
+    return ranges
 
 
 def _decode_import_token(value: str) -> str:
@@ -65,6 +112,60 @@ class AccountsService:
 
     def delete_account(self, account_id: int) -> dict:
         return {"ok": self.repository.delete(account_id)}
+
+    def get_low_quota_delete_ranges(self) -> dict:
+        defaults = _default_low_quota_ranges()
+        fallback = _range_dict(*FALLBACK_LOW_QUOTA_DELETE_RANGE)
+        configured = _parse_low_quota_ranges(config_store.get(LOW_QUOTA_DELETE_CONFIG_KEY, ""))
+        effective = {**defaults, **configured}
+        return {
+            "ok": True,
+            "config_key": LOW_QUOTA_DELETE_CONFIG_KEY,
+            "defaults": defaults,
+            "fallback": fallback,
+            "configured": configured,
+            "effective": effective,
+        }
+
+    def update_low_quota_delete_range(self, platform: str, *, min_exclusive: int, max_exclusive: int) -> dict:
+        platform_key = str(platform or "").strip()
+        if not platform_key:
+            raise ValueError("platform is required")
+        min_value = int(min_exclusive)
+        max_value = int(max_exclusive)
+        if max_value <= min_value:
+            raise ValueError("max_exclusive must be greater than min_exclusive")
+        configured = _parse_low_quota_ranges(config_store.get(LOW_QUOTA_DELETE_CONFIG_KEY, ""))
+        configured[platform_key] = _range_dict(min_value, max_value)
+        config_store.set(
+            LOW_QUOTA_DELETE_CONFIG_KEY,
+            json.dumps(configured, ensure_ascii=False, sort_keys=True),
+        )
+        return self.get_low_quota_delete_ranges()
+
+    def delete_low_quota_accounts(
+        self,
+        platform: str,
+        *,
+        min_exclusive: int | None = None,
+        max_exclusive: int | None = None,
+    ) -> dict:
+        platform_key = str(platform or "").strip()
+        if not platform_key:
+            raise ValueError("platform is required")
+        ranges = self.get_low_quota_delete_ranges()
+        default_range = ranges["effective"].get(platform_key) or ranges["fallback"]
+        default_min = int(default_range["min_exclusive"])
+        default_max = int(default_range["max_exclusive"])
+        min_value = default_min if min_exclusive is None else int(min_exclusive)
+        max_value = default_max if max_exclusive is None else int(max_exclusive)
+        if max_value <= min_value:
+            raise ValueError("max_exclusive must be greater than min_exclusive")
+        return self.repository.delete_accounts_by_quota_range(
+            platform_key,
+            min_exclusive=min_value,
+            max_exclusive=max_value,
+        )
 
     def import_accounts(self, platform: str, lines: list[str]) -> dict:
         parsed: list[AccountImportLine] = []

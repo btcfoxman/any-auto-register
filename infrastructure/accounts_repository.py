@@ -30,6 +30,33 @@ from domain.accounts import (
 )
 
 
+def _optional_int(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _account_quota_balance(overview: dict) -> int | None:
+    quota = overview.get("quota") if isinstance(overview.get("quota"), dict) else {}
+    credits = overview.get("credits") if isinstance(overview.get("credits"), dict) else {}
+    for value in (
+        overview.get("quota_balance"),
+        quota.get("quota_balance"),
+        overview.get("remaining_credits"),
+        overview.get("total_credits"),
+        overview.get("free_exports_remaining"),
+        credits.get("totalCredits"),
+        credits.get("total_credits"),
+    ):
+        parsed = _optional_int(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def _build_summary_updates(
     overview: dict | None,
     *,
@@ -282,6 +309,42 @@ class AccountsRepository:
             session.delete(model)
             session.commit()
             return True
+
+    def delete_accounts_by_quota_range(self, platform: str, *, min_exclusive: int, max_exclusive: int) -> dict:
+        platform = str(platform or "").strip()
+        with Session(engine) as session:
+            models = session.exec(
+                select(AccountModel)
+                .where(AccountModel.platform == platform)
+                .order_by(AccountModel.id)
+            ).all()
+            graphs = load_account_graphs(session, [int(model.id or 0) for model in models if model.id])
+            deleted: list[dict] = []
+            for model in models:
+                account_id = int(model.id or 0)
+                if account_id <= 0:
+                    continue
+                overview = (graphs.get(account_id) or {}).get("overview") or {}
+                balance = _account_quota_balance(overview)
+                if balance is None or balance <= min_exclusive or balance >= max_exclusive:
+                    continue
+                purge_account_graph(session, account_id)
+                session.delete(model)
+                deleted.append({
+                    "id": account_id,
+                    "email": model.email,
+                    "quota_value": balance,
+                    "quota_balance": balance,
+                })
+            session.commit()
+            return {
+                "ok": True,
+                "deleted": len(deleted),
+                "deleted_accounts": deleted,
+                "platform": platform,
+                "min_exclusive": min_exclusive,
+                "max_exclusive": max_exclusive,
+            }
 
     def import_lines(self, platform: str, lines: list[AccountImportLine]) -> int:
         created = 0
