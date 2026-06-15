@@ -2168,7 +2168,7 @@ export default function Accounts() {
               }}
             >
               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-              {lowQuotaDeleting ? '删除中...' : '删除低额度'}
+              {lowQuotaDeleting ? '删除中...' : '删除低额'}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => load()} disabled={loading} className="h-7 w-7 p-0 text-[var(--text-muted)] hover:text-[var(--text-primary)]">
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
