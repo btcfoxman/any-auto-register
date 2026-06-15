@@ -405,6 +405,22 @@ def _account_value_source(account: Account) -> dict[str, Any]:
     return source
 
 
+def _proxy_value_from(data: dict[str, Any] | None) -> str:
+    for key in ("lingya_qq_proxy_url", "proxy_url", "proxyUrl", "resolved_proxy", "proxy"):
+        value = str((data or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _effective_proxy(source: dict[str, Any], params: dict[str, Any] | None = None, configured_proxy: str | None = None) -> str:
+    return (
+        _proxy_value_from(params)
+        or _proxy_value_from(source)
+        or str(configured_proxy or "").strip()
+    )
+
+
 def _sms_provider_from_account_source(source: dict[str, Any]) -> str:
     for key in ("sms_provider", "phone_provider", "lingya_qq_sms_provider"):
         value = _normalize_sms_provider_key(source.get(key))
@@ -608,6 +624,7 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "feihumsg_province", "label": "FeiHuMsg province enum (optional)", "type": "text"},
                     {"key": "haozhuma_province", "label": "HaoZhuMa province (optional)", "type": "text"},
                     {"key": "haozhuma_sid", "label": "HaoZhuMa project ID (optional)", "type": "text"},
+                    {"key": "proxy", "label": "Proxy URL (optional; defaults to account proxy)", "type": "text"},
                 ],
             }
         )
@@ -888,6 +905,11 @@ class LingYaQQPlatform(BasePlatform):
         service = _resolve_sms_service(sms_settings, sms_extra, provider_key=provider_key)
         country = _resolve_sms_country(sms_settings, sms_extra)
         timeout = _sms_timeout(params.get("sms_timeout") or params.get("lingya_qq_sms_timeout"))
+        account_proxy = _effective_proxy(
+            account_source,
+            params,
+            self.config.proxy if self.config else None,
+        )
         provider = create_sms_provider(provider_key, sms_settings)
         activation = None
         completed = False
@@ -907,7 +929,11 @@ class LingYaQQPlatform(BasePlatform):
                 except Exception as exc:
                     self.log(f"Failed to read old SMS baseline; continuing to wait for a new code: {exc}")
 
-            self.log("Open https://lingya.qq.com in normal Chrome/Edge, enter this phone number, complete the graphic CAPTCHA, then send SMS.")
+            if account_proxy:
+                self.log(f"Use this proxy for the LingYa browser relogin: {account_proxy}")
+                self.log("Open https://lingya.qq.com in a Chrome/Edge profile configured with this proxy, enter this phone number, complete the graphic CAPTCHA, then send SMS.")
+            else:
+                self.log("Open https://lingya.qq.com in normal Chrome/Edge, enter this phone number, complete the graphic CAPTCHA, then send SMS.")
             self.log(f"Waiting for relogin SMS, timeout {timeout} seconds.")
 
             get_code_after = getattr(provider, "get_code_after", None)
@@ -923,7 +949,8 @@ class LingYaQQPlatform(BasePlatform):
 
             account_cookies = extract_lingya_qq_cookies(account_source)
             vdevice_guid = str(account_source.get("vdevice_guid") or "").strip() or None
-            account_proxy = str(account_source.get("proxy_url") or account_source.get("proxy") or "").strip() or None
+            if account_proxy:
+                self.log(f"LingYaQQ relogin using proxy: {account_proxy}")
             client = self._client(vdevice_guid=vdevice_guid, cookies=account_cookies, proxy=account_proxy)
             login = client.login_with_phone_code(phone=next_phone, code=code, area_code=area_code)
             login_response = _extract_login_response(login)
@@ -974,6 +1001,8 @@ class LingYaQQPlatform(BasePlatform):
                 **quota_meta,
                 **quota_overview,
             }
+            if account_proxy:
+                data["proxy_url"] = account_proxy
             sync_result = sync_account_to_lingya2api(
                 _account_with_extra(account, {**account_source, **data}),
                 log_fn=self.log,
@@ -1008,7 +1037,7 @@ class LingYaQQPlatform(BasePlatform):
         client = self._client(
             vdevice_guid=vdevice_guid,
             cookies=extract_lingya_qq_cookies(cookie_fields or source),
-            proxy=str(source.get("proxy_url") or source.get("proxy") or "").strip() or None,
+            proxy=_effective_proxy(source, configured_proxy=self.config.proxy if self.config else None) or None,
             user_agent=str(source.get("user_agent") or "").strip() or None,
         )
         return source, cookie_fields, client

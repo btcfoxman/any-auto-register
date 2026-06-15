@@ -554,6 +554,71 @@ def test_lingya_qq_check_valid_recovers_from_lingya2api_active_snapshot(monkeypa
     assert overview["quota_balance"] == "7"
 
 
+def test_lingya_qq_query_state_keeps_hello_501_as_failure(monkeypatch):
+    events = []
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            self.vdevice_guid = vdevice_guid or "device-old"
+            self._cookies = dict(cookies or {})
+
+        def refresh_session(self, *, main_login: str = "phone"):
+            events.append(("refresh", main_login))
+            self._cookies.update(
+                {
+                    "v_vusession": "session-new",
+                    "vusession": "session-new",
+                    "v_vurefresh": "refresh-new",
+                    "v_vuserid": "vuid-new",
+                }
+            )
+            return {
+                "ret": 0,
+                "data": {
+                    "rsp": {
+                        "refresh_response": {
+                            "vuid": "vuid-new",
+                            "vusession": "session-new",
+                            "vurefresh": "refresh-new",
+                        }
+                    }
+                },
+            }
+
+        def cookie_dict(self):
+            return dict(self._cookies)
+
+        def hello(self):
+            events.append(("hello",))
+            raise RuntimeError(
+                "501 Server Error: Not Implemented for url: "
+                "https://pbaccess.lingya.qq.com/trpc.workstation.backend.Space/Hello"
+            )
+
+        def get_user_quota(self):
+            events.append(("quota",))
+            raise AssertionError("query_state must not fall back to quota after Hello 501")
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid-old",
+        extra={
+            "cookies": "v_vusession=session-old; v_vurefresh=refresh-old; v_vuserid=vuid-old; vdevice_guid=device-old",
+            "v_main_login": "phone",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="501 Server Error"):
+        platform.execute_action("query_state", account, {})
+
+    assert events == [("refresh", "phone"), ("hello",)]
+
+
 def test_lingya_qq_relogin_sms_action(monkeypatch):
     events = []
 
@@ -901,6 +966,86 @@ def test_lingya_qq_relogin_sms_syncs_new_session_to_lingya2api(monkeypatch):
     assert result["ok"] is True
     assert result["data"]["lingya2api_synced"] is True
     assert synced == [("session-new", "refresh-new", False, False)]
+
+
+def test_lingya_qq_relogin_sms_uses_saved_account_proxy(monkeypatch):
+    proxies = []
+    synced_proxy_urls = []
+
+    class FakeSmsProvider:
+        def get_number(self, *, service: str, country: str = ""):
+            return SmsActivation(activation_id="13800138000", phone_number="13800138000")
+
+        def get_code(self, activation_id: str, *, timeout: int = 120):
+            return "654321"
+
+        def report_success(self, activation_id: str):
+            return True
+
+    class FakeClient:
+        def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            proxies.append(proxy)
+            self.vdevice_guid = vdevice_guid or "device-old"
+
+        def login_with_phone_code(self, *, phone: str, code: str, area_code: str = "+86"):
+            return {
+                "ret": 0,
+                "data": {
+                    "error_code": 0,
+                    "rsp": {
+                        "login_response": {
+                            "vuid": "vuid-new",
+                            "vusession": "session-new",
+                            "vurefresh": "refresh-new",
+                        }
+                    },
+                },
+            }
+
+        def get_user_profile(self, vuid: str):
+            return {"ret": 0, "data": {"user_item": {"profile_info": {"user_info": {"vuid": vuid}}}}}
+
+        def get_user_quota(self):
+            return {"quota_balance": "4", "quota_sum": "6"}
+
+    def fake_sync(account, *, log_fn=None, heartbeat=False, check=False, extra_overrides=None):
+        synced_proxy_urls.append(str((account.extra or {}).get("proxy_url") or ""))
+        return {"ok": True}
+
+    monkeypatch.setattr("platforms.lingya_qq.plugin.create_sms_provider", lambda key, cfg: FakeSmsProvider())
+    monkeypatch.setattr("platforms.lingya_qq.plugin.LingYaQQClient", FakeClient)
+    monkeypatch.setattr("platforms.lingya_qq.plugin._resolve_sms_runtime", lambda extra: ("uomsg_api", {"uomsg_token": "tok"}))
+    monkeypatch.setattr("platforms.lingya_qq.plugin.sync_account_to_lingya2api", fake_sync)
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+    logs = []
+    platform.set_logger(logs.append)
+    account = Account(
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        user_id="vuid-old",
+        extra={
+            "cookies": "v_vusession=session-old; v_vuserid=vuid-old; vdevice_guid=device-old",
+            "local_phone": "13800138000",
+            "area_code": "+86",
+            "sms_provider": "uomsg_api",
+            "account_overview": {
+                "legacy_extra": {
+                    "proxyUrl": "http://proxy.example:8080",
+                }
+            },
+        },
+    )
+
+    result = platform.execute_action("relogin_sms", account, {"sms_timeout": "10"})
+
+    assert result["ok"] is True
+    assert proxies == ["http://proxy.example:8080"]
+    assert result["data"]["proxy_url"] == "http://proxy.example:8080"
+    assert synced_proxy_urls == ["http://proxy.example:8080"]
+    assert any("Use this proxy for the LingYa browser relogin: http://proxy.example:8080" in item for item in logs)
+    assert any("relogin using proxy: http://proxy.example:8080" in item for item in logs)
 
 
 def test_lingya_qq_keepalive_refreshes_and_syncs(monkeypatch):

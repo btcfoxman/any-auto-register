@@ -385,6 +385,7 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             "phone",
             "local_phone",
             "area_code",
+            "proxy_url",
             "vuid",
             "nick",
             "avatar",
