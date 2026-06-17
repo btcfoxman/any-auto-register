@@ -244,7 +244,6 @@ class WeryAIClient:
             "accept": "application/json",
             "accept-language": self.lang,
             "referer": f"{WERYAI_WEB_BASE}/",
-            "origin": WERYAI_WEB_BASE,
             "user-agent": self.user_agent,
             "sec-ch-ua": self.sec_ch_ua,
             "sec-ch-ua-mobile": "?0",
