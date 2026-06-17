@@ -20,6 +20,7 @@ WERYAI_DEFAULT_VER_CODE = "1.9.0"
 WERYAI_DEFAULT_LANG = "en"
 WERYAI_DEFAULT_CHANNEL = "official"
 WERYAI_DEFAULT_IMPERSONATE = "chrome"
+WERYAI_IMPERSONATE_FALLBACKS = ("chrome", "chrome136", "chrome133a", "chrome131", "chrome124", "chrome120", "chrome110")
 WERYAI_DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
@@ -78,8 +79,28 @@ def normalize_weryai_impersonate(value: Any) -> str:
     requested = text(value) or WERYAI_DEFAULT_IMPERSONATE
     supported = supported_weryai_impersonates()
     if supported and requested not in supported:
+        for candidate in WERYAI_IMPERSONATE_FALLBACKS:
+            if candidate in supported:
+                return candidate
         return WERYAI_DEFAULT_IMPERSONATE
     return requested
+
+
+def unsupported_impersonate_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "impersonating" in message and "not supported" in message
+
+
+def weryai_impersonate_candidates(current: str) -> list[str]:
+    candidates = [text(current) or WERYAI_DEFAULT_IMPERSONATE]
+    supported = supported_weryai_impersonates()
+    for candidate in WERYAI_IMPERSONATE_FALLBACKS:
+        if candidate in candidates:
+            continue
+        if supported and candidate not in supported:
+            continue
+        candidates.append(candidate)
+    return candidates
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -243,9 +264,12 @@ class WeryAIClient:
             self.log(f"WeryAI impersonate {requested_impersonate} is not supported; using {self.impersonate}")
         self.user_agent = text(user_agent) or WERYAI_DEFAULT_USER_AGENT
         self.sec_ch_ua = text(sec_ch_ua) or WERYAI_DEFAULT_SEC_CH_UA
-        proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        self.session = Session(impersonate=self.impersonate, proxies=proxies, timeout=30)
+        self.proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
+        self.session = self._new_session()
         self._load_cookies(cookies or cookie_header)
+
+    def _new_session(self) -> Session:
+        return Session(impersonate=self.impersonate, proxies=self.proxies, timeout=30)
 
     def _load_cookies(self, cookies: Any) -> None:
         header = cookie_header_from_any(cookies)
@@ -294,6 +318,12 @@ class WeryAIClient:
     def _url(self, path: str) -> str:
         return f"{WERYAI_API_BASE}{path}"
 
+    def _reset_session_impersonate(self, impersonate: str) -> None:
+        cookie_header = cookie_header_from_any(cookie_list_from_session(self.session))
+        self.impersonate = impersonate
+        self.session = self._new_session()
+        self._load_cookies(cookie_header)
+
     def _request_json(
         self,
         method: str,
@@ -306,14 +336,29 @@ class WeryAIClient:
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         request_timeout = timeout_seconds if timeout_seconds is not None else 30
-        response = self.session.request(
-            method,
-            self._url(path),
-            params=params or {},
-            data=json_dumps(body) if body is not None else None,
-            headers=self.headers(auth=auth, json_content=True),
-            timeout=request_timeout,
-        )
+        response = None
+        last_error: Exception | None = None
+        for impersonate in weryai_impersonate_candidates(self.impersonate):
+            if impersonate != self.impersonate:
+                self.log(f"WeryAI retry {label} with impersonate {impersonate}")
+                self._reset_session_impersonate(impersonate)
+            try:
+                response = self.session.request(
+                    method,
+                    self._url(path),
+                    params=params or {},
+                    data=json_dumps(body) if body is not None else None,
+                    headers=self.headers(auth=auth, json_content=True),
+                    timeout=request_timeout,
+                )
+                break
+            except Exception as exc:
+                if not unsupported_impersonate_error(exc):
+                    raise
+                last_error = exc
+                continue
+        if response is None:
+            raise last_error or RuntimeError(f"WeryAI {label} failed before receiving a response")
         response.raise_for_status()
         data = response_json(response)
         if isinstance(data, dict):
