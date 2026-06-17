@@ -54,6 +54,9 @@ jobs:
     needs: build-image
     runs-on: [self-hosted, linux, x64, any-auto-register]
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Log in to GHCR
         run: |
           set -euo pipefail
@@ -64,7 +67,7 @@ jobs:
             echo "docker login failed, retry ${attempt}/5"
             sleep $((attempt * 10))
           done
-          exit 1
+          echo "::warning::docker login failed after retries; deployment will try local image build fallback"
 
       - name: Pull image and restart service
         run: |
@@ -84,7 +87,16 @@ jobs:
             done
             return 1
           }
-          pull_service
+          if ! pull_service; then
+            echo "docker compose pull failed after retries; building image locally on runner"
+            cd "${GITHUB_WORKSPACE}"
+            docker build \
+              --build-arg APP_VERSION="test-${GITHUB_SHA}" \
+              -t "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}" \
+              -t "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:test-${GITHUB_SHA}" \
+              .
+            cd "${DEPLOY_PATH}"
+          fi
           IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
           IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
           IMAGE_NAME="${IMAGE_NAME}" \
