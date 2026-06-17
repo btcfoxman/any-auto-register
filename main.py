@@ -84,6 +84,8 @@ async def lifespan(app: FastAPI):
     freebeat_daily_signin_worker.start()
     from services.quickframe_keepalive import quickframe_keepalive_worker
     quickframe_keepalive_worker.start()
+    from services.imgs_weryai_keepalive import imgs_weryai_keepalive_worker
+    imgs_weryai_keepalive_worker.start()
     from services.solver_manager import start_async
     start_async()
     from core.lifecycle import lifecycle_manager
@@ -101,6 +103,8 @@ async def lifespan(app: FastAPI):
     _freebeat_daily_signin_worker.stop()
     from services.quickframe_keepalive import quickframe_keepalive_worker as _quickframe_keepalive_worker
     _quickframe_keepalive_worker.stop()
+    from services.imgs_weryai_keepalive import imgs_weryai_keepalive_worker as _imgs_weryai_keepalive_worker
+    _imgs_weryai_keepalive_worker.stop()
     from services.solver_manager import stop
     stop()
 

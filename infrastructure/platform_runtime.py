@@ -25,10 +25,21 @@ PERSISTED_ACTION_DATA_KEYS = {
     "refresh_token",
     "session_token",
     "id_token",
+    "authorization",
     "api_key",
     "client_id",
     "client_secret",
     "workspace_id",
+    "team_id",
+    "teamId",
+    "product_id",
+    "productId",
+    "uid",
+    "df_id",
+    "client_ip",
+    "user_agent",
+    "sec_ch_ua",
+    "sec_ch_ua_platform",
     "accessToken",
     "refreshToken",
     "sessionToken",
@@ -60,6 +71,8 @@ PERSISTED_ACTION_DATA_KEYS = {
     "cookie_header",
     "quickframe_cookies",
     "quickframe_cookie_header",
+    "weryai_cookies",
+    "weryai_cookie_header",
     "quickframe_pending_cookies",
     "quickframe_pending_cookie_header",
     "quickframe_login_state",
@@ -78,6 +91,7 @@ STATEFUL_ACTION_IDS = {
     "sync_lingya2api",
     "sync_freebeat2api",
     "sync_quickframe2api",
+    "sync_imgs2api",
     "daily_sign_in",
     "claim_questionnaire",
     "refresh_session",
@@ -380,6 +394,60 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             fixed_chips.append("自动保活已恢复")
         overview["chips"].extend(fixed_chips)
 
+    if platform == "imgs_weryai":
+        for key in (
+            "user_id",
+            "uid",
+            "team_id",
+            "teamId",
+            "product_id",
+            "productId",
+            "df_id",
+            "client_ip",
+            "account_type",
+            "register_time",
+            "credits_balance",
+            "remaining_credits",
+            "balance",
+            "last_keepalive_at",
+            "session_refreshed",
+            "imgs2api_synced",
+            "imgs_weryai_keepalive_disabled",
+            "imgs_weryai_keepalive_state",
+            "imgs_weryai_keepalive_disabled_reason",
+            "imgs_weryai_keepalive_disabled_at",
+            "imgs_weryai_keepalive_resumed_at",
+            "imgs2api_enable_auto_maintenance",
+            "imgs_weryai_retired",
+        ):
+            if key in data and data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if isinstance(data.get("credits"), dict):
+            overview["credits"] = data.get("credits")
+        if data.get("email"):
+            overview["remote_email"] = str(data.get("email") or "")
+        balance = data.get("remaining_credits")
+        if balance in (None, ""):
+            balance = data.get("credits_balance")
+        if balance in (None, ""):
+            balance = data.get("balance")
+        if balance not in (None, ""):
+            overview["remaining_credits"] = str(balance)
+            overview["chips"].append(f"credits {balance}")
+        if data.get("team_id") or data.get("teamId"):
+            team_id = str(data.get("team_id") or data.get("teamId") or "")
+            overview["chips"].append(f"team {team_id[:8]}")
+        if data.get("product_id") or data.get("productId"):
+            overview["chips"].append(f"product {data.get('product_id') or data.get('productId')}")
+        if data.get("session_refreshed"):
+            overview["chips"].append("session refreshed")
+        if data.get("imgs2api_synced"):
+            overview["chips"].append("imgs2api synced")
+        if data.get("imgs_weryai_keepalive_disabled") is True:
+            overview["chips"].append("keepalive stopped")
+        elif data.get("imgs_weryai_keepalive_disabled") is False:
+            overview["chips"].append("keepalive resumed")
+
     if platform == "lingya_qq":
         for key in (
             "phone",
@@ -468,6 +536,8 @@ def _redact_cookie_result_data(data: Any) -> Any:
         "cookie_header",
         "freebeat_cookies",
         "quickframe_cookies",
+        "weryai_cookies",
+        "weryai_cookie_header",
         "quickframe_pending_cookies",
         "quickframe_pending_cookie_header",
     ):

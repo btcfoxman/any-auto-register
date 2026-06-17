@@ -359,6 +359,26 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
     }],
   },
   {
+    id: 'imgs_weryai', label: 'ImgsWeryai', icon: Shield,
+    sections: [{
+      section: 'ImgsWeryai keepalive',
+      desc: 'Refresh WeryAI account credits and sync account state to imgs2api in the background.',
+      items: [
+        { key: 'imgs_weryai_keepalive_enabled', label: 'Enable keepalive', placeholder: 'true' },
+        { key: 'imgs_weryai_heartbeat_interval_seconds', label: 'Heartbeat interval seconds', placeholder: '300' },
+      ],
+    }, {
+      section: 'Imgs2API',
+      desc: 'Sync WeryAI token, team/product IDs, device fingerprint, cookies, proxy and credit state to imgs2api.',
+      items: [
+        { key: 'imgs2api_url', label: 'API URL', placeholder: 'http://127.0.0.1:8790' },
+        { key: 'imgs2api_api_key', label: 'API key', placeholder: 'sk-test-api-key', secret: true },
+        { key: 'imgs2api_max_concurrency', label: 'Max concurrency', placeholder: '1' },
+        { key: 'imgs2api_enable_auto_maintenance', label: 'Remote maintenance', placeholder: 'true' },
+      ],
+    }],
+  },
+  {
     id: 'platform_caps', label: '高级：平台能力', icon: Sliders,
     sections: [],
   },
