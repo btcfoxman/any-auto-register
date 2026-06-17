@@ -5,7 +5,7 @@ import json
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, get_args
 from urllib.parse import urlparse
 
 from curl_cffi.requests import Session
@@ -19,6 +19,7 @@ WERYAI_DEFAULT_APP_KEY = "20006012"
 WERYAI_DEFAULT_VER_CODE = "1.9.0"
 WERYAI_DEFAULT_LANG = "en"
 WERYAI_DEFAULT_CHANNEL = "official"
+WERYAI_DEFAULT_IMPERSONATE = "chrome"
 WERYAI_DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
@@ -49,6 +50,36 @@ def first_text(*values: Any) -> str:
         if item:
             return item
     return ""
+
+
+def supported_weryai_impersonates() -> set[str]:
+    try:
+        from curl_cffi.requests import impersonate as curl_impersonate
+
+        literal = getattr(curl_impersonate, "BrowserTypeLiteral", None)
+        if literal is not None:
+            supported = {str(item) for item in get_args(literal)}
+            if supported:
+                return supported
+        browser_type = getattr(curl_impersonate, "BrowserType", None)
+        if browser_type is not None:
+            supported = {str(item.value) for item in browser_type}
+            if supported:
+                return supported
+        target_map = getattr(curl_impersonate, "REAL_TARGET_MAP", None)
+        if isinstance(target_map, dict):
+            return {str(item) for item in target_map.keys()} | {str(item) for item in target_map.values()}
+        return set()
+    except Exception:
+        return set()
+
+
+def normalize_weryai_impersonate(value: Any) -> str:
+    requested = text(value) or WERYAI_DEFAULT_IMPERSONATE
+    supported = supported_weryai_impersonates()
+    if supported and requested not in supported:
+        return WERYAI_DEFAULT_IMPERSONATE
+    return requested
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -193,6 +224,7 @@ class WeryAIClient:
         ver_code: str = WERYAI_DEFAULT_VER_CODE,
         lang: str = WERYAI_DEFAULT_LANG,
         channel: str = WERYAI_DEFAULT_CHANNEL,
+        impersonate: str = WERYAI_DEFAULT_IMPERSONATE,
         user_agent: str = WERYAI_DEFAULT_USER_AGENT,
         sec_ch_ua: str = WERYAI_DEFAULT_SEC_CH_UA,
     ) -> None:
@@ -205,10 +237,14 @@ class WeryAIClient:
         self.ver_code = text(ver_code) or WERYAI_DEFAULT_VER_CODE
         self.lang = text(lang) or WERYAI_DEFAULT_LANG
         self.channel = text(channel) or WERYAI_DEFAULT_CHANNEL
+        requested_impersonate = text(impersonate) or WERYAI_DEFAULT_IMPERSONATE
+        self.impersonate = normalize_weryai_impersonate(requested_impersonate)
+        if self.impersonate != requested_impersonate:
+            self.log(f"WeryAI impersonate {requested_impersonate} is not supported; using {self.impersonate}")
         self.user_agent = text(user_agent) or WERYAI_DEFAULT_USER_AGENT
         self.sec_ch_ua = text(sec_ch_ua) or WERYAI_DEFAULT_SEC_CH_UA
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        self.session = Session(impersonate="chrome134", proxies=proxies, timeout=30)
+        self.session = Session(impersonate=self.impersonate, proxies=proxies, timeout=30)
         self._load_cookies(cookies or cookie_header)
 
     def _load_cookies(self, cookies: Any) -> None:
@@ -387,6 +423,7 @@ class WeryAIClient:
             "user_agent": self.user_agent,
             "sec_ch_ua": self.sec_ch_ua,
             "sec_ch_ua_platform": '"Windows"',
+            "weryai_impersonate": self.impersonate,
         }
 
     def fetch_account_state(
@@ -466,6 +503,9 @@ def extract_weryai_account_context(account: Account) -> dict[str, Any]:
         ),
         "user_agent": first_text(merged.get("user_agent"), WERYAI_DEFAULT_USER_AGENT),
         "sec_ch_ua": first_text(merged.get("sec_ch_ua"), WERYAI_DEFAULT_SEC_CH_UA),
+        "impersonate": normalize_weryai_impersonate(
+            first_text(merged.get("weryai_impersonate"), merged.get("impersonate"), WERYAI_DEFAULT_IMPERSONATE)
+        ),
     }
 
 
@@ -576,6 +616,7 @@ def load_weryai_account_state(
         cookie_header=context.get("cookie_header", ""),
         df_id=context.get("df_id", ""),
         client_ip=context.get("client_ip", ""),
+        impersonate=context.get("impersonate", ""),
         user_agent=context.get("user_agent", ""),
         sec_ch_ua=context.get("sec_ch_ua", ""),
     )

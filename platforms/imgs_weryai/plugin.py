@@ -317,6 +317,7 @@ class ImgsWeryaiPlatform(BasePlatform):
             cookie_header=context.get("cookie_header", ""),
             df_id=context.get("df_id", ""),
             client_ip=context.get("client_ip", ""),
+            impersonate=context.get("impersonate", ""),
             user_agent=context.get("user_agent", ""),
             sec_ch_ua=context.get("sec_ch_ua", ""),
         )
