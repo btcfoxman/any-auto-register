@@ -61,11 +61,21 @@ jobs:
         run: |
           set -euo pipefail
           cd "${DEPLOY_PATH}"
-          IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
-          IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
-          IMAGE_NAME="${IMAGE_NAME}" \
-          IMAGE_TAG="${IMAGE_TAG}" \
-          docker compose pull "${DEPLOY_SERVICE}"
+          pull_service() {
+            for attempt in 1 2 3 4 5; do
+              if IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
+                IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
+                IMAGE_NAME="${IMAGE_NAME}" \
+                IMAGE_TAG="${IMAGE_TAG}" \
+                docker compose pull "${DEPLOY_SERVICE}"; then
+                return 0
+              fi
+              echo "docker compose pull failed, retry ${attempt}/5"
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          pull_service
           IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
           IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
           IMAGE_NAME="${IMAGE_NAME}" \
