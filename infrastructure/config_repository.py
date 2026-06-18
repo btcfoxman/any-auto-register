@@ -35,7 +35,7 @@ class ConfigRepository:
         "quickframe2api_enable_auto_maintenance",
         "imgs_weryai_keepalive_enabled", "imgs_weryai_heartbeat_interval_seconds",
         "imgs2api_url", "imgs2api_api_key", "imgs2api_max_concurrency",
-        "imgs2api_enable_auto_maintenance",
+        "imgs2api_enable_auto_maintenance", "imgs2api_proxy_host_override",
         "account_low_quota_delete_ranges",
     }
 

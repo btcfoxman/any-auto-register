@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -155,6 +156,66 @@ def _merged_extra(account: Any, extra_overrides: dict[str, Any] | None = None) -
     return extra
 
 
+def _parse_proxy_host_override(value: Any) -> tuple[str, int | None]:
+    text = _text(value)
+    if not text:
+        return "", None
+    parse_value = text if "://" in text else f"//{text}"
+    try:
+        parsed = urlsplit(parse_value)
+        host = _text(parsed.hostname)
+        port = parsed.port
+    except ValueError:
+        return text, None
+    return host or text, port
+
+
+def _format_proxy_host(host: str) -> str:
+    text = _text(host)
+    if ":" in text and not (text.startswith("[") and text.endswith("]")):
+        return f"[{text}]"
+    return text
+
+
+def _rewrite_proxy_host(proxy_url: Any, host_override: Any) -> str:
+    proxy = _text(proxy_url)
+    target_host, target_port = _parse_proxy_host_override(host_override)
+    if not proxy or not target_host:
+        return proxy
+    try:
+        parsed = urlsplit(proxy)
+        original_port = parsed.port
+    except ValueError:
+        return proxy
+    if not parsed.scheme or not parsed.hostname:
+        return proxy
+
+    auth = ""
+    if "@" in parsed.netloc:
+        auth = parsed.netloc.rsplit("@", 1)[0] + "@"
+    port = target_port if target_port is not None else original_port
+    netloc = f"{auth}{_format_proxy_host(target_host)}"
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def _first_proxy(extra: dict[str, Any]) -> tuple[str, str]:
+    for key in (
+        "imgs2api_proxy_url",
+        "imgs_weryai_proxy_url",
+        "weryai_proxy_url",
+        "proxy_url",
+        "proxyUrl",
+        "resolved_proxy",
+        "proxy",
+    ):
+        value = _text(extra.get(key))
+        if value:
+            return value, key
+    return "", ""
+
+
 def _get_imgs2api_config() -> tuple[str, str, int, bool]:
     try:
         from core.config_store import config_store
@@ -168,6 +229,15 @@ def _get_imgs2api_config() -> tuple[str, str, int, bool]:
         return base_url, api_key, max_concurrency, auto_maintenance
     except Exception:
         return "", "", 1, True
+
+
+def _get_imgs2api_proxy_host_override() -> str:
+    try:
+        from core.config_store import config_store
+
+        return _text(config_store.get("imgs2api_proxy_host_override", ""))
+    except Exception:
+        return ""
 
 
 def is_imgs2api_configured() -> bool:
@@ -214,6 +284,10 @@ def build_imgs2api_payload(
     if _as_bool(extra.get("imgs_weryai_keepalive_disabled"), False) or _as_bool(extra.get("imgs_weryai_retired"), False):
         auto_maintenance_enabled = False
 
+    proxy_url, proxy_source = _first_proxy(extra)
+    if proxy_source != "imgs2api_proxy_url":
+        proxy_url = _rewrite_proxy_host(proxy_url, extra.get("imgs2api_proxy_host_override"))
+
     return {
         "platform": "weryai",
         "name": name[:80],
@@ -235,15 +309,7 @@ def build_imgs2api_payload(
         "cookies": cookies,
         "cookie_header": cookies,
         "weryai_cookies": extra.get("weryai_cookies") if isinstance(extra.get("weryai_cookies"), list) else [],
-        "proxy_url": _first_text(
-            extra.get("imgs2api_proxy_url")
-            or extra.get("imgs_weryai_proxy_url")
-            or extra.get("weryai_proxy_url")
-            or extra.get("proxy_url")
-            or extra.get("proxyUrl")
-            or extra.get("resolved_proxy")
-            or extra.get("proxy")
-        ),
+        "proxy_url": proxy_url,
         "enabled": _as_bool(extra.get("imgs2api_enabled"), True),
         "enable_auto_maintenance": auto_maintenance_enabled,
         "max_concurrency": _clamp_concurrency(extra.get("imgs2api_max_concurrency"), max_concurrency),
@@ -269,11 +335,15 @@ def sync_account_to_imgs2api(
         return False
 
     try:
+        merged_overrides = dict(extra_overrides or {})
+        proxy_host_override = _get_imgs2api_proxy_host_override()
+        if proxy_host_override and not _text(merged_overrides.get("imgs2api_proxy_host_override")):
+            merged_overrides["imgs2api_proxy_host_override"] = proxy_host_override
         payload = build_imgs2api_payload(
             account,
             max_concurrency=max_concurrency,
             auto_maintenance_default=auto_maintenance_default,
-            extra_overrides=extra_overrides,
+            extra_overrides=merged_overrides,
         )
         client = Imgs2ApiClient(base_url, api_key)
         account_result = client.upsert_account(payload)
