@@ -15,6 +15,8 @@ env:
   IMAGE_NAMESPACE: ${{ github.repository_owner }}
   IMAGE_NAME: ${{ github.event.repository.name }}
   IMAGE_TAG: test
+  IMAGE_ARTIFACT: any-auto-register-test-image
+  IMAGE_TAR: any-auto-register-test-image.tar.gz
   DEPLOY_PATH: /home/btcfoxman/docker/any-auto-register
   DEPLOY_SERVICE: app
 
@@ -49,6 +51,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Export image fallback artifact
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --build-arg APP_VERSION="test-${GITHUB_SHA}" \
+            --cache-from type=gha \
+            --load \
+            -t "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}" \
+            -t "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:test-${GITHUB_SHA}" \
+            .
+          docker save \
+            "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}" \
+            "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:test-${GITHUB_SHA}" \
+            | gzip -1 > "/tmp/${IMAGE_TAR}"
+
+      - name: Upload image fallback artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: /tmp/${{ env.IMAGE_TAR }}
+          retention-days: 1
+
   deploy:
     name: Pull and Restart on LAN Runner
     needs: build-image
@@ -69,6 +93,12 @@ jobs:
           done
           echo "::warning::docker login failed after retries; deployment will try local image build fallback"
 
+      - name: Download image fallback artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: /tmp
+
       - name: Pull image and restart service
         run: |
           set -euo pipefail
@@ -88,14 +118,8 @@ jobs:
             return 1
           }
           if ! pull_service; then
-            echo "docker compose pull failed after retries; building image locally on runner"
-            cd "${GITHUB_WORKSPACE}"
-            docker build \
-              --build-arg APP_VERSION="test-${GITHUB_SHA}" \
-              -t "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${IMAGE_TAG}" \
-              -t "${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:test-${GITHUB_SHA}" \
-              .
-            cd "${DEPLOY_PATH}"
+            echo "docker compose pull failed after retries; loading image artifact"
+            gzip -dc "/tmp/${IMAGE_TAR}" | docker load
           fi
           IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
           IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
