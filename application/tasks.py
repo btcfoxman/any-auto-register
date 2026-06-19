@@ -550,7 +550,15 @@ def _auto_sync_imgs2api(task_logger: TaskLogger, account) -> None:
     if getattr(account, "platform", "") != "imgs_weryai":
         return
     try:
-        from core.imgs2api_sync import is_imgs2api_configured, sync_account_to_imgs2api
+        from core.imgs2api_sync import (
+            is_imgs2api_auto_sync_after_register_enabled,
+            is_imgs2api_configured,
+            sync_account_to_imgs2api,
+        )
+
+        if not is_imgs2api_auto_sync_after_register_enabled():
+            task_logger.log("  [Imgs2API] auto sync disabled by imgs2api_auto_sync_after_register=false")
+            return
 
         result = sync_account_to_imgs2api(
             account,

@@ -245,6 +245,15 @@ def is_imgs2api_configured() -> bool:
     return bool(_text(base_url))
 
 
+def is_imgs2api_auto_sync_after_register_enabled() -> bool:
+    try:
+        from core.config_store import config_store
+
+        return _as_bool(config_store.get("imgs2api_auto_sync_after_register", ""), True)
+    except Exception:
+        return True
+
+
 def build_imgs2api_payload(
     account: Any,
     *,

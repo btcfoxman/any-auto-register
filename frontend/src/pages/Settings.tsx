@@ -374,6 +374,7 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'imgs2api_url', label: 'API URL', placeholder: 'http://127.0.0.1:8790' },
         { key: 'imgs2api_api_key', label: 'API key', placeholder: 'sk-test-api-key', secret: true },
         { key: 'imgs2api_max_concurrency', label: 'Max concurrency', placeholder: '1' },
+        { key: 'imgs2api_auto_sync_after_register', label: 'Auto sync after register', placeholder: 'true' },
         { key: 'imgs2api_enable_auto_maintenance', label: 'Remote maintenance', placeholder: 'true' },
         { key: 'imgs2api_proxy_host_override', label: 'Proxy host override', placeholder: '192.168.3.5' },
       ],
