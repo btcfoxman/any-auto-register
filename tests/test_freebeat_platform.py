@@ -46,7 +46,7 @@ def test_freebeat_next_action_login_parser_accepts_rsc_prefix():
     assert parsed["data"]["userId"] == "user_456"
 
 
-def test_freebeat_verify_email_code_uses_tw_server_action_route():
+def test_freebeat_verify_email_code_uses_root_server_action_route_by_default():
     calls: list[dict] = []
 
     class Response:
@@ -69,12 +69,40 @@ def test_freebeat_verify_email_code_uses_tw_server_action_route():
     result = client.verify_email_code("user@example.com", "123456")
 
     assert result["data"]["token"] == "tok_123"
-    assert calls[0]["url"] == "https://freebeat.ai/tw"
-    assert calls[0]["headers"]["referer"] == "https://freebeat.ai/tw"
+    assert calls[0]["url"] == "https://freebeat.ai/"
+    assert calls[0]["headers"]["referer"] == "https://freebeat.ai/"
     assert calls[0]["headers"]["next-action"] == FREEBEAT_DEFAULT_NEXT_ACTION
     assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
     assert calls[0]["headers"]["x-deployment-id"] == "dpl_test"
     assert calls[0]["data"] == '[{"email":"user@example.com","code":"123456"}]'
+
+
+def test_freebeat_verify_email_code_keeps_explicit_frontend_path():
+    calls: list[dict] = []
+
+    class Response:
+        status_code = 200
+        text = (
+            '2:"$Sreact.fragment"\n'
+            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
+            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
+        )
+
+    client = FreebeatClient(log_fn=lambda message: None, frontend_path="/tw", deployment_id="dpl_test")
+    client._warmup_frontend_session = lambda: None
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    client.s.post = fake_post
+
+    result = client.verify_email_code("user@example.com", "123456", next_router_state_tree="legacy-tree")
+
+    assert result["data"]["token"] == "tok_123"
+    assert calls[0]["url"] == "https://freebeat.ai/tw"
+    assert calls[0]["headers"]["referer"] == "https://freebeat.ai/tw"
+    assert calls[0]["headers"]["next-router-state-tree"] == "legacy-tree"
 
 
 def test_freebeat_authenticated_api_sends_current_frontend_token_headers():
