@@ -17,13 +17,29 @@ from core.base_platform import Account
 FREEBEAT_BASE = "https://freebeat.ai"
 FREEBEAT_UPLOAD_BASE = "https://api.freebeatfit.com"
 FREEBEAT_DEFAULT_FRONTEND_PATH = "/"
+FREEBEAT_EN_FRONTEND_PATH = "/"
+FREEBEAT_ZH_VIDEO_FRONTEND_PATH = "/zh/ai-video-generator"
+FREEBEAT_LEGACY_FRONTEND_PATH = "/tw"
 FREEBEAT_REGISTER_REFERER = f"{FREEBEAT_BASE}{FREEBEAT_DEFAULT_FRONTEND_PATH}"
 FREEBEAT_SEND_CODE_PATH = "/api/proxy/v1/user/com/sendEmailVerifyCodeV2"
 FREEBEAT_DEFAULT_VERIFY_SOURCE = "WEB_SHOPIFY_LOGIN"
-FREEBEAT_DEFAULT_NEXT_ACTION = "402d8eb2510d158b5be2d296bb8821c93f972f4f30"
+FREEBEAT_DEFAULT_NEXT_ACTION = "40fc8fc4444d87d8d54a31ebf3953a579839f75c07"
 FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE = (
-    "%5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D"
-    "%2Cnull%2Cnull%2Ctrue%5D"
+    "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22en%22%2C%22d%22%5D%2C"
+    "%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull"
+    "%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
+)
+FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE = (
+    "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22zh%22%2C%22d%22%5D"
+    "%2C%7B%22children%22%3A%5B%22(apps)%22%2C%7B%22children%22%3A%5B%22ai-video-generator%22"
+    "%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull"
+    "%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
+)
+FREEBEAT_EN_NEXT_ROUTER_STATE_TREE = FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
+FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE = (
+    "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22tw%22%2C%22d%22%5D%2C"
+    "%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull"
+    "%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
 )
 FREEBEAT_ONBOARDING_CODE = "onboarding_v1"
 FREEBEAT_USER_AGENT = (
@@ -31,6 +47,9 @@ FREEBEAT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 )
 FREEBEAT_SEC_CH_UA = '"Not/A)Brand";v="99", "Chromium";v="148"'
+FREEBEAT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
+FREEBEAT_ZH_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8"
+FREEBEAT_EN_ACCEPT_LANGUAGE = FREEBEAT_ACCEPT_LANGUAGE
 
 DEFAULT_ONBOARDING_ANSWERS = [
     {"questionKey": "q1_describe_you", "options": ["content_creator"]},
@@ -171,6 +190,32 @@ def _display_path(value: str) -> str:
     except Exception:
         pass
     return value or "/"
+
+
+def _is_server_action_not_found(response: Any) -> bool:
+    if getattr(response, "status_code", None) != 404:
+        return False
+    return "server action not found" in _response_text(response).lower()
+
+
+def _router_state_for_frontend_path(path: str) -> str:
+    normalized = _normalize_frontend_path(path)
+    if normalized == FREEBEAT_EN_FRONTEND_PATH:
+        return FREEBEAT_EN_NEXT_ROUTER_STATE_TREE
+    if normalized == FREEBEAT_ZH_VIDEO_FRONTEND_PATH:
+        return FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE
+    if normalized == FREEBEAT_LEGACY_FRONTEND_PATH:
+        return FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE
+    return FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
+
+
+def _accept_language_for_frontend_path(path: str) -> str:
+    normalized = _normalize_frontend_path(path)
+    if normalized == FREEBEAT_ZH_VIDEO_FRONTEND_PATH:
+        return FREEBEAT_ZH_ACCEPT_LANGUAGE
+    if normalized == FREEBEAT_EN_FRONTEND_PATH:
+        return FREEBEAT_EN_ACCEPT_LANGUAGE
+    return FREEBEAT_ACCEPT_LANGUAGE
 
 
 def _json_from_response(response: Any) -> dict[str, Any]:
@@ -402,7 +447,7 @@ class FreebeatClient:
         self.s.headers.update(
             {
                 "accept": "*/*",
-                "accept-language": "zh-HK,zh;q=0.9,en;q=0.8",
+                "accept-language": FREEBEAT_ACCEPT_LANGUAGE,
                 "referer": self.frontend_url,
                 "sec-ch-ua": FREEBEAT_SEC_CH_UA,
                 "sec-ch-ua-mobile": "?0",
@@ -471,6 +516,7 @@ class FreebeatClient:
     ) -> dict[str, str]:
         request_headers = {
             "accept": accept,
+            "accept-language": FREEBEAT_ACCEPT_LANGUAGE,
             "referer": self.frontend_url,
             "sec-ch-ua": FREEBEAT_SEC_CH_UA,
             "sec-ch-ua-mobile": "?0",
@@ -591,26 +637,56 @@ class FreebeatClient:
 
         self._warmup_frontend_session()
         action_id = str(next_action or FREEBEAT_DEFAULT_NEXT_ACTION).strip()
-        router_state = str(next_router_state_tree or FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE).strip()
-        headers = {
-            "accept": "text/x-component",
-            "accept-language": "zh-HK,zh;q=0.9,en;q=0.8",
-            "content-type": "text/plain;charset=UTF-8",
-            "origin": FREEBEAT_BASE,
-            "referer": self.frontend_url,
-            "next-action": action_id,
-            "priority": "u=1, i",
-        }
-        if router_state:
-            headers["next-router-state-tree"] = router_state
-        if self._deployment_id:
-            headers["x-deployment-id"] = self._deployment_id
-        response = self.s.post(
-            self.frontend_url,
-            headers=headers,
-            data=_json_dumps([{"email": email, "code": code}]),
-        )
-        self.log(f"POST {_display_path(self.frontend_path)} WebLogin -> {response.status_code}")
+        router_state = str(next_router_state_tree or _router_state_for_frontend_path(self.frontend_path)).strip()
+        accept_language = _accept_language_for_frontend_path(self.frontend_path)
+        body = _json_dumps([{"email": email, "code": code}])
+        attempts = [(self.frontend_path, self.frontend_url, router_state, accept_language)]
+        if self.frontend_path != FREEBEAT_LEGACY_FRONTEND_PATH and next_router_state_tree is None:
+            if self.frontend_path != FREEBEAT_ZH_VIDEO_FRONTEND_PATH:
+                attempts.append(
+                    (
+                        FREEBEAT_ZH_VIDEO_FRONTEND_PATH,
+                        self._url(FREEBEAT_ZH_VIDEO_FRONTEND_PATH),
+                        FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE,
+                        FREEBEAT_ZH_ACCEPT_LANGUAGE,
+                    )
+                )
+            attempts.append(
+                (
+                    FREEBEAT_LEGACY_FRONTEND_PATH,
+                    self._url(FREEBEAT_LEGACY_FRONTEND_PATH),
+                    FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE,
+                    FREEBEAT_ACCEPT_LANGUAGE,
+                )
+            )
+
+        response = None
+        for index, (path, url, state_tree, accept_language) in enumerate(attempts):
+            headers = {
+                "accept": "text/x-component",
+                "accept-language": accept_language,
+                "content-type": "text/plain;charset=UTF-8",
+                "origin": FREEBEAT_BASE,
+                "referer": url,
+                "next-action": action_id,
+                "priority": "u=1, i",
+            }
+            if state_tree:
+                headers["next-router-state-tree"] = state_tree
+            if self._deployment_id:
+                headers["x-deployment-id"] = self._deployment_id
+            response = self.s.post(url, headers=headers, data=body)
+            self.log(f"POST {_display_path(path)} WebLogin -> {response.status_code}")
+            if response.status_code == 200:
+                break
+            if index == 0 and len(attempts) > 1 and _is_server_action_not_found(response):
+                self.log("Freebeat WebLogin action not found on default path, retrying alternate route")
+                continue
+            if index == 1 and len(attempts) > 2 and _is_server_action_not_found(response):
+                self.log("Freebeat WebLogin action not found on English root path, retrying legacy /tw route")
+                continue
+            break
+        assert response is not None
         if response.status_code != 200:
             snippet = _response_text(response)[:500]
             raise RuntimeError(f"Freebeat WebLogin failed: HTTP {response.status_code} {snippet}")

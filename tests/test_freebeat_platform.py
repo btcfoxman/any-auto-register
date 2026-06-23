@@ -9,6 +9,9 @@ from core.platform_accounts import build_platform_account
 from domain.actions import ActionExecutionCommand
 from infrastructure.platform_runtime import PlatformRuntime, STATEFUL_ACTION_IDS
 from platforms.freebeat.core import (
+    FREEBEAT_EN_NEXT_ROUTER_STATE_TREE,
+    FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE,
+    FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE,
     FREEBEAT_DEFAULT_NEXT_ACTION,
     FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE,
     FreebeatClient,
@@ -46,7 +49,7 @@ def test_freebeat_next_action_login_parser_accepts_rsc_prefix():
     assert parsed["data"]["userId"] == "user_456"
 
 
-def test_freebeat_verify_email_code_uses_root_server_action_route_by_default():
+def test_freebeat_verify_email_code_uses_english_root_action_route_by_default():
     calls: list[dict] = []
 
     class Response:
@@ -71,6 +74,7 @@ def test_freebeat_verify_email_code_uses_root_server_action_route_by_default():
     assert result["data"]["token"] == "tok_123"
     assert calls[0]["url"] == "https://freebeat.ai/"
     assert calls[0]["headers"]["referer"] == "https://freebeat.ai/"
+    assert calls[0]["headers"]["accept-language"] == "en-US,en;q=0.9"
     assert calls[0]["headers"]["next-action"] == FREEBEAT_DEFAULT_NEXT_ACTION
     assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
     assert calls[0]["headers"]["x-deployment-id"] == "dpl_test"
@@ -103,6 +107,105 @@ def test_freebeat_verify_email_code_keeps_explicit_frontend_path():
     assert calls[0]["url"] == "https://freebeat.ai/tw"
     assert calls[0]["headers"]["referer"] == "https://freebeat.ai/tw"
     assert calls[0]["headers"]["next-router-state-tree"] == "legacy-tree"
+
+
+def test_freebeat_verify_email_code_pairs_explicit_root_path_with_english_router_state():
+    calls: list[dict] = []
+
+    class Response:
+        status_code = 200
+        text = (
+            '2:"$Sreact.fragment"\n'
+            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
+            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
+        )
+
+    client = FreebeatClient(log_fn=lambda message: None, frontend_path="/", deployment_id="dpl_test")
+    client._warmup_frontend_session = lambda: None
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    client.s.post = fake_post
+
+    result = client.verify_email_code("user@example.com", "123456")
+
+    assert result["data"]["token"] == "tok_123"
+    assert calls[0]["url"] == "https://freebeat.ai/"
+    assert calls[0]["headers"]["accept-language"] == "en-US,en;q=0.9"
+    assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_EN_NEXT_ROUTER_STATE_TREE
+
+
+def test_freebeat_verify_email_code_falls_back_to_zh_video_generator_when_default_action_missing():
+    calls: list[dict] = []
+
+    class Response404:
+        status_code = 404
+        text = "Server action not found."
+
+    class Response200:
+        status_code = 200
+        text = (
+            '2:"$Sreact.fragment"\n'
+            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
+            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
+        )
+
+    client = FreebeatClient(log_fn=lambda message: None, deployment_id="dpl_test")
+    client._warmup_frontend_session = lambda: None
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response404() if len(calls) == 1 else Response200()
+
+    client.s.post = fake_post
+
+    result = client.verify_email_code("user@example.com", "123456")
+
+    assert result["data"]["token"] == "tok_123"
+    assert [item["url"] for item in calls] == ["https://freebeat.ai/", "https://freebeat.ai/zh/ai-video-generator"]
+    assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
+    assert calls[1]["headers"]["referer"] == "https://freebeat.ai/zh/ai-video-generator"
+    assert calls[1]["headers"]["accept-language"] == "zh-CN,zh;q=0.9,en;q=0.8"
+    assert calls[1]["headers"]["next-router-state-tree"] == FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE
+    assert calls[1]["data"] == '[{"email":"user@example.com","code":"123456"}]'
+
+
+def test_freebeat_verify_email_code_falls_back_to_legacy_tw_after_default_and_zh_video_miss():
+    calls: list[dict] = []
+
+    class Response404:
+        status_code = 404
+        text = "Server action not found."
+
+    class Response200:
+        status_code = 200
+        text = (
+            '2:"$Sreact.fragment"\n'
+            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
+            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
+        )
+
+    client = FreebeatClient(log_fn=lambda message: None, deployment_id="dpl_test")
+    client._warmup_frontend_session = lambda: None
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response200() if len(calls) == 3 else Response404()
+
+    client.s.post = fake_post
+
+    result = client.verify_email_code("user@example.com", "123456")
+
+    assert result["data"]["token"] == "tok_123"
+    assert [item["url"] for item in calls] == [
+        "https://freebeat.ai/",
+        "https://freebeat.ai/zh/ai-video-generator",
+        "https://freebeat.ai/tw",
+    ]
+    assert calls[2]["headers"]["referer"] == "https://freebeat.ai/tw"
+    assert calls[2]["headers"]["next-router-state-tree"] == FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE
 
 
 def test_freebeat_authenticated_api_sends_current_frontend_token_headers():
