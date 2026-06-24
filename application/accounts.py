@@ -4,6 +4,8 @@ import ast
 import csv
 import json
 import re
+from decimal import Decimal, InvalidOperation
+from typing import TypeAlias
 
 from core.datetime_utils import serialize_datetime
 from core.config_store import config_store
@@ -25,42 +27,65 @@ IMPORT_LINE_RE = re.compile(
 )
 
 
-LOW_QUOTA_DELETE_DEFAULT_RANGES: dict[str, tuple[int, int]] = {
+QuotaNumber: TypeAlias = int | float
+
+
+LOW_QUOTA_DELETE_DEFAULT_RANGES: dict[str, tuple[QuotaNumber, QuotaNumber]] = {
     "lingya_qq": (0, 73),
     "freebeat": (-1, 80),
+    "imgs_weryai": (0, 1),
 }
 LOW_QUOTA_DELETE_CONFIG_KEY = "account_low_quota_delete_ranges"
 FALLBACK_LOW_QUOTA_DELETE_RANGE = (0, 73)
 
 
-def _range_dict(min_exclusive: int, max_exclusive: int) -> dict[str, int]:
+def _parse_quota_number(value) -> Decimal:
+    if isinstance(value, bool) or value in (None, ""):
+        raise ValueError("quota value is required")
+    try:
+        parsed = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("quota value must be numeric") from exc
+    if not parsed.is_finite():
+        raise ValueError("quota value must be finite")
+    return parsed
+
+
+def _json_quota_number(value: Decimal | QuotaNumber) -> QuotaNumber:
+    parsed = value if isinstance(value, Decimal) else _parse_quota_number(value)
+    if parsed == parsed.to_integral_value():
+        return int(parsed)
+    return float(parsed)
+
+
+def _range_dict(min_exclusive: Decimal | QuotaNumber, max_exclusive: Decimal | QuotaNumber) -> dict[str, QuotaNumber]:
     return {
-        "min_exclusive": int(min_exclusive),
-        "max_exclusive": int(max_exclusive),
+        "min_exclusive": _json_quota_number(min_exclusive),
+        "max_exclusive": _json_quota_number(max_exclusive),
     }
 
 
-def _default_low_quota_ranges() -> dict[str, dict[str, int]]:
+def _default_low_quota_ranges() -> dict[str, dict[str, QuotaNumber]]:
     return {
         platform: _range_dict(min_value, max_value)
         for platform, (min_value, max_value) in LOW_QUOTA_DELETE_DEFAULT_RANGES.items()
     }
 
 
-def _parse_low_quota_ranges(raw: str) -> dict[str, dict[str, int]]:
+def _parse_low_quota_ranges(raw: str) -> dict[str, dict[str, QuotaNumber]]:
     try:
         data = json.loads(raw) if str(raw or "").strip() else {}
     except Exception:
         data = {}
     if not isinstance(data, dict):
         return {}
-    ranges: dict[str, dict[str, int]] = {}
+    ranges: dict[str, dict[str, QuotaNumber]] = {}
     for platform, value in data.items():
         if not isinstance(value, dict):
             continue
         try:
-            min_value = int(value.get("min_exclusive"))
-            max_value = int(value.get("max_exclusive"))
+            min_value = _parse_quota_number(value.get("min_exclusive"))
+            max_value = _parse_quota_number(value.get("max_exclusive"))
         except (TypeError, ValueError):
             continue
         if max_value <= min_value:
@@ -127,12 +152,12 @@ class AccountsService:
             "effective": effective,
         }
 
-    def update_low_quota_delete_range(self, platform: str, *, min_exclusive: int, max_exclusive: int) -> dict:
+    def update_low_quota_delete_range(self, platform: str, *, min_exclusive: QuotaNumber, max_exclusive: QuotaNumber) -> dict:
         platform_key = str(platform or "").strip()
         if not platform_key:
             raise ValueError("platform is required")
-        min_value = int(min_exclusive)
-        max_value = int(max_exclusive)
+        min_value = _parse_quota_number(min_exclusive)
+        max_value = _parse_quota_number(max_exclusive)
         if max_value <= min_value:
             raise ValueError("max_exclusive must be greater than min_exclusive")
         configured = _parse_low_quota_ranges(config_store.get(LOW_QUOTA_DELETE_CONFIG_KEY, ""))
@@ -147,24 +172,24 @@ class AccountsService:
         self,
         platform: str,
         *,
-        min_exclusive: int | None = None,
-        max_exclusive: int | None = None,
+        min_exclusive: QuotaNumber | None = None,
+        max_exclusive: QuotaNumber | None = None,
     ) -> dict:
         platform_key = str(platform or "").strip()
         if not platform_key:
             raise ValueError("platform is required")
         ranges = self.get_low_quota_delete_ranges()
         default_range = ranges["effective"].get(platform_key) or ranges["fallback"]
-        default_min = int(default_range["min_exclusive"])
-        default_max = int(default_range["max_exclusive"])
-        min_value = default_min if min_exclusive is None else int(min_exclusive)
-        max_value = default_max if max_exclusive is None else int(max_exclusive)
+        default_min = _parse_quota_number(default_range["min_exclusive"])
+        default_max = _parse_quota_number(default_range["max_exclusive"])
+        min_value = default_min if min_exclusive is None else _parse_quota_number(min_exclusive)
+        max_value = default_max if max_exclusive is None else _parse_quota_number(max_exclusive)
         if max_value <= min_value:
             raise ValueError("max_exclusive must be greater than min_exclusive")
         return self.repository.delete_accounts_by_quota_range(
             platform_key,
-            min_exclusive=min_value,
-            max_exclusive=max_value,
+            min_exclusive=_json_quota_number(min_value),
+            max_exclusive=_json_quota_number(max_value),
         )
 
     def import_accounts(self, platform: str, lines: list[str]) -> dict:

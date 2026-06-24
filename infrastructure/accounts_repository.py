@@ -3,6 +3,7 @@
 import csv
 import io
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from sqlmodel import Session, select
 
@@ -30,16 +31,25 @@ from domain.accounts import (
 )
 
 
-def _optional_int(value) -> int | None:
+def _optional_quota_number(value) -> Decimal | None:
     if value in (None, ""):
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         return None
+    try:
+        parsed = Decimal(str(value).strip())
+    except (TypeError, ValueError, InvalidOperation):
+        return None
+    return parsed if parsed.is_finite() else None
 
 
-def _account_quota_balance(overview: dict) -> int | None:
+def _json_quota_number(value: Decimal) -> int | float:
+    if value == value.to_integral_value():
+        return int(value)
+    return float(value)
+
+
+def _account_quota_balance(overview: dict) -> Decimal | None:
     quota = overview.get("quota") if isinstance(overview.get("quota"), dict) else {}
     credits = overview.get("credits") if isinstance(overview.get("credits"), dict) else {}
     for value in (
@@ -51,7 +61,7 @@ def _account_quota_balance(overview: dict) -> int | None:
         credits.get("totalCredits"),
         credits.get("total_credits"),
     ):
-        parsed = _optional_int(value)
+        parsed = _optional_quota_number(value)
         if parsed is not None:
             return parsed
     return None
@@ -310,8 +320,12 @@ class AccountsRepository:
             session.commit()
             return True
 
-    def delete_accounts_by_quota_range(self, platform: str, *, min_exclusive: int, max_exclusive: int) -> dict:
+    def delete_accounts_by_quota_range(self, platform: str, *, min_exclusive: int | float, max_exclusive: int | float) -> dict:
         platform = str(platform or "").strip()
+        min_value = _optional_quota_number(min_exclusive)
+        max_value = _optional_quota_number(max_exclusive)
+        if min_value is None or max_value is None or max_value <= min_value:
+            raise ValueError("max_exclusive must be greater than min_exclusive")
         with Session(engine) as session:
             models = session.exec(
                 select(AccountModel)
@@ -326,15 +340,16 @@ class AccountsRepository:
                     continue
                 overview = (graphs.get(account_id) or {}).get("overview") or {}
                 balance = _account_quota_balance(overview)
-                if balance is None or balance <= min_exclusive or balance >= max_exclusive:
+                if balance is None or balance <= min_value or balance >= max_value:
                     continue
+                balance_json = _json_quota_number(balance)
                 purge_account_graph(session, account_id)
                 session.delete(model)
                 deleted.append({
                     "id": account_id,
                     "email": model.email,
-                    "quota_value": balance,
-                    "quota_balance": balance,
+                    "quota_value": balance_json,
+                    "quota_balance": balance_json,
                 })
             session.commit()
             return {
@@ -342,8 +357,8 @@ class AccountsRepository:
                 "deleted": len(deleted),
                 "deleted_accounts": deleted,
                 "platform": platform,
-                "min_exclusive": min_exclusive,
-                "max_exclusive": max_exclusive,
+                "min_exclusive": _json_quota_number(min_value),
+                "max_exclusive": _json_quota_number(max_value),
             }
 
     def import_lines(self, platform: str, lines: list[AccountImportLine]) -> int:

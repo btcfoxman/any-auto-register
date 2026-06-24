@@ -2103,6 +2103,7 @@ export default function Accounts() {
             <div className="flex h-7 items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-1.5">
               <input
                 type="number"
+                step="any"
                 value={currentLowQuotaDraft.min}
                 onChange={e => updateLowQuotaDraft('min', e.target.value)}
                 className="h-5 w-12 bg-transparent text-center text-xs text-[var(--text-primary)] outline-none"
@@ -2111,6 +2112,7 @@ export default function Accounts() {
               <span className="text-[11px] text-[var(--text-muted)]">&lt; 额度 &lt;</span>
               <input
                 type="number"
+                step="any"
                 value={currentLowQuotaDraft.max}
                 onChange={e => updateLowQuotaDraft('max', e.target.value)}
                 className="h-5 w-12 bg-transparent text-center text-xs text-[var(--text-primary)] outline-none"

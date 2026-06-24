@@ -195,6 +195,7 @@ def test_low_quota_ranges_endpoint_exposes_backend_defaults_and_updates(client):
     defaults = defaults_resp.json()
     assert defaults["defaults"]["lingya_qq"] == {"min_exclusive": 0, "max_exclusive": 73}
     assert defaults["defaults"]["freebeat"] == {"min_exclusive": -1, "max_exclusive": 80}
+    assert defaults["defaults"]["imgs_weryai"] == {"min_exclusive": 0, "max_exclusive": 1}
     assert defaults["fallback"] == {"min_exclusive": 0, "max_exclusive": 73}
 
     update_resp = client.put(
@@ -206,6 +207,59 @@ def test_low_quota_ranges_endpoint_exposes_backend_defaults_and_updates(client):
     updated = update_resp.json()
     assert updated["configured"]["freebeat"] == {"min_exclusive": 10, "max_exclusive": 20}
     assert updated["effective"]["freebeat"] == {"min_exclusive": 10, "max_exclusive": 20}
+
+
+def test_delete_imgs_weryai_low_quota_accounts_supports_decimal_balance(client):
+    low = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-low@example.com",
+        overview={"remaining_credits": 0.3},
+    ).json()
+    nested_string = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-string@example.com",
+        overview={"credits": {"total_credits": "0.8"}},
+    ).json()
+    zero = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-zero@example.com",
+        overview={"remaining_credits": 0},
+    ).json()
+    boundary = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-boundary@example.com",
+        overview={"remaining_credits": 1},
+    ).json()
+
+    resp = client.delete("/api/accounts/platform/imgs_weryai/low-quota")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"] == 2
+    assert data["min_exclusive"] == 0
+    assert data["max_exclusive"] == 1
+    assert {item["id"] for item in data["deleted_accounts"]} == {low["id"], nested_string["id"]}
+    assert {item["quota_balance"] for item in data["deleted_accounts"]} == {0.3, 0.8}
+    assert client.get(f"/api/accounts/{low['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{nested_string['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{zero['id']}").status_code == 200
+    assert client.get(f"/api/accounts/{boundary['id']}").status_code == 200
+
+
+def test_low_quota_range_update_accepts_decimal_values(client):
+    update_resp = client.put(
+        "/api/accounts/platform/imgs_weryai/low-quota-range",
+        json={"min_exclusive": 0.1, "max_exclusive": 0.9},
+    )
+
+    assert update_resp.status_code == 200
+    data = update_resp.json()
+    assert data["configured"]["imgs_weryai"] == {"min_exclusive": 0.1, "max_exclusive": 0.9}
+    assert data["effective"]["imgs_weryai"] == {"min_exclusive": 0.1, "max_exclusive": 0.9}
 
 
 def test_delete_platform_low_quota_accounts_uses_saved_range(client):

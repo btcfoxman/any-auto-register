@@ -63,8 +63,8 @@ class BatchExportRequest(BaseModel):
 
 
 class LowQuotaRangeUpdateRequest(BaseModel):
-    min_exclusive: int
-    max_exclusive: int
+    min_exclusive: float
+    max_exclusive: float
 
 
 def _stream_artifact(artifact: ExportArtifact) -> StreamingResponse:
@@ -255,8 +255,8 @@ def update_platform_low_quota_range(platform: str, body: LowQuotaRangeUpdateRequ
 @router.delete("/platform/{platform}/low-quota")
 def delete_platform_low_quota_accounts(
     platform: str,
-    min_exclusive: Optional[int] = Query(default=None),
-    max_exclusive: Optional[int] = Query(default=None),
+    min_exclusive: Optional[float] = Query(default=None),
+    max_exclusive: Optional[float] = Query(default=None),
 ):
     try:
         return service.delete_low_quota_accounts(
