@@ -1,0 +1,1 @@
+"""ImgsWeryai platform package."""

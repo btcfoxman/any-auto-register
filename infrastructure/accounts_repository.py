@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import io
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from sqlmodel import Session, select
 
@@ -10,6 +11,7 @@ from core.datetime_utils import serialize_datetime
 from core.account_display import build_account_display_summary
 from core.db import AccountModel, engine
 from core.account_graph import (
+    PLATFORM_CREDENTIAL_TYPES,
     compute_account_stats,
     load_account_graphs,
     matches_status_filter,
@@ -27,6 +29,42 @@ from domain.accounts import (
     AccountStats,
     AccountUpdateCommand,
 )
+
+
+def _optional_quota_number(value) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value).strip())
+    except (TypeError, ValueError, InvalidOperation):
+        return None
+    return parsed if parsed.is_finite() else None
+
+
+def _json_quota_number(value: Decimal) -> int | float:
+    if value == value.to_integral_value():
+        return int(value)
+    return float(value)
+
+
+def _account_quota_balance(overview: dict) -> Decimal | None:
+    quota = overview.get("quota") if isinstance(overview.get("quota"), dict) else {}
+    credits = overview.get("credits") if isinstance(overview.get("credits"), dict) else {}
+    for value in (
+        overview.get("quota_balance"),
+        quota.get("quota_balance"),
+        overview.get("remaining_credits"),
+        overview.get("total_credits"),
+        overview.get("free_exports_remaining"),
+        credits.get("totalCredits"),
+        credits.get("total_credits"),
+    ):
+        parsed = _optional_quota_number(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _build_summary_updates(
@@ -48,8 +86,35 @@ def _build_summary_updates(
 
 def _build_credential_updates(
     credentials: dict | None,
+    *,
+    platform: str = "",
+    primary_token: str = "",
 ) -> dict | None:
-    return dict(credentials or {}) or None
+    updates = dict(credentials or {})
+    if platform == "lingya_qq":
+        try:
+            from platforms.lingya_qq.cookies import build_lingya_qq_account_fields
+
+            source = dict(updates)
+            if primary_token and "vusession" not in source:
+                source["vusession"] = primary_token
+            updates.update(build_lingya_qq_account_fields(source))
+        except Exception:
+            pass
+    return updates or None
+
+
+def _derive_user_id_from_credentials(platform: str, user_id: str, credentials: dict | None) -> str:
+    if str(user_id or "").strip():
+        return str(user_id or "").strip()
+    if platform != "lingya_qq":
+        return ""
+    source = dict(credentials or {})
+    for key in ("vuid", "v_vuserid", "vuserid", "vqq_vuserid"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _to_record(model: AccountModel, graph: dict | None = None) -> AccountRecord:
@@ -117,7 +182,7 @@ class AccountsRepository:
                 statement = statement.where(AccountModel.platform == query.platform)
             if query.email:
                 statement = statement.where(AccountModel.email.contains(query.email))
-            statement = statement.order_by(AccountModel.created_at.desc(), AccountModel.id.desc())
+            statement = statement.order_by(AccountModel.updated_at.desc(), AccountModel.created_at.desc(), AccountModel.id.desc())
             models = session.exec(statement).all()
             records = self._load_records(session, models)
             if query.status:
@@ -149,7 +214,7 @@ class AccountsRepository:
                 statement = statement.where(AccountModel.email.contains(selection.search_filter))
             if not selection.select_all and selection.ids:
                 statement = statement.where(AccountModel.id.in_(selection.ids))
-            statement = statement.order_by(AccountModel.created_at.desc(), AccountModel.id.desc())
+            statement = statement.order_by(AccountModel.updated_at.desc(), AccountModel.created_at.desc(), AccountModel.id.desc())
             models = session.exec(statement).all()
             records = self._load_records(session, models)
         if selection.status_filter:
@@ -163,11 +228,16 @@ class AccountsRepository:
 
     def create(self, command: AccountCreateCommand) -> AccountRecord:
         with Session(engine) as session:
+            credential_updates = _build_credential_updates(
+                command.credentials,
+                platform=command.platform,
+                primary_token=command.primary_token,
+            )
             model = AccountModel(
                 platform=command.platform,
                 email=command.email,
                 password=command.password,
-                user_id=command.user_id,
+                user_id=_derive_user_id_from_credentials(command.platform, command.user_id, credential_updates),
             )
             session.add(model)
             session.commit()
@@ -186,7 +256,7 @@ class AccountsRepository:
                     region=command.region or None,
                     trial_end_time=command.trial_end_time or None,
                 ),
-                credential_updates=_build_credential_updates(command.credentials),
+                credential_updates=credential_updates,
                 provider_accounts=command.provider_accounts or None,
                 provider_resources=command.provider_resources or None,
                 replace_provider_accounts=bool(command.provider_accounts),
@@ -202,8 +272,17 @@ class AccountsRepository:
                 return None
             if command.password is not None:
                 model.password = command.password
+            credential_updates = _build_credential_updates(
+                command.credentials,
+                platform=model.platform,
+                primary_token=command.primary_token or "",
+            )
             if command.user_id is not None:
                 model.user_id = command.user_id
+            else:
+                derived_user_id = _derive_user_id_from_credentials(model.platform, "", credential_updates)
+                if derived_user_id:
+                    model.user_id = derived_user_id
             model.updated_at = datetime.now(timezone.utc)
             session.add(model)
             session.commit()
@@ -222,7 +301,7 @@ class AccountsRepository:
                     region=command.region,
                     trial_end_time=command.trial_end_time,
                 ),
-                credential_updates=_build_credential_updates(command.credentials),
+                credential_updates=credential_updates,
                 provider_accounts=command.provider_accounts,
                 provider_resources=command.provider_resources,
                 replace_provider_accounts=command.replace_provider_accounts,
@@ -240,6 +319,47 @@ class AccountsRepository:
             session.delete(model)
             session.commit()
             return True
+
+    def delete_accounts_by_quota_range(self, platform: str, *, min_exclusive: int | float, max_exclusive: int | float) -> dict:
+        platform = str(platform or "").strip()
+        min_value = _optional_quota_number(min_exclusive)
+        max_value = _optional_quota_number(max_exclusive)
+        if min_value is None or max_value is None or max_value <= min_value:
+            raise ValueError("max_exclusive must be greater than min_exclusive")
+        with Session(engine) as session:
+            models = session.exec(
+                select(AccountModel)
+                .where(AccountModel.platform == platform)
+                .order_by(AccountModel.id)
+            ).all()
+            graphs = load_account_graphs(session, [int(model.id or 0) for model in models if model.id])
+            deleted: list[dict] = []
+            for model in models:
+                account_id = int(model.id or 0)
+                if account_id <= 0:
+                    continue
+                overview = (graphs.get(account_id) or {}).get("overview") or {}
+                balance = _account_quota_balance(overview)
+                if balance is None or balance <= min_value or balance >= max_value:
+                    continue
+                balance_json = _json_quota_number(balance)
+                purge_account_graph(session, account_id)
+                session.delete(model)
+                deleted.append({
+                    "id": account_id,
+                    "email": model.email,
+                    "quota_value": balance_json,
+                    "quota_balance": balance_json,
+                })
+            session.commit()
+            return {
+                "ok": True,
+                "deleted": len(deleted),
+                "deleted_accounts": deleted,
+                "platform": platform,
+                "min_exclusive": _json_quota_number(min_value),
+                "max_exclusive": _json_quota_number(max_value),
+            }
 
     def import_lines(self, platform: str, lines: list[AccountImportLine]) -> int:
         created = 0
@@ -289,32 +409,27 @@ class AccountsRepository:
                         "provider_accounts",
                         "provider_resources",
                     }
+                    and key not in PLATFORM_CREDENTIAL_TYPES
                     and value not in (None, "", [], {})
                 }
                 if legacy_extra:
                     summary_updates["legacy_extra"] = legacy_extra
                 credential_updates = dict(extra.get("credentials") or {})
-                for key in (
-                    "access_token",
-                    "refresh_token",
-                    "session_token",
-                    "id_token",
-                    "accessToken",
-                    "refreshToken",
-                    "sessionToken",
-                    "idToken",
-                    "cookies",
-                    "cookie",
-                    "api_key",
-                    "wos_session",
-                    "sso",
-                    "sso_rw",
-                ):
+                for key in PLATFORM_CREDENTIAL_TYPES:
                     if key in extra and key not in credential_updates:
                         credential_updates[key] = extra[key]
                 primary_token = extra.get("primary_token")
                 if primary_token in (None, ""):
                     primary_token = extra.get("token")
+                credential_updates = _build_credential_updates(
+                    credential_updates,
+                    platform=platform,
+                    primary_token=str(primary_token or ""),
+                ) or {}
+                derived_user_id = _derive_user_id_from_credentials(platform, "", credential_updates)
+                if derived_user_id and not model.user_id:
+                    model.user_id = derived_user_id
+                    session.add(model)
                 patch_account_graph(
                     session,
                     model,
@@ -333,7 +448,9 @@ class AccountsRepository:
 
     def stats(self) -> AccountStats:
         with Session(engine) as session:
-            accounts = session.exec(select(AccountModel).order_by(AccountModel.created_at.desc(), AccountModel.id.desc())).all()
+            accounts = session.exec(
+                select(AccountModel).order_by(AccountModel.updated_at.desc(), AccountModel.created_at.desc(), AccountModel.id.desc())
+            ).all()
             records = self._load_records(session, accounts)
         stats = compute_account_stats(
             [

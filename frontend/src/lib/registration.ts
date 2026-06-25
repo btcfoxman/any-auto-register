@@ -54,6 +54,16 @@ export function buildRegistrationOptions(platformMeta: any) {
     })
   }
 
+  if (supportedModes.includes('manual_phone')) {
+    options.push({
+      key: 'manual_phone',
+      label: getOptionLabel('manual_phone', identityModeOptions),
+      description: '系统租用手机号并等待短信，图形验证与发送短信由人工在普通浏览器中完成',
+      identityProvider: 'manual_phone',
+      oauthProvider: '',
+    })
+  }
+
   if (supportedModes.includes('oauth_browser')) {
     supportedOAuth.forEach((provider: string) => {
       const providerLabel = getOptionLabel(provider, oauthProviderOptions)
@@ -87,6 +97,11 @@ export function buildExecutorOptions(
 
     if (executor === 'protocol') {
       option.description = '不打开浏览器，直接通过协议流程自动注册'
+      if (identityProvider === 'manual_phone') {
+        option.disabled = true
+        option.reason = '\u624b\u673a\u53f7\u6d41\u7a0b\u9700\u8981\u4eba\u5de5\u5728\u666e\u901a\u6d4f\u89c8\u5668\u4e2d\u5b8c\u6210\u56fe\u5f62\u9a8c\u8bc1\u548c\u53d1\u9001\u77ed\u4fe1'
+        return option
+      }
       if (identityProvider !== 'mailbox') {
         option.disabled = true
         option.reason = '第三方账号注册必须通过浏览器自动化完成'
@@ -101,6 +116,15 @@ export function buildExecutorOptions(
       if (identityProvider === 'oauth_browser' && !reusableBrowser) {
         option.disabled = true
         option.reason = '需要先在全局配置里填写 Chrome Profile 路径或 Chrome CDP 地址'
+      }
+      return option
+    }
+
+    if (executor === 'manual_assisted') {
+      option.description = '系统租号并等待短信，需要人工在普通浏览器中完成图形验证和发送短信'
+      if (identityProvider !== 'manual_phone') {
+        option.disabled = true
+        option.reason = '人工辅助执行器仅用于手机号注册'
       }
       return option
     }

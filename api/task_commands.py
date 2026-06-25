@@ -21,6 +21,7 @@ class RegisterTaskRequest(BaseModel):
     count: int = 1
     concurrency: int = 1
     proxy: Optional[str] = None
+    use_proxy_pool: bool = False
     executor_type: str = "protocol"
     captcha_solver: str = "auto"
     extra: dict = Field(default_factory=dict)

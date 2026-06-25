@@ -1,4 +1,4 @@
-"""Account CRUD endpoint tests."""
+﻿"""Account CRUD endpoint tests."""
 from __future__ import annotations
 
 import base64
@@ -51,6 +51,20 @@ def test_list_accounts_after_create(client):
     assert data["items"][0]["email"] == "test@example.com"
 
 
+def test_list_accounts_supports_pagination(client):
+    for index in range(3):
+        _create_account(client, email=f"page-{index}@example.com")
+
+    resp = client.get("/api/accounts", params={"platform": "chatgpt", "page": 2, "page_size": 1})
+    data = resp.json()
+
+    assert data["total"] == 3
+    assert data["page"] == 2
+    assert data["page_size"] == 1
+    assert len(data["items"]) == 1
+    assert data["items"][0]["email"] == "page-1@example.com"
+
+
 def test_get_account_by_id(client):
     create_resp = _create_account(client)
     account_id = create_resp.json()["id"]
@@ -73,6 +87,216 @@ def test_delete_account(client):
     # Verify it's gone
     get_resp = client.get(f"/api/accounts/{account_id}")
     assert get_resp.status_code == 404
+
+
+def test_delete_platform_low_quota_accounts_uses_configurable_range(client):
+    low = _create_account(
+        client,
+        platform="lingya_qq",
+        email="low@example.com",
+        overview={"quota_balance": 72},
+    ).json()
+    nested = _create_account(
+        client,
+        platform="lingya_qq",
+        email="nested@example.com",
+        overview={"quota": {"quota_balance": "1"}},
+    ).json()
+    zero = _create_account(
+        client,
+        platform="lingya_qq",
+        email="zero@example.com",
+        overview={"quota_balance": 0},
+    ).json()
+    boundary = _create_account(
+        client,
+        platform="lingya_qq",
+        email="boundary@example.com",
+        overview={"quota_balance": 73},
+    ).json()
+    other_platform = _create_account(
+        client,
+        platform="chatgpt",
+        email="other@example.com",
+        overview={"quota_balance": 10},
+    ).json()
+
+    resp = client.delete(
+        "/api/accounts/platform/lingya_qq/low-quota",
+        params={"min_exclusive": 0, "max_exclusive": 73},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["deleted"] == 2
+    assert data["platform"] == "lingya_qq"
+    assert data["min_exclusive"] == 0
+    assert data["max_exclusive"] == 73
+    assert {item["id"] for item in data["deleted_accounts"]} == {low["id"], nested["id"]}
+    assert client.get(f"/api/accounts/{low['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{nested['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{zero['id']}").status_code == 200
+    assert client.get(f"/api/accounts/{boundary['id']}").status_code == 200
+    assert client.get(f"/api/accounts/{other_platform['id']}").status_code == 200
+
+
+def test_delete_freebeat_low_quota_accounts_uses_default_range(client):
+    low = _create_account(
+        client,
+        platform="freebeat",
+        email="freebeat-low@example.com",
+        overview={"total_credits": 79},
+    ).json()
+    zero = _create_account(
+        client,
+        platform="freebeat",
+        email="freebeat-zero@example.com",
+        overview={"remaining_credits": "0"},
+    ).json()
+    nested = _create_account(
+        client,
+        platform="freebeat",
+        email="freebeat-nested@example.com",
+        overview={"credits": {"totalCredits": "50"}},
+    ).json()
+    negative = _create_account(
+        client,
+        platform="freebeat",
+        email="freebeat-negative@example.com",
+        overview={"total_credits": -1},
+    ).json()
+    boundary = _create_account(
+        client,
+        platform="freebeat",
+        email="freebeat-boundary@example.com",
+        overview={"total_credits": 80},
+    ).json()
+
+    resp = client.delete("/api/accounts/platform/freebeat/low-quota")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"] == 3
+    assert data["min_exclusive"] == -1
+    assert data["max_exclusive"] == 80
+    assert {item["id"] for item in data["deleted_accounts"]} == {low["id"], zero["id"], nested["id"]}
+    assert client.get(f"/api/accounts/{low['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{zero['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{nested['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{negative['id']}").status_code == 200
+    assert client.get(f"/api/accounts/{boundary['id']}").status_code == 200
+
+
+def test_low_quota_ranges_endpoint_exposes_backend_defaults_and_updates(client):
+    defaults_resp = client.get("/api/accounts/low-quota-ranges")
+
+    assert defaults_resp.status_code == 200
+    defaults = defaults_resp.json()
+    assert defaults["defaults"]["lingya_qq"] == {"min_exclusive": 0, "max_exclusive": 73}
+    assert defaults["defaults"]["freebeat"] == {"min_exclusive": -1, "max_exclusive": 80}
+    assert defaults["defaults"]["imgs_weryai"] == {"min_exclusive": 0, "max_exclusive": 1}
+    assert defaults["fallback"] == {"min_exclusive": 0, "max_exclusive": 73}
+
+    update_resp = client.put(
+        "/api/accounts/platform/freebeat/low-quota-range",
+        json={"min_exclusive": 10, "max_exclusive": 20},
+    )
+
+    assert update_resp.status_code == 200
+    updated = update_resp.json()
+    assert updated["configured"]["freebeat"] == {"min_exclusive": 10, "max_exclusive": 20}
+    assert updated["effective"]["freebeat"] == {"min_exclusive": 10, "max_exclusive": 20}
+
+
+def test_delete_imgs_weryai_low_quota_accounts_supports_decimal_balance(client):
+    low = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-low@example.com",
+        overview={"remaining_credits": 0.3},
+    ).json()
+    nested_string = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-string@example.com",
+        overview={"credits": {"total_credits": "0.8"}},
+    ).json()
+    zero = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-zero@example.com",
+        overview={"remaining_credits": 0},
+    ).json()
+    boundary = _create_account(
+        client,
+        platform="imgs_weryai",
+        email="wery-boundary@example.com",
+        overview={"remaining_credits": 1},
+    ).json()
+
+    resp = client.delete("/api/accounts/platform/imgs_weryai/low-quota")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"] == 2
+    assert data["min_exclusive"] == 0
+    assert data["max_exclusive"] == 1
+    assert {item["id"] for item in data["deleted_accounts"]} == {low["id"], nested_string["id"]}
+    assert {item["quota_balance"] for item in data["deleted_accounts"]} == {0.3, 0.8}
+    assert client.get(f"/api/accounts/{low['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{nested_string['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{zero['id']}").status_code == 200
+    assert client.get(f"/api/accounts/{boundary['id']}").status_code == 200
+
+
+def test_low_quota_range_update_accepts_decimal_values(client):
+    update_resp = client.put(
+        "/api/accounts/platform/imgs_weryai/low-quota-range",
+        json={"min_exclusive": 0.1, "max_exclusive": 0.9},
+    )
+
+    assert update_resp.status_code == 200
+    data = update_resp.json()
+    assert data["configured"]["imgs_weryai"] == {"min_exclusive": 0.1, "max_exclusive": 0.9}
+    assert data["effective"]["imgs_weryai"] == {"min_exclusive": 0.1, "max_exclusive": 0.9}
+
+
+def test_delete_platform_low_quota_accounts_uses_saved_range(client):
+    client.put(
+        "/api/accounts/platform/freebeat/low-quota-range",
+        json={"min_exclusive": 10, "max_exclusive": 20},
+    )
+    low = _create_account(
+        client,
+        platform="freebeat",
+        email="saved-range-low@example.com",
+        overview={"total_credits": 19},
+    ).json()
+    below = _create_account(
+        client,
+        platform="freebeat",
+        email="saved-range-below@example.com",
+        overview={"total_credits": 10},
+    ).json()
+    above = _create_account(
+        client,
+        platform="freebeat",
+        email="saved-range-above@example.com",
+        overview={"total_credits": 20},
+    ).json()
+
+    resp = client.delete("/api/accounts/platform/freebeat/low-quota")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"] == 1
+    assert data["min_exclusive"] == 10
+    assert data["max_exclusive"] == 20
+    assert {item["id"] for item in data["deleted_accounts"]} == {low["id"]}
+    assert client.get(f"/api/accounts/{low['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{below['id']}").status_code == 200
+    assert client.get(f"/api/accounts/{above['id']}").status_code == 200
 
 
 def test_update_account(client):
@@ -98,6 +322,37 @@ def test_account_stats(client):
     _create_account(client)
     resp = client.get("/api/accounts/stats")
     assert resp.status_code == 200
+
+
+def test_create_lingya_qq_account_expands_cookie_header(client):
+    resp = _create_account(
+        client,
+        platform="lingya_qq",
+        email="+8613800138000",
+        password="",
+        credentials={
+            "cookies": (
+                "v_vusession=session-cookie; v_vurefresh=refresh-cookie; "
+                "v_vuserid=vuid-cookie; vdevice_guid=device-cookie"
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    credentials = {
+        item["key"]: item["value"]
+        for item in data["credentials"]
+        if item.get("scope") == "platform"
+    }
+    assert data["user_id"] == "vuid-cookie"
+    assert data["primary_token"] == "session-cookie"
+    assert credentials["vusession"] == "session-cookie"
+    assert credentials["v_vusession"] == "session-cookie"
+    assert credentials["v_vurefresh"] == "refresh-cookie"
+    assert credentials["v_vuserid"] == "vuid-cookie"
+    assert credentials["vdevice_guid"] == "device-cookie"
+    assert "v_vusession=session-cookie" in credentials["cookies"]
 
 
 def test_export_kiro_go(client):

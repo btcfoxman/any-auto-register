@@ -52,6 +52,7 @@ data/
 
 # 文档
 docs/
+/.docs/
 
 # macOS
 .DS_Store
@@ -71,3 +72,5 @@ docs/REFACTOR-PLAN.md
 
 # 敏感文件
 *.har
+tmp/
+/chatai.txt

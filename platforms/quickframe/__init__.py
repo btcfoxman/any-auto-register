@@ -1,0 +1,1 @@
+"""QuickFrame platform package."""

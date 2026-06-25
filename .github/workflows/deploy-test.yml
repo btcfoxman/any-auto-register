@@ -1,0 +1,129 @@
+name: Deploy Test
+
+on:
+  push:
+    branches:
+      - test
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  IMAGE_NAME: ${{ github.event.repository.name }}
+  IMAGE_TAG: test
+  IMAGE_ARTIFACT: any-auto-register-test-image
+  IMAGE_TAR: any-auto-register-test-image.tar.gz
+  DEPLOY_PATH: /home/btcfoxman/docker/any-auto-register
+  DEPLOY_SERVICE: app
+
+jobs:
+  build-image:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            APP_VERSION=test-${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE_REGISTRY }}/${{ github.repository }}:${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_REGISTRY }}/${{ github.repository }}:test-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export image fallback artifact
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --build-arg APP_VERSION="test-${GITHUB_SHA}" \
+            --cache-from type=gha \
+            --load \
+            -t "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}" \
+            -t "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:test-${GITHUB_SHA}" \
+            .
+          docker save \
+            "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}" \
+            "${IMAGE_REGISTRY}/${GITHUB_REPOSITORY}:test-${GITHUB_SHA}" \
+            | gzip -1 > "/tmp/${IMAGE_TAR}"
+
+      - name: Upload image fallback artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: /tmp/${{ env.IMAGE_TAR }}
+          retention-days: 1
+
+  deploy:
+    name: Pull and Restart on LAN Runner
+    needs: build-image
+    runs-on: [self-hosted, linux, x64, any-auto-register]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${IMAGE_REGISTRY}" -u "${{ github.actor }}" --password-stdin; then
+              exit 0
+            fi
+            echo "docker login failed, retry ${attempt}/5"
+            sleep $((attempt * 10))
+          done
+          echo "::warning::docker login failed after retries; deployment will try local image build fallback"
+
+      - name: Download image fallback artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: /tmp
+
+      - name: Pull image and restart service
+        run: |
+          set -euo pipefail
+          cd "${DEPLOY_PATH}"
+          pull_service() {
+            for attempt in 1 2 3 4 5; do
+              if IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
+                IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
+                IMAGE_NAME="${IMAGE_NAME}" \
+                IMAGE_TAG="${IMAGE_TAG}" \
+                docker compose pull "${DEPLOY_SERVICE}"; then
+                return 0
+              fi
+              echo "docker compose pull failed, retry ${attempt}/5"
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          if ! pull_service; then
+            echo "docker compose pull failed after retries; loading image artifact"
+            gzip -dc "/tmp/${IMAGE_TAR}" | docker load
+          fi
+          IMAGE_REGISTRY="${IMAGE_REGISTRY}" \
+          IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
+          IMAGE_NAME="${IMAGE_NAME}" \
+          IMAGE_TAG="${IMAGE_TAG}" \
+          docker compose up -d "${DEPLOY_SERVICE}"
+          docker image prune -f

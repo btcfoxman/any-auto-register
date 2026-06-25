@@ -1,0 +1,2 @@
+﻿"""LingYaQQ (Lingya) platform package."""
+

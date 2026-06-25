@@ -38,5 +38,34 @@ class YesCaptcha(BaseCaptcha):
                 raise RuntimeError(f"YesCaptcha 错误: {d}")
         raise TimeoutError("YesCaptcha Turnstile 超时")
 
+    def solve_recaptcha(self, page_url: str, site_key: str, *, enterprise: bool = False, action: str = "") -> str:
+        import requests, time
+
+        task = {
+            "type": "RecaptchaV2EnterpriseTaskProxyless" if enterprise else "RecaptchaV2TaskProxyless",
+            "websiteURL": page_url,
+            "websiteKey": site_key,
+        }
+        if action:
+            task["pageAction"] = action
+        r = insecure_request(requests.post, f"{self.api}/createTask", json={
+            "clientKey": self.client_key,
+            "task": task,
+        }, timeout=30)
+        task_id = r.json().get("taskId")
+        if not task_id:
+            raise RuntimeError(f"YesCaptcha 创建 reCAPTCHA 任务失败: {r.text}")
+        for _ in range(60):
+            time.sleep(3)
+            d = insecure_request(requests.post, f"{self.api}/getTaskResult", json={
+                "clientKey": self.client_key, "taskId": task_id
+            }, timeout=30).json()
+            if d.get("status") == "ready":
+                solution = d.get("solution") or {}
+                return str(solution.get("gRecaptchaResponse") or solution.get("token") or "")
+            if d.get("errorId", 0) != 0:
+                raise RuntimeError(f"YesCaptcha reCAPTCHA 错误: {d}")
+        raise TimeoutError("YesCaptcha reCAPTCHA 超时")
+
     def solve_image(self, image_b64: str) -> str:
         raise NotImplementedError

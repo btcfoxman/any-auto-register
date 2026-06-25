@@ -17,6 +17,7 @@ from domain.actions import (
     PlatformAction,
 )
 from domain.platforms import PlatformCapabilities, PlatformDescriptor
+from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES
 
 
 PERSISTED_ACTION_DATA_KEYS = {
@@ -24,10 +25,21 @@ PERSISTED_ACTION_DATA_KEYS = {
     "refresh_token",
     "session_token",
     "id_token",
+    "authorization",
     "api_key",
     "client_id",
     "client_secret",
     "workspace_id",
+    "team_id",
+    "teamId",
+    "product_id",
+    "productId",
+    "uid",
+    "df_id",
+    "client_ip",
+    "user_agent",
+    "sec_ch_ua",
+    "sec_ch_ua_platform",
     "accessToken",
     "refreshToken",
     "sessionToken",
@@ -41,9 +53,55 @@ PERSISTED_ACTION_DATA_KEYS = {
     "orgId",
     "auth_token",
     "authToken",
+    "device_token",
+    "deviceToken",
+    "vusession",
+    "vurefresh",
+    "vuid",
+    "vdevice_guid",
+    "v_main_login",
+    "nick",
+    "avatar",
+    "video_appid",
+    "video_platform",
+    "vversion_platform",
+    "vusession_expire_timestamp",
+    "vusession_expire_in",
+    "cookies",
+    "cookie_header",
+    "quickframe_cookies",
+    "quickframe_cookie_header",
+    "weryai_cookies",
+    "weryai_cookie_header",
+    "quickframe_pending_cookies",
+    "quickframe_pending_cookie_header",
+    "quickframe_login_state",
+    "quickframe_login_identifier_url",
+    "quickframe_challenge_url",
+    *LINGYA_QQ_COOKIE_NAMES,
 }
 
-STATEFUL_ACTION_IDS = {"get_account_state", "switch_account", "query_state", "switch_desktop"}
+STATEFUL_ACTION_IDS = {
+    "get_account_state",
+    "switch_account",
+    "query_state",
+    "switch_desktop",
+    "relogin_sms",
+    "keepalive_sync",
+    "sync_lingya2api",
+    "sync_freebeat2api",
+    "sync_quickframe2api",
+    "sync_imgs2api",
+    "daily_sign_in",
+    "claim_questionnaire",
+    "refresh_session",
+    "relogin_email_code",
+    "stop_daily_sign_in",
+    "resume_daily_sign_in",
+    "publish_work",
+    "stop_keepalive",
+    "resume_keepalive",
+}
 CASHIER_URL_ACTION_IDS = {
     "payment_link",
     "payment_link_browser",
@@ -214,8 +272,278 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
     if data.get("quota_note"):
         overview["quota_note"] = data.get("quota_note")
 
+    if platform == "freebeat":
+        for key in (
+            "total_credits",
+            "free_credits",
+            "boost_credits",
+            "event_credits",
+            "membership_credits",
+            "user_subscription_type",
+            "signed_today",
+            "can_sign_in",
+            "next_refresh_at",
+            "next_refresh_at_iso",
+            "server_utc_date",
+            "token_expire_time_ms",
+            "token_expire_at",
+            "token_expire_in_days",
+            "last_keepalive_at",
+            "last_questionnaire_status",
+            "last_daily_sign_in_status",
+            "daily_sign_in_status",
+            "daily_sign_in_at",
+            "questionnaire_status",
+            "questionnaire_credits_granted",
+            "reward_amount",
+            "session_refreshed",
+            "freebeat2api_synced",
+            "freebeat_daily_sign_in_disabled",
+            "freebeat_daily_sign_in_state",
+            "freebeat_daily_sign_in_disabled_reason",
+            "freebeat_daily_sign_in_disabled_at",
+            "freebeat_daily_sign_in_resumed_at",
+            "freebeat_keepalive_disabled",
+            "freebeat_keepalive_state",
+            "freebeat_keepalive_disabled_reason",
+            "freebeat_keepalive_disabled_at",
+            "freebeat_keepalive_resumed_at",
+            "freebeat2api_enable_auto_maintenance",
+            "freebeat_retired",
+            "freebeat_retire_reason",
+            "freebeat_retire_credit_balance",
+            "freebeat_retire_credit_threshold",
+            "freebeat_retire_after_hours",
+            "freebeat_retired_at",
+        ):
+            if key in data and data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if isinstance(data.get("credits"), dict):
+            overview["credits"] = data.get("credits")
+        if isinstance(data.get("signin"), dict):
+            overview["signin"] = data.get("signin")
+        if data.get("email"):
+            overview["remote_email"] = str(data.get("email") or "")
+        total_credits = data.get("total_credits") if data.get("total_credits") not in (None, "") else data.get("remaining_credits")
+        if total_credits not in (None, ""):
+            overview["remaining_credits"] = str(total_credits)
+            overview["chips"].append(f"积分 {total_credits}")
+        if "signed_today" in data:
+            overview["chips"].append("今日已签到" if data.get("signed_today") else "今日未签到")
+        if data.get("last_questionnaire_status"):
+            overview["chips"].append(f"问卷 {data.get('last_questionnaire_status')}")
+        if data.get("daily_sign_in_status") or data.get("last_daily_sign_in_status"):
+            overview["chips"].append(f"签到 {data.get('daily_sign_in_status') or data.get('last_daily_sign_in_status')}")
+        if data.get("token_expire_in_days") is not None:
+            overview["chips"].append(f"Token {data.get('token_expire_in_days')}天")
+        if data.get("session_refreshed"):
+            overview["chips"].append("会话已续期")
+        if data.get("freebeat_daily_sign_in_disabled") is True:
+            overview["chips"].append("自动签到已停止")
+        elif data.get("freebeat_daily_sign_in_disabled") is False:
+            overview["chips"].append("自动签到已恢复")
+
+        if data.get("freebeat_keepalive_disabled") is True:
+            overview["chips"].append("自动保活已停止")
+        elif data.get("freebeat_keepalive_disabled") is False:
+            overview["chips"].append("自动保活已恢复")
+        if data.get("freebeat_retired") is True:
+            overview["chips"].append("低积分已退休")
+
+    if platform == "quickframe":
+        for key in (
+            "workspace_id",
+            "workspaceId",
+            "session_id",
+            "session_status",
+            "has_active_subscription",
+            "free_exports_remaining",
+            "token_type",
+            "token_expires_in",
+            "token_expires_at",
+            "last_keepalive_at",
+            "signup_source",
+            "has_premier_account",
+            "session_refreshed",
+            "quickframe2api_synced",
+            "quickframe_keepalive_disabled",
+            "quickframe_keepalive_state",
+            "quickframe_keepalive_disabled_reason",
+            "quickframe_keepalive_disabled_at",
+            "quickframe_keepalive_resumed_at",
+            "quickframe2api_enable_auto_maintenance",
+        ):
+            if key in data and data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if isinstance(data.get("usage_limits"), dict):
+            overview["usage_limits"] = data.get("usage_limits")
+        if isinstance(data.get("subscription_status"), dict):
+            overview["subscription_status"] = data.get("subscription_status")
+        if data.get("email"):
+            overview["remote_email"] = str(data.get("email") or "")
+        if data.get("free_exports_remaining") not in (None, ""):
+            overview["remaining_credits"] = str(data.get("free_exports_remaining"))
+        fixed_chips: list[str] = []
+        if data.get("free_exports_remaining") not in (None, ""):
+            fixed_chips.append(f"导出剩余 {data.get('free_exports_remaining')}")
+        if data.get("session_refreshed"):
+            fixed_chips.append("会话已刷新")
+        if data.get("quickframe_keepalive_disabled") is True:
+            fixed_chips.append("自动保活已停止")
+        elif data.get("quickframe_keepalive_disabled") is False:
+            fixed_chips.append("自动保活已恢复")
+        overview["chips"].extend(fixed_chips)
+
+    if platform == "imgs_weryai":
+        for key in (
+            "user_id",
+            "uid",
+            "team_id",
+            "teamId",
+            "product_id",
+            "productId",
+            "df_id",
+            "client_ip",
+            "account_type",
+            "register_time",
+            "credits_balance",
+            "remaining_credits",
+            "balance",
+            "last_keepalive_at",
+            "session_refreshed",
+            "imgs2api_synced",
+            "imgs_weryai_keepalive_disabled",
+            "imgs_weryai_keepalive_state",
+            "imgs_weryai_keepalive_disabled_reason",
+            "imgs_weryai_keepalive_disabled_at",
+            "imgs_weryai_keepalive_resumed_at",
+            "imgs2api_enable_auto_maintenance",
+            "imgs_weryai_retired",
+        ):
+            if key in data and data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if isinstance(data.get("credits"), dict):
+            overview["credits"] = data.get("credits")
+        if data.get("email"):
+            overview["remote_email"] = str(data.get("email") or "")
+        balance = data.get("remaining_credits")
+        if balance in (None, ""):
+            balance = data.get("credits_balance")
+        if balance in (None, ""):
+            balance = data.get("balance")
+        if balance not in (None, ""):
+            overview["remaining_credits"] = str(balance)
+            overview["chips"].append(f"credits {balance}")
+        if data.get("team_id") or data.get("teamId"):
+            team_id = str(data.get("team_id") or data.get("teamId") or "")
+            overview["chips"].append(f"team {team_id[:8]}")
+        if data.get("product_id") or data.get("productId"):
+            overview["chips"].append(f"product {data.get('product_id') or data.get('productId')}")
+        if data.get("session_refreshed"):
+            overview["chips"].append("session refreshed")
+        if data.get("imgs2api_synced"):
+            overview["chips"].append("imgs2api synced")
+        if data.get("imgs_weryai_keepalive_disabled") is True:
+            overview["chips"].append("keepalive stopped")
+        elif data.get("imgs_weryai_keepalive_disabled") is False:
+            overview["chips"].append("keepalive resumed")
+
+    if platform == "lingya_qq":
+        for key in (
+            "phone",
+            "local_phone",
+            "area_code",
+            "proxy_url",
+            "vuid",
+            "nick",
+            "avatar",
+            "profile_updated",
+            "profile_update_error",
+            "quota_balance",
+            "quota_sum",
+            "daily_sign_in_status",
+            "daily_sign_in_at",
+            "last_publish_vid",
+            "last_publish_title",
+            "last_publish_status",
+            "last_publish_at",
+            "last_publish_work_status",
+            "publish_skipped",
+            "publish_skip_reason",
+        ):
+            if data.get(key) not in (None, ""):
+                overview[key] = data.get(key)
+        if "lingya_keepalive_disabled" in data:
+            overview["lingya_keepalive_disabled"] = bool(data.get("lingya_keepalive_disabled"))
+        for key in (
+            "lingya_keepalive_state",
+            "lingya_keepalive_disabled_reason",
+            "lingya_keepalive_disabled_at",
+            "lingya_keepalive_resumed_at",
+        ):
+            if key in data:
+                overview[key] = data.get(key) or ""
+        publish_config = {
+            key: data.get(key)
+            for key in (
+                "lingya_qq_publish_source_url",
+                "lingya_qq_publish_source_timeout",
+                "lingya_qq_publish_source_retries",
+                "lingya_qq_publish_cover_url",
+                "lingya_qq_publish_creation_process_text",
+                "lingya_qq_publish_initial_delay",
+                "lingya_qq_publish_poll_interval",
+                "lingya_qq_publish_timeout",
+                "lingya_qq_publish_generation_timeout",
+                "lingya_qq_publish_generation_poll_interval",
+                "lingya_qq_publish_credit_timeout",
+                "lingya_qq_publish_credit_poll_interval",
+                "lingya_qq_video_upload_service_id",
+            )
+            if data.get(key) not in (None, "")
+        }
+        if publish_config:
+            legacy_extra = dict(overview.get("legacy_extra") or {})
+            legacy_extra.update(publish_config)
+            overview["legacy_extra"] = legacy_extra
+        if data.get("phone"):
+            overview["remote_email"] = str(data.get("phone") or "")
+        if data.get("quota_balance") not in (None, "") or data.get("quota_sum") not in (None, ""):
+            overview["chips"].append(f"额度 {data.get('quota_balance', '-')}/{data.get('quota_sum', '-')}")
+        if data.get("session_refreshed"):
+            overview["chips"].append("会话已刷新")
+
+        if data.get("lingya_keepalive_disabled") is True:
+            overview["chips"].append("自动保活已停止")
+        elif data.get("lingya_keepalive_disabled") is False:
+            overview["chips"].append("自动保活已恢复")
+
+        if data.get("daily_sign_in_status"):
+            overview["chips"].append(f"Sign-in {data.get('daily_sign_in_status')}")
+        if data.get("last_publish_status"):
+            overview["chips"].append(f"Publish {data.get('last_publish_status')}")
+
     overview["chips"] = [chip for chip in overview["chips"] if chip]
     return overview if len(overview) > 2 else None
+
+
+def _redact_cookie_result_data(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+    redacted = dict(data)
+    for key in (
+        "cookies",
+        "cookie_header",
+        "freebeat_cookies",
+        "quickframe_cookies",
+        "weryai_cookies",
+        "weryai_cookie_header",
+        "quickframe_pending_cookies",
+        "quickframe_pending_cookie_header",
+    ):
+        if key in redacted:
+            redacted[key] = "***" if redacted.get(key) else ""
+    return redacted
 
 
 class PlatformRuntime:
@@ -275,7 +603,7 @@ class PlatformRuntime:
         instance = platform_cls(config=RegisterConfig())
         return instance.get_desktop_state() or {"available": False}
 
-    def execute_action(self, command: ActionExecutionCommand) -> ActionExecutionResult:
+    def execute_action(self, command: ActionExecutionCommand, log_fn=None) -> ActionExecutionResult:
         load_all()
         with Session(engine) as session:
             model = session.get(AccountModel, command.account_id)
@@ -284,6 +612,8 @@ class PlatformRuntime:
 
             platform_cls = get(command.platform)
             instance = platform_cls(config=RegisterConfig())
+            if log_fn:
+                instance.set_logger(log_fn)
             account = build_platform_account(session, model)
             try:
                 result: dict[str, Any] = instance.execute_action(command.action_id, account, command.params)
@@ -325,6 +655,6 @@ class PlatformRuntime:
                     session.commit()
             return ActionExecutionResult(
                 ok=bool(result.get("ok")),
-                data=result.get("data"),
+                data=_redact_cookie_result_data(result.get("data")),
                 error=str(result.get("error", "")),
             )

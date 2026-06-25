@@ -59,5 +59,50 @@ class TwoCaptcha(BaseCaptcha):
                 raise RuntimeError(f"2Captcha 错误: {data}")
         raise TimeoutError("2Captcha Turnstile 超时")
 
+    def solve_recaptcha(self, page_url: str, site_key: str, *, enterprise: bool = False, action: str = "") -> str:
+        import time
+        import requests
+
+        data = {
+            "key": self.api_key,
+            "method": "userrecaptcha",
+            "googlekey": site_key,
+            "pageurl": page_url,
+            "json": 1,
+        }
+        if enterprise:
+            data["enterprise"] = 1
+        if action:
+            data["action"] = action
+
+        create = requests.post(f"{self.api}/in.php", data=data, timeout=30)
+        create.raise_for_status()
+        payload = create.json()
+        if payload.get("status") != 1:
+            raise RuntimeError(f"2Captcha 创建 reCAPTCHA 任务失败: {payload}")
+        task_id = payload.get("request")
+        if not task_id:
+            raise RuntimeError(f"2Captcha 未返回 reCAPTCHA 任务 ID: {payload}")
+
+        for _ in range(60):
+            time.sleep(3)
+            result = requests.get(
+                f"{self.api}/res.php",
+                params={
+                    "key": self.api_key,
+                    "action": "get",
+                    "id": task_id,
+                    "json": 1,
+                },
+                timeout=30,
+            )
+            result.raise_for_status()
+            response = result.json()
+            if response.get("status") == 1:
+                return str(response.get("request") or "")
+            if response.get("request") not in {"CAPCHA_NOT_READY", "CAPTCHA_NOT_READY"}:
+                raise RuntimeError(f"2Captcha reCAPTCHA 错误: {response}")
+        raise TimeoutError("2Captcha reCAPTCHA 超时")
+
     def solve_image(self, image_b64: str) -> str:
         raise NotImplementedError

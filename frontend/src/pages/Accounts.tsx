@@ -11,12 +11,50 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { getTaskStatusText, TASK_STATUS_VARIANTS } from '@/lib/tasks'
-import { RefreshCw, Copy, ExternalLink, Download, Upload, Plus, X, Mail, Trash2, Zap } from 'lucide-react'
+import { RefreshCw, Copy, ExternalLink, Download, Upload, Plus, X, Mail, Trash2, Zap, ChevronLeft, ChevronRight, Save } from 'lucide-react'
+
+type LowQuotaRange = { min_exclusive: number; max_exclusive: number }
 
 const STATUS_VARIANT: Record<string, any> = {
   registered: 'default', trial: 'success', subscribed: 'success',
   expired: 'warning', invalid: 'danger',
   free: 'secondary', eligible: 'secondary', valid: 'success', unknown: 'secondary',
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  registered: '已注册',
+  trial: '试用中',
+  subscribed: '已订阅',
+  expired: '已过期',
+  invalid: '已失效',
+  free: '免费',
+  eligible: '可试用',
+  valid: '有效',
+  unknown: '未知',
+  signed: '已签到',
+  already_signed: '今日已签到',
+  not_available: '不可用',
+  panel_unavailable: '签到面板不可用',
+  disabled: '已关闭',
+  skipped: '已跳过',
+}
+
+const ACTION_LABEL: Record<string, string> = {
+  'LingYaQQ keepalive + sync': 'LingYaQQ 保活并同步',
+  'Sync to lingya2api': '同步到 lingya2api',
+  'LingYaQQ daily sign-in': 'LingYaQQ 每日签到',
+  'LingYaQQ publish work': 'LingYaQQ 发布作品',
+}
+
+function statusLabel(status: any) {
+  const raw = String(status || '').trim()
+  if (!raw) return '-'
+  return STATUS_LABEL[raw.toLowerCase()] || raw
+}
+
+function actionLabel(label: any) {
+  const raw = String(label || '').trim()
+  return ACTION_LABEL[raw] || raw || '动作'
 }
 
 const platformActionsCache = new Map<string, any[]>()
@@ -59,20 +97,84 @@ function getValidityStatus(acc: any) {
   return getDisplaySummary(acc)?.status?.validity || acc?.validity_status || acc?.overview?.validity_status || 'unknown'
 }
 
+function optionalNumber(value: any): number | null {
+  if (value === undefined || value === null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function getAccountQuotaBalance(acc: any): number | null {
+  const overview = getAccountOverview(acc)
+  const quota = overview?.quota && typeof overview.quota === 'object' ? overview.quota : {}
+  const credits = overview?.credits && typeof overview.credits === 'object' ? overview.credits : {}
+  const candidates = [
+    overview?.quota_balance,
+    quota?.quota_balance,
+    overview?.remaining_credits,
+    overview?.total_credits,
+    overview?.free_exports_remaining,
+    credits?.totalCredits,
+    credits?.total_credits,
+  ]
+  for (const value of candidates) {
+    const parsed = optionalNumber(value)
+    if (parsed !== null) return parsed
+  }
+  return null
+}
+
+function isLowQuotaAccount(acc: any, minExclusive: number, maxExclusive: number) {
+  const balance = getAccountQuotaBalance(acc)
+  return balance !== null && balance > minExclusive && balance < maxExclusive
+}
+
+function parseLowQuotaRanges(raw: any): Record<string, LowQuotaRange> {
+  let data = raw
+  if (typeof raw === 'string') {
+    try {
+      data = raw.trim() ? JSON.parse(raw) : {}
+    } catch {
+      data = {}
+    }
+  }
+  if (!data || typeof data !== 'object') return {}
+  const ranges: Record<string, LowQuotaRange> = {}
+  Object.entries(data).forEach(([platform, value]: [string, any]) => {
+    if (!value || typeof value !== 'object') return
+    const min = optionalNumber(value.min_exclusive)
+    const max = optionalNumber(value.max_exclusive)
+    if (min === null || max === null || max <= min) return
+    ranges[platform] = { min_exclusive: min, max_exclusive: max }
+  })
+  return ranges
+}
+
+function parseLowQuotaRange(raw: any): LowQuotaRange | null {
+  if (!raw || typeof raw !== 'object') return null
+  const min = optionalNumber(raw.min_exclusive)
+  const max = optionalNumber(raw.max_exclusive)
+  if (min === null || max === null || max <= min) return null
+  return { min_exclusive: min, max_exclusive: max }
+}
+
+function getLowQuotaRange(platform: string, ranges: Record<string, LowQuotaRange>, fallback: LowQuotaRange | null) {
+  return ranges[platform] || fallback
+}
+
 function getCompactStatusMeta(acc: any) {
   const summary = getDisplaySummary(acc)
   const primaryMetrics = Array.isArray(summary?.primary_metrics) ? summary.primary_metrics : []
   if (primaryMetrics.length > 0) {
     return primaryMetrics.slice(0, 2).map((item: any) => {
       const sub = item?.sub ? ` · ${item.sub}` : ''
-      return `${item?.label || ''}:${item?.value || '-'}${sub}`
+      return `${item?.label || ''}:${statusLabel(item?.value || '-')}${sub}`
     }).join(' / ')
   }
   const overview = getAccountOverview(acc)
   const parts = [
-    `生命周期:${getLifecycleStatus(acc)}`,
-    `套餐:${getPlanState(acc)}`,
-    `有效:${getValidityStatus(acc)}`,
+    `生命周期:${statusLabel(getLifecycleStatus(acc))}`,
+    `套餐:${statusLabel(getPlanState(acc))}`,
+    `有效:${statusLabel(getValidityStatus(acc))}`,
   ]
   const remainingCredits = overview?.remaining_credits
   const usageTotal = overview?.usage_total
@@ -157,16 +259,81 @@ async function loadPlatformActions(platform: string, options?: { force?: boolean
   return pending
 }
 
+const ACTION_PARAM_STORAGE_PREFIX = 'any-auto-register:action-params'
+const ACTION_PARAM_DEFAULT_KEYS: Record<string, Record<string, string>> = {
+  publish_work: {
+    source_url: 'lingya_qq_publish_source_url',
+    source_timeout: 'lingya_qq_publish_source_timeout',
+    source_retries: 'lingya_qq_publish_source_retries',
+    upload_service_id: 'lingya_qq_video_upload_service_id',
+    creation_process_text: 'lingya_qq_publish_creation_process_text',
+    credit_timeout: 'lingya_qq_publish_credit_timeout',
+    credit_poll_interval: 'lingya_qq_publish_credit_poll_interval',
+    initial_delay: 'lingya_qq_publish_initial_delay',
+    poll_interval: 'lingya_qq_publish_poll_interval',
+    timeout: 'lingya_qq_publish_timeout',
+    generation_timeout: 'lingya_qq_publish_generation_timeout',
+    generation_poll_interval: 'lingya_qq_publish_generation_poll_interval',
+  },
+}
+
+function actionParamStorageKey(platform: string, actionId: string) {
+  return `${ACTION_PARAM_STORAGE_PREFIX}:${platform || 'unknown'}:${actionId || 'unknown'}`
+}
+
+function readRememberedActionParams(platform: string, actionId: string): Record<string, string> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(actionParamStorageKey(platform, actionId))
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function rememberActionParams(platform: string, actionId: string, params: Record<string, any>) {
+  if (typeof window === 'undefined') return
+  const payload = Object.fromEntries(
+    Object.entries(params || {}).filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== ''),
+  )
+  if (Object.keys(payload).length === 0) return
+  try {
+    window.localStorage.setItem(actionParamStorageKey(platform, actionId), JSON.stringify(payload))
+  } catch {
+    // ignore local storage failures
+  }
+}
+
+function accountActionParamDefault(actionId: string, paramKey: string, acc: any) {
+  const mappedKey = ACTION_PARAM_DEFAULT_KEYS[actionId]?.[paramKey]
+  if (!mappedKey) return ''
+  const overview = getAccountOverview(acc)
+  const legacyExtra = overview?.legacy_extra && typeof overview.legacy_extra === 'object' ? overview.legacy_extra : {}
+  const candidates = [
+    legacyExtra[mappedKey],
+    overview?.[mappedKey],
+    acc?.[mappedKey],
+  ]
+  const value = candidates.find(item => item !== undefined && item !== null && String(item).trim() !== '')
+  return value === undefined ? '' : String(value)
+}
+
 function buildActionParamDraft(action: any, acc: any) {
   const params = Array.isArray(action?.params) ? action.params : []
   const emailPrefix = String(acc?.email || '').split('@')[0] || 'Development'
+  const remembered = readRememberedActionParams(acc?.platform || '', action?.id || '')
   const draft: Record<string, string> = {}
   params.forEach((param: any) => {
+    const key = param?.key || ''
     if (action?.id === 'create_api_key' && param?.key === 'name') {
       draft[param.key] = `${emailPrefix}Development`
       return
     }
-    draft[param?.key || ''] = ''
+    const rememberedValue = remembered[key]
+    draft[key] = rememberedValue !== undefined && rememberedValue !== null && String(rememberedValue).trim() !== ''
+      ? String(rememberedValue)
+      : accountActionParamDefault(action?.id || '', key, acc)
   })
   return draft
 }
@@ -187,8 +354,10 @@ function RegisterModal({
   const [configOptions, setConfigOptions] = useState<ConfigOptionsResponse>({
     mailbox_providers: [],
     captcha_providers: [],
+    sms_providers: [],
     mailbox_settings: [],
     captcha_settings: [],
+    sms_settings: [],
     captcha_policy: {},
     executor_options: [],
     identity_mode_options: [],
@@ -197,6 +366,8 @@ function RegisterModal({
   const [configLoading, setConfigLoading] = useState(true)
   const [regCount, setRegCount] = useState(1)
   const [concurrency, setConcurrency] = useState(1)
+  const [proxy, setProxy] = useState('')
+  const [useProxyPool, setUseProxyPool] = useState(false)
   const [selection, setSelection] = useState({
     identityProvider: '',
     oauthProvider: '',
@@ -205,6 +376,7 @@ function RegisterModal({
   const [taskId, setTaskId] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState('')
 
   const supportedExecutors: string[] = platformMeta?.supported_executors || []
   const registrationOptions = buildRegistrationOptions(platformMeta)
@@ -219,6 +391,8 @@ function RegisterModal({
     option.identityProvider === selection.identityProvider && option.oauthProvider === selection.oauthProvider,
   )
   const selectedExecutor = executorOptions.find(option => option.value === selection.executorType)
+  const proxyText = proxy.trim()
+  const proxySummary = proxyText || (useProxyPool ? '代理池轮询' : '直连')
 
   useEffect(() => {
     let active = true
@@ -240,8 +414,10 @@ function RegisterModal({
         setConfigOptions({
           mailbox_providers: [],
           captcha_providers: [],
+          sms_providers: [],
           mailbox_settings: [],
           captcha_settings: [],
+          sms_settings: [],
           captcha_policy: {},
           executor_options: [],
           identity_mode_options: [],
@@ -314,9 +490,33 @@ function RegisterModal({
   }, [selection.identityProvider, selection.oauthProvider, selection.executorType, supportedExecutors, reusableBrowser])
 
   const defaultMailboxProvider = (configOptions.mailbox_settings || []).find(item => item.is_default) || configOptions.mailbox_settings?.[0] || null
+  const defaultSmsProvider = (configOptions.sms_settings || []).find(item => item.is_default) || configOptions.sms_settings?.[0] || null
+  const defaultSmsDefinition = defaultSmsProvider
+    ? (configOptions.sms_providers || []).find(item => item.value === defaultSmsProvider.provider_key)
+    : null
+  const defaultSmsValues = {
+    ...(defaultSmsProvider?.config || {}),
+    ...(defaultSmsProvider?.auth || {}),
+  }
+  const missingDefaultSmsAuthFields = defaultSmsDefinition
+    ? (defaultSmsDefinition.fields || []).filter((field: any) => {
+        const key = String(field.key || '')
+        const isAuthField = Boolean(field.secret || field.category === 'auth' || /(_api_key|token|secret|password)$/i.test(key))
+        return isAuthField && !String(defaultSmsValues[key] ?? '').trim()
+      })
+    : []
+  const defaultSmsProviderLabel = defaultSmsProvider
+    ? (defaultSmsDefinition?.label || defaultSmsProvider.display_name || defaultSmsProvider.provider_key)
+    : ''
+  const smsProviderError = selection.identityProvider === 'manual_phone' && !defaultSmsProvider?.provider_key
+    ? '未配置默认接码 provider，请先到设置页新增并启用一个接码服务。'
+    : selection.identityProvider === 'manual_phone' && missingDefaultSmsAuthFields.length > 0
+      ? `默认接码服务缺少 ${missingDefaultSmsAuthFields.map((field: any) => field.label || field.key).join('、')}。`
+    : ''
 
   const start = async () => {
     setStarting(true)
+    setStartError('')
     try {
       const cfg = config || {}
       const extra: Record<string, any> = {
@@ -332,17 +532,26 @@ function RegisterModal({
         }
         extra.mail_provider = defaultMailboxProvider.provider_key
       }
+      if (selection.identityProvider === 'manual_phone') {
+        if (!defaultSmsProvider?.provider_key) {
+          throw new Error(smsProviderError || '未配置默认接码 provider')
+        }
+        extra.sms_provider = defaultSmsProvider.provider_key
+      }
       const res = await apiFetch('/tasks/register', {
         method: 'POST',
         body: JSON.stringify({
           platform, count: regCount, concurrency,
           executor_type: selection.executorType,
           captcha_solver: 'auto',
-          proxy: null,
+          proxy: proxyText || null,
+          use_proxy_pool: useProxyPool,
           extra,
         }),
       })
       setTaskId(res.task_id)
+    } catch (error: any) {
+      setStartError(error?.message || '启动注册失败')
     } finally { setStarting(false) }
   }
 
@@ -445,18 +654,53 @@ function RegisterModal({
                   </div>
                 </div>
 
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-pane)]/45 px-4 py-3">
+                  <label className="text-xs text-[var(--text-muted)] block mb-1">代理</label>
+                  <input
+                    type="text"
+                    value={proxy}
+                    onChange={e => setProxy(e.target.value)}
+                    placeholder="http://user:pass@host:port"
+                    className="control-surface control-surface-compact"
+                  />
+                  <label className="mt-3 flex items-start gap-2 text-xs text-[var(--text-secondary)]">
+                    <input
+                      type="checkbox"
+                      checked={useProxyPool}
+                      onChange={e => setUseProxyPool(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>使用代理池；未填写上方代理且勾选时才会从代理池轮询，不勾选时默认直连。</span>
+                  </label>
+                  {selection.identityProvider === 'manual_phone' ? (
+                    <div className="mt-2 text-xs text-amber-300">
+                      LingYaQQ 手动打开浏览器发短信时，也需要让该浏览器使用任务日志里的同一个代理。
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-hover)] px-4 py-3 text-xs text-[var(--text-secondary)]">
                   <div>注册身份: <span className="text-[var(--text-primary)]">{selectedRegistration?.label || '-'}</span></div>
                   <div className="mt-1">执行方式: <span className="text-[var(--text-primary)]">{selectedExecutor?.label || '-'}</span></div>
-                  <div className="mt-1">验证策略: <span className="text-[var(--text-primary)]">{getCaptchaStrategyLabel(selection.executorType)}</span></div>
+                  <div className="mt-1">代理: <span className="text-[var(--text-primary)] break-all">{proxySummary}</span></div>
+                  <div className="mt-1">验证策略: <span className="text-[var(--text-primary)]">{getCaptchaStrategyLabel(selection.executorType, configOptions.captcha_policy, configOptions.captcha_providers)}</span></div>
+                  {selection.identityProvider === 'manual_phone' && defaultSmsProviderLabel ? (
+                    <div className="mt-1">接码服务: <span className="text-[var(--text-primary)]">{defaultSmsProviderLabel}</span></div>
+                  ) : null}
+                  {smsProviderError ? (
+                    <div className="mt-2 text-amber-400">{smsProviderError}</div>
+                  ) : null}
                   {selection.identityProvider === 'oauth_browser' && !reusableBrowser && (
                     <div className="mt-2 text-amber-400">后台浏览器自动依赖 Chrome Profile 或 Chrome CDP，未配置时只允许可视浏览器自动。</div>
                   )}
+                  {startError ? (
+                    <div className="mt-2 text-red-400">{startError}</div>
+                  ) : null}
                 </div>
 
                 <Button
                   onClick={start}
-                  disabled={starting || !selection.identityProvider || !selection.executorType}
+                  disabled={starting || !selection.identityProvider || !selection.executorType || Boolean(smsProviderError)}
                   className="w-full"
                 >
                   {starting ? '启动中...' : '开始自动注册'}
@@ -534,7 +778,7 @@ function AddModal({ platform, onClose, onDone }: { platform: string; onClose: ()
 function formatResultValue(value: any) {
   if (value === null || value === undefined || value === '') return '-'
   if (typeof value === 'boolean') return value ? '是' : '否'
-  return String(value)
+  return statusLabel(value)
 }
 
 function ResultStat({ label, value }: { label: string; value: any }) {
@@ -810,8 +1054,8 @@ function ActionTaskModal({
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_0%,rgba(9,182,162,0.18),transparent_34%),linear-gradient(90deg,rgba(255,255,255,0.04),transparent)]" />
           <div className="relative flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="mb-2 inline-flex rounded-full border border-[var(--border)] bg-[var(--chip-bg)] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                Platform Action
+              <div className="mb-2 inline-flex rounded-full border border-[var(--border)] bg-[var(--chip-bg)] px-3 py-1 text-[11px] tracking-[0.12em] text-[var(--text-muted)]">
+                平台动作
               </div>
               <h2 className="truncate text-lg font-semibold text-[var(--text-primary)]">{title}</h2>
               <p className="mt-1 text-xs text-[var(--text-muted)]">任务状态、错误摘要与实时日志集中展示</p>
@@ -866,19 +1110,19 @@ function ActionParamsModal({
   return (
     <div className="dialog-backdrop" onClick={onClose}>
       <div
-        className="dialog-panel dialog-panel-md"
+        className="dialog-panel dialog-panel-md flex flex-col"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-6 py-4">
           <div>
-            <h2 className="text-base font-semibold text-[var(--text-primary)]">{action?.label || '动作参数'}</h2>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">{actionLabel(action?.label)}</h2>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">填写执行该动作所需的参数</p>
           </div>
           <button onClick={onClose} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="px-6 py-4 space-y-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
           {params.map((param: any) => {
             const value = form[param.key] ?? ''
             if (Array.isArray(param.options) && param.options.length > 0) {
@@ -923,7 +1167,7 @@ function ActionParamsModal({
             )
           })}
         </div>
-        <div className="px-6 py-4 border-t border-[var(--border)] flex gap-3">
+        <div className="flex shrink-0 gap-3 border-t border-[var(--border)] px-6 py-4">
           <Button onClick={() => onSubmit(form)} disabled={submitting} className="flex-1">
             {submitting ? '执行中...' : '执行'}
           </Button>
@@ -966,7 +1210,7 @@ function ActionMenu({
         if (resp?.sync) {
           setRunning(null)
           if (!resp.ok) {
-            setToast({ type: 'error', text: resp.error || 'Operation failed' })
+            setToast({ type: 'error', text: resp.error || '操作失败' })
             return
           }
           onChanged()
@@ -979,17 +1223,17 @@ function ActionMenu({
               // Ignore clipboard errors
             }
           }
-          onResult(action.label, resp.data)
+          onResult(actionLabel(action.label), resp.data)
           return
         }
         setActionTask({
           taskId: resp.task_id,
-          title: `${acc.email} · ${action.label}`,
+          title: `${acc.email} · ${actionLabel(action.label)}`,
         })
       })
       .catch(() => {
         setRunning(null)
-        setToast({ type: 'error', text: 'Request failed' })
+        setToast({ type: 'error', text: '请求失败' })
       })
   }
 
@@ -1142,6 +1386,7 @@ function ActionMenu({
           onSubmit={(params) => {
             const action = pendingAction.action
             setPendingAction(null)
+            rememberActionParams(acc.platform, action.id, params)
             runAction(action, params)
           }}
         />
@@ -1172,7 +1417,7 @@ function ActionMenu({
                   }}
                   disabled={!!running}
                   className="w-full px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:opacity-50">
-                  {running === a.id ? '执行中...' : a.label}
+                  {running === a.id ? '执行中...' : actionLabel(a.label)}
                 </button>
               ))}
               <div className="my-1 border-t border-[var(--border)]/70" />
@@ -1251,22 +1496,22 @@ function DetailModal({ acc, onClose, onSave }: { acc: any; onClose: () => void; 
               <div>
                 <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-muted)]">核心状态</div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Badge variant={STATUS_VARIANT[getDisplayStatus(acc)] || 'secondary'}>{getDisplayStatus(acc)}</Badge>
-                  <span className="text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{acc.plan_name || overview.plan_name || overview.plan || getPlanState(acc)}</span>
+                  <Badge variant={STATUS_VARIANT[getDisplayStatus(acc)] || 'secondary'}>{statusLabel(getDisplayStatus(acc))}</Badge>
+                  <span className="text-lg font-semibold tracking-[-0.03em] text-[var(--text-primary)]">{acc.plan_name || overview.plan_name || overview.plan || statusLabel(getPlanState(acc))}</span>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-right text-[11px] text-[var(--text-muted)] sm:grid-cols-3">
                 <div className="rounded-xl border border-[var(--border-soft)] bg-black/10 px-2.5 py-2">
                   <div className="uppercase tracking-[0.12em]">生命周期</div>
-                  <div className="mt-1 text-[var(--text-primary)]">{getLifecycleStatus(acc)}</div>
+                  <div className="mt-1 text-[var(--text-primary)]">{statusLabel(getLifecycleStatus(acc))}</div>
                 </div>
                 <div className="rounded-xl border border-[var(--border-soft)] bg-black/10 px-2.5 py-2">
                   <div className="uppercase tracking-[0.12em]">有效性</div>
-                  <div className="mt-1 text-[var(--text-primary)]">{getValidityStatus(acc)}</div>
+                  <div className="mt-1 text-[var(--text-primary)]">{statusLabel(getValidityStatus(acc))}</div>
                 </div>
                 <div className="rounded-xl border border-[var(--border-soft)] bg-black/10 px-2.5 py-2">
                   <div className="uppercase tracking-[0.12em]">套餐状态</div>
-                  <div className="mt-1 text-[var(--text-primary)]">{getPlanState(acc)}</div>
+                  <div className="mt-1 text-[var(--text-primary)]">{statusLabel(getPlanState(acc))}</div>
                 </div>
               </div>
             </div>
@@ -1364,7 +1609,7 @@ function DetailModal({ acc, onClose, onSave }: { acc: any; onClose: () => void; 
             <label className="text-xs text-[var(--text-muted)] block mb-1">生命周期状态</label>
             <select value={form.lifecycle_status} onChange={e => setForm(f => ({ ...f, lifecycle_status: e.target.value }))}
               className="control-surface appearance-none">
-              {['registered','trial','subscribed','expired','invalid'].map(s => <option key={s} value={s}>{s}</option>)}
+              {['registered','trial','subscribed','expired','invalid'].map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
             </select>
           </div>
           <div>
@@ -1515,6 +1760,8 @@ export default function Accounts() {
 
   const [accounts, setAccounts] = useState<any[]>([])
   const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -1524,10 +1771,15 @@ export default function Accounts() {
   const [showAdd, setShowAdd] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
   const [platformsMap, setPlatformsMap] = useState<Record<string, any>>({})
+  const [lowQuotaRanges, setLowQuotaRanges] = useState<Record<string, LowQuotaRange>>({})
+  const [lowQuotaFallback, setLowQuotaFallback] = useState<LowQuotaRange | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [actionResult, setActionResult] = useState<{ title: string; payload: any } | null>(null)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [batchRefreshing, setBatchRefreshing] = useState(false)
+  const [lowQuotaDeleting, setLowQuotaDeleting] = useState(false)
+  const [lowQuotaSaving, setLowQuotaSaving] = useState(false)
+  const [lowQuotaDrafts, setLowQuotaDrafts] = useState<Record<string, { min: string; max: string }>>({})
   const [batchTask, setBatchTask] = useState<{ taskId: string; title: string } | null>(null)
   const [batchTaskStatus, setBatchTaskStatus] = useState<string | null>(null)
 
@@ -1543,26 +1795,54 @@ export default function Accounts() {
   }, [platform, tab])
 
   useEffect(() => {
+    let active = true
+    apiFetch('/accounts/low-quota-ranges')
+      .then((data: any) => {
+        if (!active) return
+        setLowQuotaRanges(parseLowQuotaRanges(data?.effective))
+        setLowQuotaFallback(parseLowQuotaRange(data?.fallback))
+      })
+      .catch(() => {
+        if (!active) return
+        setLowQuotaRanges({})
+        setLowQuotaFallback(null)
+      })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 400)
     return () => clearTimeout(timer)
   }, [search])
 
   useEffect(() => {
     setSelectedIds(new Set())
+    setPage(1)
   }, [tab, filterStatus, debouncedSearch])
 
-  const load = useCallback(async (p = tab, s = debouncedSearch, fs = filterStatus) => {
+  const load = useCallback(async (p = tab, s = debouncedSearch, fs = filterStatus, pg = page, ps = pageSize) => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ platform: p, page: '1', page_size: '100' })
+      const params = new URLSearchParams({ platform: p, page: String(pg), page_size: String(ps) })
       if (s) params.set('email', s)
       if (fs) params.set('status', fs)
       const data = await apiFetch(`/accounts?${params}`)
-      setAccounts(data.items); setTotal(data.total)
+      setAccounts(Array.isArray(data.items) ? data.items : [])
+      setTotal(Number(data.total || 0))
     } finally { setLoading(false) }
-  }, [tab, debouncedSearch, filterStatus])
+  }, [tab, debouncedSearch, filterStatus, page, pageSize])
 
-  useEffect(() => { load(tab, debouncedSearch, filterStatus) }, [tab, debouncedSearch, filterStatus])
+  useEffect(() => { load(tab, debouncedSearch, filterStatus, page, pageSize) }, [tab, debouncedSearch, filterStatus, page, pageSize, load])
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const pageStart = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const pageEnd = Math.min(total, page * pageSize)
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [page, totalPages])
 
   useEffect(() => {
     setSelectedIds(prev => {
@@ -1592,6 +1872,71 @@ export default function Accounts() {
   const pageIds = accounts.map(acc => acc.id)
   const allSelectedOnPage = pageIds.length > 0 && pageIds.every(id => selectedIds.has(id))
   const selectedCount = selectedIds.size
+  const configuredLowQuotaRange = getLowQuotaRange(tab, lowQuotaRanges, lowQuotaFallback)
+
+  useEffect(() => {
+    if (!tab || !configuredLowQuotaRange) return
+    setLowQuotaDrafts(current => {
+      if (current[tab] && (current[tab].min !== '' || current[tab].max !== '')) return current
+      return {
+        ...current,
+        [tab]: {
+          min: String(configuredLowQuotaRange.min_exclusive),
+          max: String(configuredLowQuotaRange.max_exclusive),
+        },
+      }
+    })
+  }, [tab, configuredLowQuotaRange?.min_exclusive, configuredLowQuotaRange?.max_exclusive])
+
+  const currentLowQuotaDraft = lowQuotaDrafts[tab] || {
+    min: configuredLowQuotaRange ? String(configuredLowQuotaRange.min_exclusive) : '',
+    max: configuredLowQuotaRange ? String(configuredLowQuotaRange.max_exclusive) : '',
+  }
+  const lowQuotaMin = optionalNumber(currentLowQuotaDraft.min)
+  const lowQuotaMax = optionalNumber(currentLowQuotaDraft.max)
+  const lowQuotaMinValue = lowQuotaMin ?? 0
+  const lowQuotaMaxValue = lowQuotaMax ?? 0
+  const lowQuotaRangeValid = lowQuotaMin !== null && lowQuotaMax !== null && lowQuotaMaxValue > lowQuotaMinValue
+
+  const updateLowQuotaDraft = (field: 'min' | 'max', value: string) => {
+    setLowQuotaDrafts(current => ({
+      ...current,
+      [tab]: {
+        min: field === 'min' ? value : currentLowQuotaDraft.min,
+        max: field === 'max' ? value : currentLowQuotaDraft.max,
+      },
+    }))
+  }
+
+  const saveLowQuotaRange = async (range?: LowQuotaRange) => {
+    if (!tab) throw new Error('缺少平台')
+    const nextRange = range || {
+      min_exclusive: Number(currentLowQuotaDraft.min),
+      max_exclusive: Number(currentLowQuotaDraft.max),
+    }
+    if (!Number.isFinite(nextRange.min_exclusive) || !Number.isFinite(nextRange.max_exclusive) || nextRange.max_exclusive <= nextRange.min_exclusive) {
+      throw new Error('低额度删除区间必须满足 min < max')
+    }
+    setLowQuotaSaving(true)
+    try {
+      const data = await apiFetch(`/accounts/platform/${encodeURIComponent(tab)}/low-quota-range`, {
+        method: 'PUT',
+        body: JSON.stringify(nextRange),
+      })
+      setLowQuotaRanges(parseLowQuotaRanges(data?.effective))
+      setLowQuotaFallback(parseLowQuotaRange(data?.fallback))
+      setLowQuotaDrafts(current => ({
+        ...current,
+        [tab]: {
+          min: String(nextRange.min_exclusive),
+          max: String(nextRange.max_exclusive),
+        },
+      }))
+      return nextRange
+    } finally {
+      setLowQuotaSaving(false)
+    }
+  }
 
   const toggleOne = (id: number) => {
     setSelectedIds(prev => {
@@ -1621,6 +1966,9 @@ export default function Accounts() {
   const visibleTrial = accounts.filter(acc => getPlanState(acc) === 'trial').length
   const visibleSubscribed = accounts.filter(acc => getPlanState(acc) === 'subscribed').length
   const visibleInvalid = accounts.filter(acc => getValidityStatus(acc) === 'invalid' || getLifecycleStatus(acc) === 'invalid').length
+  const visibleLowQuota = lowQuotaRangeValid
+    ? accounts.filter(acc => isLowQuotaAccount(acc, lowQuotaMinValue, lowQuotaMaxValue)).length
+    : 0
   const linkedCashier = accounts.filter(acc => Boolean(getCashierUrl(acc))).length
 
   return (
@@ -1665,7 +2013,7 @@ export default function Accounts() {
               {selectedCount > 0 && <span className="flex items-center rounded-full bg-[var(--text-primary)]/10 px-2 py-0.5 font-medium text-[var(--text-primary)] ring-1 ring-inset ring-[var(--text-primary)]/20">已选 {selectedCount}</span>}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button size="sm" onClick={() => setShowRegister(true)} className="h-8 shadow-sm">
               <Plus className="mr-1.5 h-3.5 w-3.5" />
               自动注册
@@ -1752,6 +2100,78 @@ export default function Accounts() {
               <Zap className={`mr-1 h-3.5 w-3.5 ${batchRefreshing ? 'animate-pulse' : ''}`} />
               {batchRefreshing ? '刷新中...' : '刷新额度'}
             </Button>
+            <div className="flex h-7 items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-1.5">
+              <input
+                type="number"
+                step="any"
+                value={currentLowQuotaDraft.min}
+                onChange={e => updateLowQuotaDraft('min', e.target.value)}
+                className="h-5 w-12 bg-transparent text-center text-xs text-[var(--text-primary)] outline-none"
+                title="低额度删除区间下限，不包含"
+              />
+              <span className="text-[11px] text-[var(--text-muted)]">&lt; 额度 &lt;</span>
+              <input
+                type="number"
+                step="any"
+                value={currentLowQuotaDraft.max}
+                onChange={e => updateLowQuotaDraft('max', e.target.value)}
+                className="h-5 w-12 bg-transparent text-center text-xs text-[var(--text-primary)] outline-none"
+                title="低额度删除区间上限，不包含"
+              />
+              <button
+                type="button"
+                disabled={!tab || lowQuotaSaving || !lowQuotaRangeValid}
+                className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                title="保存当前平台低额度删除区间"
+                onClick={async () => {
+                  try {
+                    await saveLowQuotaRange()
+                  } catch (error: any) {
+                    alert(error?.message || '保存低额度删除区间失败')
+                  }
+                }}
+              >
+                <Save className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!tab || lowQuotaDeleting || loading || !lowQuotaRangeValid}
+              className="h-7 px-2.5 text-red-500 hover:bg-red-500/10 hover:text-red-600"
+              title="删除当前平台中额度处于配置区间内的账号"
+              onClick={async () => {
+                if (!lowQuotaRangeValid) {
+                  alert('低额度删除区间必须满足 min < max')
+                  return
+                }
+                const visibleHint = visibleLowQuota > 0 ? `当前页可见 ${visibleLowQuota} 个；` : ''
+                const rangeText = `${lowQuotaMinValue} < 额度 < ${lowQuotaMaxValue}`
+                if (!confirm(`${visibleHint}确认删除所有 ${platformLabel} 中 ${rangeText} 的账号？此操作不可撤销，且不只限当前页。`)) return
+                setLowQuotaDeleting(true)
+                try {
+                  const range = await saveLowQuotaRange({
+                    min_exclusive: lowQuotaMinValue,
+                    max_exclusive: lowQuotaMaxValue,
+                  })
+                  const params = new URLSearchParams({
+                    min_exclusive: String(range.min_exclusive),
+                    max_exclusive: String(range.max_exclusive),
+                  })
+                  const res = await apiFetch(`/accounts/platform/${encodeURIComponent(tab)}/low-quota?${params}`, { method: 'DELETE' })
+                  setSelectedIds(new Set())
+                  setActionResult({ title: `${platformLabel} 低额度账号删除结果`, payload: res })
+                  load()
+                } catch (error: any) {
+                  alert(error?.message || '删除低额度账号失败')
+                } finally {
+                  setLowQuotaDeleting(false)
+                }
+              }}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              {lowQuotaDeleting ? '删除中...' : '删除低额'}
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => load()} disabled={loading} className="h-7 w-7 p-0 text-[var(--text-muted)] hover:text-[var(--text-primary)]">
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
@@ -1780,6 +2200,49 @@ export default function Accounts() {
               </Button>
             )}
           </div>
+          <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--border)]/50 bg-[var(--bg-pane)]/20 px-5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs text-[var(--text-muted)]">
+              {total > 0 ? `显示 ${pageStart}-${pageEnd} / ${total}` : '显示 0 / 0'}
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={e => {
+                  setPageSize(Number(e.target.value))
+                  setPage(1)
+                }}
+                className="h-8 rounded-md border border-[var(--border)] bg-transparent px-2 text-xs text-[var(--text-primary)] focus:border-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--text-primary)]"
+              >
+                <option value={20}>20 / 页</option>
+                <option value={50}>50 / 页</option>
+                <option value={100}>100 / 页</option>
+                <option value={200}>200 / 页</option>
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 bg-transparent p-0"
+                disabled={loading || page <= 1}
+                onClick={() => setPage(prev => Math.max(1, prev - 1))}
+                title="上一页"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <div className="min-w-[72px] text-center text-xs text-[var(--text-secondary)]">
+                {page} / {totalPages}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 bg-transparent p-0"
+                disabled={loading || page >= totalPages}
+                onClick={() => setPage(prev => Math.min(totalPages, prev + 1))}
+                title="下一页"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </div>
       </Card>
 
@@ -1806,12 +2269,12 @@ export default function Accounts() {
                   className="checkbox-accent rounded-[3px] border-[var(--border)] focus:ring-[var(--text-primary)] focus:ring-offset-0 bg-transparent text-[var(--text-primary)]"
                 />
               </th>
-              <th className="px-3 py-2 text-left">邮箱 (Email)</th>
-              <th className="px-3 py-2 text-left">密码 (Pwd)</th>
-              <th className="px-3 py-2 text-left">状态 (Status)</th>
-              <th className="px-3 py-2 text-left">试用链接 (Link)</th>
-              <th className="px-3 py-2 text-left">注册时间 (Date)</th>
-              <th className="px-3 py-2 text-right">操作 (Action)</th>
+              <th className="px-3 py-2 text-left">邮箱</th>
+              <th className="px-3 py-2 text-left">密码</th>
+              <th className="px-3 py-2 text-left">状态</th>
+              <th className="px-3 py-2 text-left">试用链接</th>
+              <th className="px-3 py-2 text-left">注册时间</th>
+              <th className="px-3 py-2 text-right">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -1896,7 +2359,7 @@ export default function Accounts() {
                       return (
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${styles}`}>
                           <span className={`mr-1 h-1 w-1 rounded-full ${variant === 'success' ? 'bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.6)]' : variant === 'warning' ? 'bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.6)]' : variant === 'danger' ? 'bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.6)]' : variant === 'default' ? 'bg-blue-500' : 'bg-gray-400'}`}></span>
-                          {status}
+                          {statusLabel(status)}
                         </span>
                       );
                     })()}

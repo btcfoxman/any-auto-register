@@ -17,6 +17,7 @@ const DEFAULT_FORM: Record<string, any> = {
   password: '',
   count: 1,
   proxy: '',
+  use_proxy_pool: false,
   executor_type: '',
   captcha_solver: 'auto',
   identity_provider: '',
@@ -148,6 +149,22 @@ export default function Register() {
   const smsProviderOptions = getProviderSelectOptions(configOptions.sms_providers || [])
   const currentSmsProvider = (configOptions.sms_providers || []).find(provider => provider.value === form.sms_provider) || null
   const currentSmsSetting = getProviderSetting(configOptions.sms_settings || [], form.sms_provider)
+  const currentSmsValues = getProviderMergedValues(currentSmsSetting)
+  const smsRequired = form.identity_provider === 'manual_phone'
+  const missingSmsAuthFields = smsRequired && currentSmsProvider
+    ? (currentSmsProvider.fields || []).filter((field: any) => {
+        const key = String(field.key || '')
+        const isAuthField = Boolean(field.secret || field.category === 'auth' || /(_api_key|token|secret|password)$/i.test(key))
+        return isAuthField && !String(form[key] ?? currentSmsValues[key] ?? '').trim()
+      })
+    : []
+  const smsRuntimeIssue = smsRequired
+    ? (!currentSmsProvider
+        ? '当前没有可用的接码 provider，请先到设置页新增并启用一个接码服务。'
+        : missingSmsAuthFields.length > 0
+          ? `接码服务缺少 ${missingSmsAuthFields.map((field: any) => field.label || field.key).join('、')}。`
+          : '')
+    : ''
   const allProviderFieldKeys = listProviderFieldKeys([
     ...(configOptions.mailbox_providers || []),
     ...(configOptions.captcha_providers || []),
@@ -181,11 +198,11 @@ export default function Register() {
   }, [form.mail_provider, currentMailboxProvider, currentMailboxSetting])
 
   useEffect(() => {
-    const defaultProviderKey = getDefaultProviderKey(configOptions.sms_settings || [])
-    if (!form.sms_provider && defaultProviderKey) {
+    const defaultProviderKey = getDefaultProviderKey(configOptions.sms_settings || []) || (configOptions.sms_providers || [])[0]?.value || ''
+    if (form.identity_provider === 'manual_phone' && !form.sms_provider && defaultProviderKey) {
       set('sms_provider', defaultProviderKey)
     }
-  }, [form.sms_provider, configOptions.sms_settings])
+  }, [form.identity_provider, form.sms_provider, configOptions.sms_settings, configOptions.sms_providers])
 
   useEffect(() => {
     if (!currentSmsProvider) return
@@ -242,6 +259,7 @@ export default function Register() {
   }, [executorOptions, supportedExecutors, form.executor_type, form.identity_provider, form.chrome_user_data_dir, form.chrome_cdp_url])
 
   const submit = async () => {
+    if (smsRuntimeIssue) return
     const extra: Record<string, any> = {
       identity_provider: form.identity_provider,
       oauth_provider: form.oauth_provider,
@@ -268,6 +286,7 @@ export default function Register() {
         password: form.password || null,
         count: form.count,
         proxy: form.proxy || null,
+        use_proxy_pool: Boolean(form.use_proxy_pool),
         executor_type: form.executor_type,
         captcha_solver: 'auto',
         extra,
@@ -341,6 +360,21 @@ export default function Register() {
     </div>
   )
 
+  const Checkbox = ({ label, k, hint = '' }: any) => (
+    <label className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-pane)]/45 px-3 py-2.5 text-sm text-[var(--text-secondary)]">
+      <input
+        type="checkbox"
+        checked={Boolean((form as any)[k])}
+        onChange={e => set(k, e.target.checked)}
+        className="checkbox-accent mt-0.5"
+      />
+      <span>
+        <span className="font-medium text-[var(--text-primary)]">{label}</span>
+        {hint && <span className="mt-0.5 block text-xs leading-5 text-[var(--text-muted)]">{hint}</span>}
+      </span>
+    </label>
+  )
+
   const renderProviderField = (field: any) => (
     <Input
       key={field.key}
@@ -354,6 +388,7 @@ export default function Register() {
   const summaryRegistration = registrationOptions.find(option => option.identityProvider === form.identity_provider && option.oauthProvider === form.oauth_provider)?.label || '-'
   const summaryExecutor = executorOptions.find(option => option.value === form.executor_type)?.label || '-'
   const summaryVerification = getCaptchaStrategyLabel(form.executor_type, configOptions.captcha_policy, configOptions.captcha_providers)
+  const submitDisabled = polling || !form.identity_provider || !form.executor_type || Boolean(smsRuntimeIssue)
   const activeTaskStats = task ? [
     { label: '状态', value: getTaskStatusText(task.status), icon: Orbit },
     { label: '进度', value: task.progress || '0/0', icon: Workflow },
@@ -373,6 +408,11 @@ export default function Register() {
                 <Input label="批量数量" k="count" type="number" />
                 <Input label="代理 (可选)" k="proxy" placeholder="http://user:pass@host:port" />
               </div>
+              <Checkbox
+                label="使用代理池"
+                k="use_proxy_pool"
+                hint="未填写上方代理时才会从代理池轮询；不勾选时默认直连。"
+              />
             </CardContent>
           </Card>
 
@@ -474,7 +514,7 @@ export default function Register() {
             </Card>
           )}
 
-          {smsProviderOptions.length > 0 && (
+          {smsRequired && (
             <Card>
               <CardHeader><CardTitle>短信接码配置</CardTitle></CardHeader>
               <CardContent className="space-y-4">
@@ -483,11 +523,22 @@ export default function Register() {
                     {optionsError}
                   </div>
                 )}
-                <Select label="短信服务" k="sms_provider" options={smsProviderOptions} />
+                {smsProviderOptions.length > 0 ? (
+                  <Select label="短信服务" k="sms_provider" options={smsProviderOptions} />
+                ) : (
+                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                    当前没有可用的接码 provider，请先到设置页新增并启用一个接码服务。
+                  </div>
+                )}
                 {currentSmsProvider?.description ? (
                   <p className="text-xs leading-5 text-[var(--text-muted)]">{currentSmsProvider.description}</p>
                 ) : null}
                 {(currentSmsProvider?.fields || []).map(renderProviderField)}
+                {smsRuntimeIssue ? (
+                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                    {smsRuntimeIssue}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           )}
@@ -517,7 +568,12 @@ export default function Register() {
                   <div className="mt-2 text-base font-medium text-[var(--text-primary)]">{summaryVerification}</div>
                 </div>
               </div>
-              <Button onClick={submit} disabled={polling} className="w-full">
+              {smsRuntimeIssue ? (
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
+                  {smsRuntimeIssue}
+                </div>
+              ) : null}
+              <Button onClick={submit} disabled={submitDisabled} className="w-full">
                 {polling ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />注册中...</> : <><Play className="mr-2 h-4 w-4" />开始注册</>}
               </Button>
             </CardContent>

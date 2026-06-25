@@ -14,6 +14,44 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _mojibake_bytes(value: str) -> bytes | None:
+    data = bytearray()
+    for char in value:
+        codepoint = ord(char)
+        if codepoint <= 0xFF:
+            data.append(codepoint)
+            continue
+        try:
+            encoded = char.encode("cp1252")
+        except UnicodeEncodeError:
+            return None
+        if len(encoded) != 1:
+            return None
+        data.extend(encoded)
+    return bytes(data)
+
+
+def _repair_mojibake(value: str) -> str:
+    data = _mojibake_bytes(value)
+    if data is None:
+        return value
+    try:
+        repaired = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return value
+    return repaired
+
+
+def _normalize_seed_text(value):
+    if isinstance(value, str):
+        return _repair_mojibake(value)
+    if isinstance(value, list):
+        return [_normalize_seed_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_seed_text(item) for key, item in value.items()}
+    return value
+
+
 _BUILTIN_DEFINITIONS: list[dict] = [
     # ── mailbox ──────────────────────────────────────────────────────
     {
@@ -31,6 +69,24 @@ _BUILTIN_DEFINITIONS: list[dict] = [
             {"key": "cfworker_admin_token", "label": "Admin Token", "secret": True, "category": "auth"},
             {"key": "cfworker_domain", "label": "邮箱域名", "placeholder": "example.com", "category": "connection"},
             {"key": "cfworker_fingerprint", "label": "指纹标识（可选）", "placeholder": "", "category": "connection"},
+        ],
+    },
+    {
+        "provider_type": "mailbox",
+        "provider_key": "cloud_mail_api",
+        "label": "Cloud Mail (self-hosted)",
+        "description": "Self-hosted maillab/cloud-mail service on Cloudflare Workers. Uses the public API token to create mailboxes and poll inbound mail.",
+        "driver_type": "cloud_mail_api",
+        "default_auth_mode": "token",
+        "enabled": True,
+        "category": "selfhost",
+        "auth_modes": [{"value": "token", "label": "Public Token"}],
+        "fields": [
+            {"key": "cloud_mail_api_url", "label": "API URL", "placeholder": "https://mail.example.com", "category": "connection"},
+            {"key": "cloud_mail_public_token", "label": "Public Token", "secret": True, "category": "auth"},
+            {"key": "cloud_mail_domain", "label": "Mailbox Domain", "placeholder": "example.com", "category": "identity"},
+            {"key": "cloud_mail_prefix", "label": "Email Prefix", "placeholder": "anyauto", "category": "identity"},
+            {"key": "cloud_mail_password", "label": "Mailbox Password", "placeholder": "optional", "secret": True, "category": "auth"},
         ],
     },
     {
@@ -349,7 +405,127 @@ _BUILTIN_DEFINITIONS: list[dict] = [
             {"key": "register_reuse_phone_to_max", "label": "复用号码至最大", "type": "toggle"},
         ],
     },
+    {
+        "provider_type": "sms",
+        "provider_key": "uomsg_api",
+        "label": "UOMsg",
+        "description": "UOMsg 接码平台，使用 API Token 直接按短信关键词取号和取码，无需项目 ID",
+        "driver_type": "uomsg_api",
+        "default_auth_mode": "token",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [{"value": "token", "label": "API Token"}],
+        "fields": [
+            {"key": "uomsg_token", "label": "API Token", "secret": True, "category": "auth"},
+            {"key": "uomsg_keyword", "label": "短信关键词", "placeholder": "腾讯", "category": "identity", "hint": "取码必须按短信关键词过滤；LingYaQQ 可填“腾讯”或实际短信签名里的关键词。"},
+            {"key": "uomsg_province", "label": "省份（可选）", "placeholder": "广东", "category": "connection"},
+            {
+                "key": "uomsg_card_type",
+                "label": "卡类型",
+                "type": "select",
+                "category": "connection",
+                "options": [
+                    {"value": "全部", "label": "全部"},
+                    {"value": "实卡", "label": "实卡"},
+                    {"value": "虚卡", "label": "虚卡"},
+                ],
+            },
+            {"key": "uomsg_phone", "label": "指定号码（可选）", "placeholder": "130xxxxxxxx", "category": "identity"},
+            {"key": "uomsg_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "3", "category": "connection"},
+        ],
+    },
+    {
+        "provider_type": "sms",
+        "provider_key": "eomsg_api",
+        "label": "EOMsg",
+        "description": "EOMsg 接码平台，使用 API Token 直接按短信关键词取号和取码，无需项目 ID",
+        "driver_type": "eomsg_api",
+        "default_auth_mode": "token",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [{"value": "token", "label": "API Token"}],
+        "fields": [
+            {"key": "eomsg_token", "label": "API Token", "secret": True, "category": "auth"},
+            {"key": "eomsg_keyword", "label": "短信关键词", "placeholder": "腾讯", "category": "identity", "hint": "取码必须按短信关键词过滤；LingYaQQ 可填“腾讯”或实际短信签名里的关键词。"},
+            {"key": "eomsg_province", "label": "省份（可选）", "placeholder": "广东", "category": "connection"},
+            {
+                "key": "eomsg_card_type",
+                "label": "卡类型",
+                "type": "select",
+                "category": "connection",
+                "options": [
+                    {"value": "全部", "label": "全部"},
+                    {"value": "实卡", "label": "实卡"},
+                    {"value": "虚卡", "label": "虚卡"},
+                ],
+            },
+            {"key": "eomsg_phone", "label": "指定号码（可选）", "placeholder": "130xxxxxxxx", "category": "identity"},
+            {"key": "eomsg_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "3", "category": "connection"},
+        ],
+    },
+    {
+        "provider_type": "sms",
+        "provider_key": "haozhuma_api",
+        "label": "HaoZhuMa",
+        "description": "HaoZhuMa 接码平台，使用项目 ID 取号取码；号码使用后自动释放并拉黑",
+        "driver_type": "haozhuma_api",
+        "default_auth_mode": "password",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [
+            {"value": "password", "label": "账号密码"},
+        ],
+        "fields": [
+            {"key": "haozhuma_user", "label": "API 账号", "category": "auth"},
+            {"key": "haozhuma_password", "label": "API 密码", "secret": True, "category": "auth"},
+            {"key": "haozhuma_sid", "label": "项目 ID", "placeholder": "1000,1001", "category": "identity", "hint": "支持多个项目 ID，用逗号、空格或换行分隔；取号时按从左到右顺序优先尝试。"},
+            {"key": "haozhuma_province", "label": "省份代码（可选）", "placeholder": "44", "category": "connection"},
+            {"key": "haozhuma_isp", "label": "运营商（可选）", "placeholder": "1", "category": "connection"},
+            {"key": "haozhuma_ascription", "label": "号码类型（可选）", "placeholder": "1虚拟 / 2实卡", "category": "connection"},
+            {"key": "haozhuma_phone", "label": "指定号码（可选）", "placeholder": "130xxxxxxxx", "category": "identity"},
+            {"key": "haozhuma_uid", "label": "对接码 UID（可选）", "category": "connection"},
+            {"key": "haozhuma_batch_size", "label": "批量取号数量", "placeholder": "5", "category": "connection"},
+            {"key": "haozhuma_batch_param", "label": "批量参数名", "placeholder": "num", "category": "connection"},
+            {"key": "haozhuma_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "15", "category": "connection"},
+        ],
+    },
     # ── proxy ────────────────────────────────────────────────────────
+    {
+        "provider_type": "sms",
+        "provider_key": "feihumsg_api",
+        "label": "FeiHuMsg",
+        "description": "飞狐接码平台，使用 API 账号密码登录获取 Token，通过项目 ID 取号并按订单号取码",
+        "driver_type": "feihumsg_api",
+        "default_auth_mode": "password",
+        "enabled": True,
+        "category": "thirdparty",
+        "auth_modes": [
+            {"value": "password", "label": "账号密码"},
+        ],
+        "fields": [
+            {"key": "feihumsg_user", "label": "API 账号", "category": "auth"},
+            {"key": "feihumsg_password", "label": "API 密码", "secret": True, "category": "auth"},
+            {"key": "feihumsg_pid", "label": "项目 ID", "placeholder": "1001", "category": "identity", "hint": "支持多个项目 ID，用逗号、空格或换行分隔；取号时按从左到右顺序优先尝试。"},
+            {"key": "feihumsg_province", "label": "省份枚举（可选）", "placeholder": "19", "category": "connection"},
+            {"key": "feihumsg_isp", "label": "运营商枚举（可选）", "placeholder": "1", "category": "connection"},
+            {
+                "key": "feihumsg_card_type",
+                "label": "卡类型",
+                "type": "select",
+                "category": "connection",
+                "options": [
+                    {"value": "", "label": "全部"},
+                    {"value": "1", "label": "实卡"},
+                    {"value": "2", "label": "虚卡"},
+                ],
+            },
+            {"key": "feihumsg_phone", "label": "指定号码（可选）", "placeholder": "13800138000", "category": "identity"},
+            {"key": "feihumsg_include", "label": "包含号段（可选）", "placeholder": "138|139", "category": "connection"},
+            {"key": "feihumsg_exclude", "label": "排除号段（可选）", "placeholder": "170|171", "category": "connection"},
+            {"key": "feihumsg_author", "label": "号码作者（可选）", "category": "connection"},
+            {"key": "feihumsg_poll_interval", "label": "取码轮询间隔（秒）", "placeholder": "10", "category": "connection", "hint": "飞狐文档建议轮询间隔不低于 10 秒。"},
+        ],
+    },
     {
         "provider_type": "proxy",
         "provider_key": "api_extract",
@@ -384,6 +560,41 @@ _BUILTIN_DEFINITIONS: list[dict] = [
 ]
 
 
+_LEGACY_PROVIDER_ALIASES = {
+    ("mailbox", "cloud_mail"): "cloud_mail_api",
+    ("sms", "herosms"): "herosms_api",
+    ("sms", "smsbower"): "smsbower_api",
+    ("sms", "uomsg"): "uomsg_api",
+    ("sms", "eomsg"): "eomsg_api",
+    ("sms", "feihumsg"): "feihumsg_api",
+    ("sms", "haozhuma"): "haozhuma_api",
+}
+
+
+def _definition_from_seed(provider_type: str, provider_key: str) -> ProviderDefinitionModel | None:
+    lookup_key = _LEGACY_PROVIDER_ALIASES.get((provider_type, provider_key), provider_key)
+    for raw_seed in _BUILTIN_DEFINITIONS:
+        seed = _normalize_seed_text(raw_seed)
+        if seed.get("provider_type") != provider_type or seed.get("provider_key") != lookup_key:
+            continue
+        item = ProviderDefinitionModel(
+            provider_type=seed["provider_type"],
+            provider_key=seed["provider_key"],
+            label=seed.get("label", seed["provider_key"]),
+            description=seed.get("description", ""),
+            driver_type=seed.get("driver_type", seed["provider_key"]),
+            default_auth_mode=seed.get("default_auth_mode", ""),
+            enabled=bool(seed.get("enabled", True)),
+            is_builtin=True,
+            category=seed.get("category", ""),
+        )
+        item.set_auth_modes(list(seed.get("auth_modes") or []))
+        item.set_fields(list(seed.get("fields") or []))
+        item.set_metadata(dict(seed.get("metadata") or {}))
+        return item
+    return None
+
+
 class ProviderDefinitionsRepository:
 
     def ensure_seeded(self) -> None:
@@ -399,7 +610,8 @@ class ProviderDefinitionsRepository:
                 existing[key] = row
 
             changed = False
-            for seed in _BUILTIN_DEFINITIONS:
+            for raw_seed in _BUILTIN_DEFINITIONS:
+                seed = _normalize_seed_text(raw_seed)
                 key = f"{seed['provider_type']}::{seed['provider_key']}"
                 item = existing.get(key)
 
@@ -443,11 +655,23 @@ class ProviderDefinitionsRepository:
 
     def get_by_key(self, provider_type: str, provider_key: str) -> ProviderDefinitionModel | None:
         with Session(engine) as session:
-            return session.exec(
+            item = session.exec(
                 select(ProviderDefinitionModel)
                 .where(ProviderDefinitionModel.provider_type == provider_type)
                 .where(ProviderDefinitionModel.provider_key == provider_key)
             ).first()
+            if item:
+                return item
+            alias_key = _LEGACY_PROVIDER_ALIASES.get((provider_type, provider_key))
+            if alias_key:
+                item = session.exec(
+                    select(ProviderDefinitionModel)
+                    .where(ProviderDefinitionModel.provider_type == provider_type)
+                    .where(ProviderDefinitionModel.provider_key == alias_key)
+                ).first()
+                if item:
+                    return item
+            return _definition_from_seed(provider_type, provider_key)
 
     def list_driver_templates(self, provider_type: str) -> list[dict]:
         """从 DB 读取：按 driver_type 去重，返回可用驱动模板列表。"""

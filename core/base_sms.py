@@ -1,19 +1,66 @@
-"""接码服务基类 + SMS-Activate / HeroSMS 实现。"""
+﻿"""æŽ¥ç æœåŠ¡åŸºç±» + SMS-Activate / HeroSMS å®žçŽ°ã€‚"""
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
+_SMS_ACTIVE_NUMBER_LOCK = threading.Lock()
+_SMS_ACTIVE_NUMBERS: set[str] = set()
+
+
+def _sms_active_key(provider: str, phone: str) -> str:
+    return f"{provider}:{str(phone or '').strip()}"
+
+
+def _reserve_sms_number(provider: str, phone: str) -> bool:
+    key = _sms_active_key(provider, phone)
+    if key == f"{provider}:":
+        return False
+    with _SMS_ACTIVE_NUMBER_LOCK:
+        if key in _SMS_ACTIVE_NUMBERS:
+            return False
+        _SMS_ACTIVE_NUMBERS.add(key)
+        return True
+
+
+def _release_sms_number(provider: str, phone: str) -> None:
+    key = _sms_active_key(provider, phone)
+    if key == f"{provider}:":
+        return
+    with _SMS_ACTIVE_NUMBER_LOCK:
+        _SMS_ACTIVE_NUMBERS.discard(key)
+
+
+def _split_unique_sms_project_ids(raw: str) -> list[str]:
+    ids: list[str] = []
+    for part in re.split(r"[\s,，;；|]+", str(raw or "").strip()):
+        value = part.strip()
+        if value and value not in ids:
+            ids.append(value)
+    return ids
+
+
+def _numeric_sms_project_ids(provider_name: str, field_name: str, raw: str) -> list[str]:
+    ids = _split_unique_sms_project_ids(raw)
+    if not ids:
+        raise RuntimeError(f"{provider_name} 需要配置项目 ID({field_name})")
+    invalid = [value for value in ids if not value.isdecimal()]
+    if invalid:
+        raise RuntimeError(
+            f"{provider_name} 项目 ID({field_name}) 必须是数字，当前值: {', '.join(invalid)}"
+        )
+    return ids
 
 
 @dataclass
@@ -80,6 +127,8 @@ SMS_ACTIVATE_SERVICES = {
     "openai": "dr",
     "google": "go",
     "microsoft": "mg",
+    "qq": "qq",
+    "lingya_qq": "qq",
     "default": "ot",
 }
 
@@ -157,7 +206,12 @@ class SmsActivateProvider(BaseSmsProvider):
         while time.time() < deadline:
             result = self._request("getStatus", id=activation_id)
             if result.startswith("STATUS_OK:"):
-                return result.split(":")[1]
+                code = result.split(":", 1)[1].strip()
+                if _is_valid_sms_code(code):
+                    return code
+                logger.warning("SMS-Activate returned invalid SMS code for %s: %s", activation_id, code)
+                time.sleep(3)
+                continue
             if result == "STATUS_WAIT_CODE":
                 time.sleep(3)
                 continue
@@ -227,7 +281,7 @@ def _safe_bool(value, default: bool) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() not in {"0", "false", "no", "off", "否"}
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "å¦"}
 
 
 def _normalize_hero_proxy(proxy: str | None) -> str | None:
@@ -246,10 +300,17 @@ def _parse_hero_status_text(text: str) -> dict:
     if text == "STATUS_WAIT_RESEND":
         return {"status": "wait_resend"}
     if text.startswith("STATUS_OK:"):
-        return {"status": "ok", "code": text.split(":", 1)[1]}
+        code = text.split(":", 1)[1].strip()
+        if _is_valid_sms_code(code):
+            return {"status": "ok", "code": code}
+        return {"status": "wait_code", "raw": text}
     if text == "STATUS_CANCEL":
         return {"status": "cancel"}
     return {"status": "unknown", "raw": text}
+
+
+def _is_valid_sms_code(code: Any) -> bool:
+    return bool(re.fullmatch(r"\d{4,8}", str(code or "").strip()))
 
 
 def _canonical_sms_event_fields(event_fields: dict | None) -> dict:
@@ -302,7 +363,7 @@ def _sms_event_key(activation_id: str, code: str, event_fields: dict | None) -> 
 
 def _make_sms_candidate(activation_id: str, source: str, code, event_fields: dict | None = None) -> dict | None:
     code = str(code or "").strip()
-    if not code or code in {"null", "None"}:
+    if not _is_valid_sms_code(code):
         return None
     canonical = _canonical_sms_event_fields(event_fields)
     sms_key = _sms_event_key(activation_id, code, event_fields) if event_fields else ""
@@ -378,7 +439,7 @@ class HeroSmsProvider(BaseSmsProvider):
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
-            # 可能是 {"dr": {"name": "OpenAI", ...}, ...} 格式
+            # å¯èƒ½æ˜¯ {"dr": {"name": "OpenAI", ...}, ...} æ ¼å¼
             result = []
             for key, value in data.items():
                 if key in ("status", "message", "error"):
@@ -398,10 +459,10 @@ class HeroSmsProvider(BaseSmsProvider):
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
-            # 检查是否是错误响应 {"status":0,"message":"No access","data":[]}
+            # æ£€æŸ¥æ˜¯å¦æ˜¯é”™è¯¯å“åº” {"status":0,"message":"No access","data":[]}
             if data.get("status") == 0 or data.get("message") == "No access":
                 raise RuntimeError(f"SMS API access denied: {data.get('message', 'unknown')}")
-            # HeroSMS 可能返回 {"0": {"id": 0, "eng": "Russia"}, ...} 格式
+            # HeroSMS å¯èƒ½è¿”å›ž {"0": {"id": 0, "eng": "Russia"}, ...} æ ¼å¼
             result = []
             for key, value in data.items():
                 if key in ("status", "message", "data", "error"):
@@ -428,14 +489,14 @@ class HeroSmsProvider(BaseSmsProvider):
         raise RuntimeError("HeroSMS getPrices returned unexpected response")
 
     def get_top_countries(self, service: str | None = None) -> list[dict]:
-        """获取指定服务按价格排序的国家列表（含价格和库存）。
+        """èŽ·å–æŒ‡å®šæœåŠ¡æŒ‰ä»·æ ¼æŽ’åºçš„å›½å®¶åˆ—è¡¨ï¼ˆå«ä»·æ ¼å’Œåº“å­˜ï¼‰ã€‚
 
-        优先使用 getTopCountriesByServiceRank API，降级到 getPrices 全量解析。
-        返回格式: [{"country": "66", "name": "Thailand", "price": 0.12, "count": 150}, ...]
+        ä¼˜å…ˆä½¿ç”¨ getTopCountriesByServiceRank APIï¼Œé™çº§åˆ° getPrices å…¨é‡è§£æžã€‚
+        è¿”å›žæ ¼å¼: [{"country": "66", "name": "Thailand", "price": 0.12, "count": 150}, ...]
         """
         service_code = str(service or self.default_service or HERO_SMS_DEFAULT_SERVICE).strip()
 
-        # 策略1: 使用 getTopCountriesByServiceRank（HeroSMS 专用排名接口）
+        # ç­–ç•¥1: ä½¿ç”¨ getTopCountriesByServiceRankï¼ˆHeroSMS ä¸“ç”¨æŽ’åæŽ¥å£ï¼‰
         for action in ("getTopCountriesByServiceRank", "getTopCountriesByService"):
             try:
                 data = self._request({"action": action, "service": service_code}).json()
@@ -446,7 +507,7 @@ class HeroSmsProvider(BaseSmsProvider):
             except Exception:
                 continue
 
-        # 策略2: 从 getPrices 全量数据中解析
+        # ç­–ç•¥2: ä»Ž getPrices å…¨é‡æ•°æ®ä¸­è§£æž
         try:
             prices = self.get_prices(service=service_code)
             rows = []
@@ -474,14 +535,14 @@ class HeroSmsProvider(BaseSmsProvider):
             return []
 
     def _parse_top_countries_response(self, data) -> list[dict]:
-        """解析 getTopCountriesByServiceRank 响应。"""
+        """è§£æž getTopCountriesByServiceRank å“åº”ã€‚"""
         rows = []
         items = data
-        # 可能嵌套在 data/result 键下
+        # å¯èƒ½åµŒå¥—åœ¨ data/result é”®ä¸‹
         if isinstance(data, dict):
             items = data.get("data") or data.get("result") or data.get("response") or data
         if isinstance(items, dict):
-            # {country_id: {price, count, ...}} 格式
+            # {country_id: {price, count, ...}} æ ¼å¼
             for key, value in items.items():
                 if not isinstance(value, dict):
                     continue
@@ -525,27 +586,27 @@ class HeroSmsProvider(BaseSmsProvider):
         return rows
 
     def get_best_country(self, service: str | None = None, *, min_stock: int = 20, max_price: float = 0) -> str | None:
-        """自动选择最优国家：价格最低且库存充足。
+        """è‡ªåŠ¨é€‰æ‹©æœ€ä¼˜å›½å®¶ï¼šä»·æ ¼æœ€ä½Žä¸”åº“å­˜å……è¶³ã€‚
 
         Args:
-            service: 服务代码（默认使用 self.default_service）
-            min_stock: 最低库存要求（默认 20）
-            max_price: 最高价格限制（0 表示不限）
+            service: æœåŠ¡ä»£ç ï¼ˆé»˜è®¤ä½¿ç”¨ self.default_serviceï¼‰
+            min_stock: æœ€ä½Žåº“å­˜è¦æ±‚ï¼ˆé»˜è®¤ 20ï¼‰
+            max_price: æœ€é«˜ä»·æ ¼é™åˆ¶ï¼ˆ0 è¡¨ç¤ºä¸é™ï¼‰
 
         Returns:
-            最优国家 ID 字符串，或 None（无可用国家）
+            æœ€ä¼˜å›½å®¶ ID å­—ç¬¦ä¸²ï¼Œæˆ– Noneï¼ˆæ— å¯ç”¨å›½å®¶ï¼‰
         """
-        # HeroSMS/SMSBower 中已验证对 OpenAI 走 SMS（非 WhatsApp）的国家白名单
-        # OpenAI 2025年起对绝大多数国家改用 WhatsApp 验证
-        # 目前只有泰国确认走 SMS
+        # HeroSMS/SMSBower ä¸­å·²éªŒè¯å¯¹ OpenAI èµ° SMSï¼ˆéž WhatsAppï¼‰çš„å›½å®¶ç™½åå•
+        # OpenAI 2025å¹´èµ·å¯¹ç»å¤§å¤šæ•°å›½å®¶æ”¹ç”¨ WhatsApp éªŒè¯
+        # ç›®å‰åªæœ‰æ³°å›½ç¡®è®¤èµ° SMS
         ALLOWED_COUNTRIES = {
-            "52",   # Thailand (已验证走SMS)
+            "52",   # Thailand (å·²éªŒè¯èµ°SMS)
         }
 
         try:
             rows = self.get_top_countries(service=service)
         except Exception as exc:
-            logger.warning("get_best_country 查询失败: %s", exc)
+            logger.warning("get_best_country æŸ¥è¯¢å¤±è´¥: %s", exc)
             return None
 
         if not rows:
@@ -563,7 +624,7 @@ class HeroSmsProvider(BaseSmsProvider):
                 continue
             return country_id
 
-        # 如果没有满足 min_stock 的，放宽到 count > 0
+        # å¦‚æžœæ²¡æœ‰æ»¡è¶³ min_stock çš„ï¼Œæ”¾å®½åˆ° count > 0
         for row in rows:
             country_id = str(row.get("country") or "")
             if country_id not in ALLOWED_COUNTRIES:
@@ -645,25 +706,18 @@ class HeroSmsProvider(BaseSmsProvider):
     def _request_number_raw(self, service: str, country: str) -> dict:
         common = {"service": service, "country": country}
 
-        # 动态获取该国家该服务的实际价格，用实际价格作为 maxPrice
-        # 这样能确保拿到物理号码（而不是被分配虚拟号码）
         effective_max_price = self.max_price if self.max_price > 0 else 1
-        try:
-            prices = self.get_prices(service=service, country=country)
-            # getPrices 返回格式: {country_id: {service_code: {cost, count}}}
-            country_prices = prices.get(str(country)) or prices.get(country) or {}
-            service_prices = country_prices.get(service) or {}
-            actual_cost = service_prices.get("cost") or service_prices.get("price")
-            if actual_cost is not None:
-                actual_cost = float(actual_cost)
-                # 用实际价格的 3 倍作为 maxPrice（留足余量），但不超过用户配置的上限
-                dynamic_max = round(actual_cost * 3, 4)
-                if self.max_price > 0:
+        if self.max_price > 0:
+            try:
+                prices = self.get_prices(service=service, country=country)
+                country_prices = prices.get(str(country)) or prices.get(country) or {}
+                service_prices = country_prices.get(service) or {}
+                actual_cost = service_prices.get("cost") or service_prices.get("price")
+                if actual_cost is not None:
+                    dynamic_max = round(float(actual_cost) * 3, 4)
                     effective_max_price = min(self.max_price, max(dynamic_max, 0.2))
-                else:
-                    effective_max_price = max(dynamic_max, 0.2)
-        except Exception:
-            pass  # 查询失败就用默认值
+            except Exception:
+                pass
 
         common["maxPrice"] = effective_max_price
 
@@ -680,7 +734,7 @@ class HeroSmsProvider(BaseSmsProvider):
         except Exception as exc:
             v2_error = str(exc)
 
-        # 如果 NO_NUMBERS 且 maxPrice 低于用户配置的上限，提高 maxPrice 重试
+        # å¦‚æžœ NO_NUMBERS ä¸” maxPrice ä½ŽäºŽç”¨æˆ·é…ç½®çš„ä¸Šé™ï¼Œæé«˜ maxPrice é‡è¯•
         if "NO_NUMBERS" in v2_error and self.max_price > 0 and effective_max_price < self.max_price:
             common["maxPrice"] = self.max_price
             try:
@@ -708,7 +762,7 @@ class HeroSmsProvider(BaseSmsProvider):
                     }
             raise RuntimeError(text[:200])
         except Exception as exc:
-            raise RuntimeError(f"HeroSMS 获取号码失败: V2={v2_error}; V1={exc}") from exc
+            raise RuntimeError(f"HeroSMS èŽ·å–å·ç å¤±è´¥: V2={v2_error}; V1={exc}") from exc
 
     @staticmethod
     def _format_phone(number_info: dict) -> str:
@@ -742,7 +796,7 @@ class HeroSmsProvider(BaseSmsProvider):
                 activation_id = str(number_info.get("activationId") or "")
                 phone = self._format_phone(number_info)
                 if not activation_id or not phone.strip("+"):
-                    raise RuntimeError("HeroSMS 返回的号码信息不完整")
+                    raise RuntimeError("HeroSMS è¿”å›žçš„å·ç ä¿¡æ¯ä¸å®Œæ•´")
                 cache = {
                     **self._cache_identity(service_code, country_id),
                     "activation_id": activation_id,
@@ -1001,7 +1055,7 @@ class HeroSmsProvider(BaseSmsProvider):
 
     def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
         reason_text = str(reason or "").lower()
-        if any(keyword in reason_text for keyword in ("limit", "already", "too many", "exceeded", "maximum", "上限", "已达")):
+        if any(keyword in reason_text for keyword in ("limit", "already", "too many", "exceeded", "maximum", "ä¸Šé™", "å·²è¾¾")):
             self._stop_reuse("phone limit reached")
         else:
             self._stop_reuse(reason or "phone rejected")
@@ -1026,18 +1080,795 @@ class HeroSmsProvider(BaseSmsProvider):
 
 
 class SmsBowerProvider(HeroSmsProvider):
-    """SMSBower provider — API 兼容 HeroSMS，仅 base URL 不同。"""
+    """SMSBower provider â€” API å…¼å®¹ HeroSMSï¼Œä»… base URL ä¸åŒã€‚"""
 
     BASE_URL = "https://smsbower.page/stubs/handler_api.php"
 
     def _request(self, params: dict, *, needs_key: bool = True, timeout: int = 30) -> requests.Response:
-        # SMSBower 所有接口都需要 api_key（包括 getServicesList、getCountries）
+        # SMSBower æ‰€æœ‰æŽ¥å£éƒ½éœ€è¦ api_keyï¼ˆåŒ…æ‹¬ getServicesListã€getCountriesï¼‰
         payload = dict(params)
         if needs_key or self.api_key:
             payload["api_key"] = self.api_key
         resp = requests.get(self.BASE_URL, params=payload, timeout=timeout, proxies=self.proxies)
         resp.raise_for_status()
         return resp
+
+
+UOMSG_DEFAULT_BASE_URL = "http://api.uomsg.com/zc/data.php"
+EOMSG_DEFAULT_BASE_URL = "http://api.eomsg.com/zc/data.php"
+UOMSG_SERVICE_KEYWORDS = {
+    "qq": "腾讯",
+    "lingya_qq": "腾讯",
+    "default": "",
+}
+
+
+def _extract_uomsg_code(text: str) -> str:
+    raw = str(text or "").strip()
+    for pattern in (
+        r"(?:验证码|校验码|动态码|code)\D{0,12}(\d{4,8})",
+        r"(?<!\d)(\d{4,8})(?!\d)",
+    ):
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
+
+
+class UOMsgProvider(BaseSmsProvider):
+    """UOMsg provider (api.uomsg.com)."""
+
+    BASE_URL = UOMSG_DEFAULT_BASE_URL
+    PROVIDER_KEY = "uomsg"
+    DISPLAY_NAME = "UOMsg"
+
+    def __init__(
+        self,
+        token: str,
+        *,
+        default_keyword: str = "",
+        province: str = "",
+        card_type: str = "全部",
+        phone: str = "",
+        poll_interval: int = 3,
+        proxy: str | None = None,
+        base_url: str = "",
+    ):
+        self.token = str(token or "").strip()
+        self.default_keyword = str(default_keyword or "").strip()
+        self.province = str(province or "").strip()
+        self.card_type = str(card_type or "全部").strip() or "全部"
+        self.phone = str(phone or "").strip()
+        self.poll_interval = max(1, _safe_int(poll_interval, 3))
+        self.base_url = str(base_url or self.BASE_URL).strip() or self.BASE_URL
+        self.proxies = {"http": proxy, "https": proxy} if proxy else None
+        self._activation_keywords: dict[str, str] = {}
+
+    def _request(self, code: str, **params) -> str:
+        payload = {
+            "code": code,
+            "token": self.token,
+        }
+        for key, value in params.items():
+            if value not in (None, ""):
+                payload[key] = value
+        resp = requests.get(self.base_url, params=payload, timeout=20, proxies=self.proxies)
+        resp.raise_for_status()
+        text = resp.text.strip()
+        if text.upper().startswith("ERROR:"):
+            raise RuntimeError(f"{self.DISPLAY_NAME} {code} failed: {text}")
+        return text
+
+    def _keyword_for(self, service: str = "") -> str:
+        if self.default_keyword:
+            return self.default_keyword
+        raw = str(service or "").strip()
+        return UOMSG_SERVICE_KEYWORDS.get(raw, raw or UOMSG_SERVICE_KEYWORDS["default"]).strip()
+
+    def get_balance(self):
+        text = self._request("leftAmount")
+        try:
+            return float(text)
+        except ValueError:
+            return text
+
+    def get_number(self, *, service: str, country: str = "") -> SmsActivation:
+        keyword = self._keyword_for(service)
+        if not keyword:
+            raise RuntimeError(f"{self.DISPLAY_NAME} 需要配置短信关键词({self.PROVIDER_KEY}_keyword)，否则无法按关键词读取短信")
+        phone = ""
+        for attempt in range(2):
+            phone = self._request(
+                "getPhone",
+                keyWord=keyword,
+                phone=self.phone,
+                province=country or self.province,
+                cardType=self.card_type,
+            ).strip()
+            if not phone:
+                raise RuntimeError(f"{self.DISPLAY_NAME} getPhone 未返回手机号")
+            if _reserve_sms_number(self.PROVIDER_KEY, phone):
+                break
+            logger.warning("%s getPhone returned duplicate active phone %s; retrying once", self.DISPLAY_NAME, phone)
+            phone = ""
+        if not phone:
+            raise RuntimeError(f"{self.DISPLAY_NAME} getPhone 连续返回已占用手机号，已放弃本次取号")
+        self._activation_keywords[phone] = keyword
+        return SmsActivation(
+            activation_id=phone,
+            phone_number=phone,
+            country=country or self.province,
+            metadata={"keyword": keyword, "provider": self.PROVIDER_KEY},
+        )
+
+    def get_code(self, activation_id: str, *, timeout: int = 120) -> str:
+        phone = str(activation_id or "").strip()
+        keyword = self._activation_keywords.get(phone) or self._keyword_for("")
+        if not phone:
+            return ""
+        if not keyword:
+            raise RuntimeError(f"{self.DISPLAY_NAME} 需要配置短信关键词({self.PROVIDER_KEY}_keyword)，否则无法按关键词读取短信")
+        return self.get_code_after(phone, timeout=timeout)
+
+    def get_message_text(self, activation_id: str) -> str:
+        phone = str(activation_id or "").strip()
+        keyword = self._activation_keywords.get(phone) or self._keyword_for("")
+        if not phone or not keyword:
+            return ""
+        return self._request("getMsg", phone=phone, keyWord=keyword)
+
+    def get_code_after(self, activation_id: str, *, timeout: int = 120, ignore_text: str = "") -> str:
+        phone = str(activation_id or "").strip()
+        keyword = self._activation_keywords.get(phone) or self._keyword_for("")
+        if not phone:
+            return ""
+        if not keyword:
+            raise RuntimeError(f"{self.DISPLAY_NAME} 需要配置短信关键词({self.PROVIDER_KEY}_keyword)，否则无法按关键词读取短信")
+        ignored = str(ignore_text or "").strip()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                text = self._request("getMsg", phone=phone, keyWord=keyword)
+            except requests.RequestException as exc:
+                logger.warning("%s getMsg transient request error for %s: %s", self.DISPLAY_NAME, phone, exc)
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
+            if "[尚未收到]" in text or "尚未收到" in text:
+                time.sleep(self.poll_interval)
+                continue
+            if ignored and text.strip() == ignored:
+                time.sleep(self.poll_interval)
+                continue
+            code = _extract_uomsg_code(text)
+            if code:
+                return code
+            logger.warning("%s received an unparsable SMS for %s; waiting for a newer SMS: %s", self.DISPLAY_NAME, phone, text[:200])
+            ignored = text.strip()
+            time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+        return ""
+
+    def cancel(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return False
+        try:
+            self._request("release", phone=phone)
+            return True
+        finally:
+            _release_sms_number(self.PROVIDER_KEY, phone)
+            self._activation_keywords.pop(phone, None)
+
+    def report_success(self, activation_id: str) -> bool:
+        return self.cancel(activation_id)
+
+    def block(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return False
+        try:
+            self._request("block", phone=phone)
+            return True
+        finally:
+            _release_sms_number(self.PROVIDER_KEY, phone)
+            self._activation_keywords.pop(phone, None)
+
+    def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
+        try:
+            self.block(activation_id)
+        except Exception:
+            pass
+
+    def send_sms(self, *, phone: str, to_phone: str, content: str, proj_id: str = "") -> str:
+        return self._request(
+            "send",
+            phone=phone,
+            toPhone=to_phone,
+            projId=proj_id,
+            content=content,
+        )
+
+    def query_used(self) -> str:
+        return self._request("queryUsed")
+
+
+class EOMsgProvider(UOMsgProvider):
+    """EOMsg provider (api.eomsg.com)."""
+
+    BASE_URL = EOMSG_DEFAULT_BASE_URL
+    PROVIDER_KEY = "eomsg"
+    DISPLAY_NAME = "EOMsg"
+
+
+HAOZHUMA_DEFAULT_BASE_URL = "https://api.haozhuyun.com/sms/"
+FEIHUMSG_DEFAULT_BASE_URL = "http://api.feihu2026.com"
+
+
+class FeiHuMsgProvider(BaseSmsProvider):
+    """FeiHuMsg provider (api.feihu2026.com)."""
+
+    BASE_URL = FEIHUMSG_DEFAULT_BASE_URL
+    PROVIDER_KEY = "feihumsg"
+
+    def __init__(
+        self,
+        *,
+        user: str = "",
+        password: str = "",
+        token: str = "",
+        pid: str = "",
+        phone: str = "",
+        isp: str = "",
+        province: str = "",
+        card_type: str = "",
+        include: str = "",
+        exclude: str = "",
+        author: str = "",
+        poll_interval: int = 10,
+        proxy: str | None = None,
+        base_url: str = "",
+        token_store: Callable[[str], None] | None = None,
+    ):
+        self.token = str(token or "").strip()
+        self.user = str(user or "").strip()
+        self.password = str(password or "").strip()
+        self.pid = str(pid or "").strip()
+        self.phone = str(phone or "").strip()
+        self.isp = str(isp or "").strip()
+        self.province = str(province or "").strip()
+        self.card_type = str(card_type or "").strip()
+        self.include = str(include or "").strip()
+        self.exclude = str(exclude or "").strip()
+        self.author = str(author or "").strip()
+        self.poll_interval = max(10, _safe_int(poll_interval, 10))
+        self.base_url = str(base_url or self.BASE_URL).strip().rstrip("/") or self.BASE_URL
+        self.proxies = {"http": proxy, "https": proxy} if proxy else None
+        self._token_store = token_store
+        self._activations: dict[str, dict[str, str]] = {}
+        self._closed_activations: set[str] = set()
+
+    def _send_request(self, path: str, payload: dict[str, str]) -> dict:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        resp = requests.get(url, params=payload, timeout=20, proxies=self.proxies)
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise RuntimeError(f"FeiHuMsg {path} returned invalid JSON: {resp.text[:200]}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"FeiHuMsg {path} returned unexpected response: {data!r}")
+        return data
+
+    def _request(self, path: str, *, needs_token: bool = True, **params) -> dict:
+        payload: dict[str, str] = {}
+        used_cached_token = bool(self.token)
+        if needs_token:
+            payload["token"] = self._token()
+        for key, value in params.items():
+            if value not in (None, ""):
+                payload[key] = str(value)
+        data = self._send_request(path, payload)
+        code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"} and needs_token and used_cached_token and self.user and self.password:
+            self.token = ""
+            payload["token"] = self._token()
+            data = self._send_request(path, payload)
+            code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"}:
+            raise RuntimeError(f"FeiHuMsg {path} failed: {data.get('msg') or data}")
+        body = data.get("data")
+        return body if isinstance(body, dict) else {}
+
+    def _token(self) -> str:
+        if self.token:
+            return self.token
+        if not self.user or not self.password:
+            raise RuntimeError("FeiHuMsg 未配置 API 账号密码")
+        data = self._request("/api/sms/login", needs_token=False, user=self.user, **{"pass": self.password})
+        self.token = str(data.get("token") or "").strip()
+        if not self.token:
+            raise RuntimeError(f"FeiHuMsg login did not return token: {data}")
+        if self._token_store:
+            try:
+                self._token_store(self.token)
+            except Exception as exc:
+                logger.warning("FeiHuMsg cached token store failed: %s", exc)
+        return self.token
+
+    def _pid(self, service: str = "") -> str:
+        return self._pid_candidates(service)[0]
+
+    def _pid_candidates(self, service: str = "") -> list[str]:
+        raw = str(self.pid or service or "").strip()
+        return _numeric_sms_project_ids("FeiHuMsg", "feihumsg_pid", raw)
+
+    def get_balance(self):
+        data = self._request("/api/sms/userInfo")
+        value = data.get("money")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+
+    def get_number(self, *, service: str, country: str = "") -> SmsActivation:
+        pids = self._pid_candidates(service)
+        data: dict[str, Any] = {}
+        phone = ""
+        activation_id = ""
+        selected_pid = ""
+        errors: list[str] = []
+        for pid in pids:
+            data = {}
+            for attempt in range(2):
+                try:
+                    data = self._request(
+                        "/api/sms/getPhone",
+                        pid=pid,
+                        phone=self.phone,
+                        isp=self.isp,
+                        province=country or self.province,
+                        cardType=self.card_type,
+                        include=self.include,
+                        exclude=self.exclude,
+                        author=self.author,
+                    )
+                except RuntimeError as exc:
+                    errors.append(f"{pid}: {exc}")
+                    logger.warning("FeiHuMsg getPhone failed for pid %s; trying next project ID: %s", pid, exc)
+                    break
+                candidate = str(data.get("phone") or "").strip()
+                if candidate and _reserve_sms_number(self.PROVIDER_KEY, candidate):
+                    phone = candidate
+                    selected_pid = str(data.get("pid") or pid).strip() or pid
+                    activation_id = str(data.get("order_id") or "").strip() or phone
+                    break
+                if candidate:
+                    logger.warning("FeiHuMsg getPhone returned duplicate active phone %s; retrying", candidate)
+            if phone:
+                break
+            if data:
+                errors.append(f"{pid}: no usable phone in response {data}")
+                logger.warning("FeiHuMsg getPhone returned no usable phone for pid %s; trying next project ID", pid)
+        if not phone:
+            detail = "; ".join(errors[-5:]) if errors else str(data)
+            raise RuntimeError(f"FeiHuMsg getPhone 未返回可用手机号: {detail}")
+        self._activations[activation_id] = {
+            "pid": selected_pid,
+            "phone": phone,
+            "order_id": str(data.get("order_id") or "").strip(),
+        }
+        return SmsActivation(
+            activation_id=activation_id,
+            phone_number=phone,
+            country=country or self.province or str(data.get("province") or ""),
+            metadata={"pid": selected_pid, "order_id": self._activations[activation_id]["order_id"], "provider": "feihumsg", "raw": data},
+        )
+
+    def _activation_meta(self, activation_id: str) -> dict[str, str]:
+        key = str(activation_id or "").strip()
+        if key in self._activations:
+            return self._activations[key]
+        return {"pid": self._pid(""), "phone": key, "order_id": ""}
+
+    def _message_request(self, meta: dict[str, str]) -> dict:
+        order_id = str(meta.get("order_id") or "").strip()
+        if order_id:
+            return self._request("/api/sms/getMessage", order_id=order_id)
+        return self._request("/api/sms/getMessageByPhone", pid=meta.get("pid"), phone=meta.get("phone"))
+
+    def get_message_text(self, activation_id: str) -> str:
+        if not str(activation_id or "").strip():
+            return ""
+        data = self._message_request(self._activation_meta(activation_id))
+        return str(data.get("message") or "")
+
+    def get_code(self, activation_id: str, *, timeout: int = 120) -> str:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key:
+            return ""
+        meta = self._activation_meta(activation_key)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                data = self._message_request(meta)
+            except requests.RequestException as exc:
+                logger.warning("FeiHuMsg getMessage transient request error for %s: %s", activation_key, exc)
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
+            status = _safe_int(data.get("status"), 0)
+            code = str(data.get("code") or "").strip()
+            if re.fullmatch(r"\d{4,8}", code):
+                return code
+            fallback = _extract_uomsg_code(str(data.get("message") or ""))
+            if fallback:
+                return fallback
+            if status == 1 or not status:
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
+            if status in {4, 5, 6}:
+                raise RuntimeError(f"FeiHuMsg getMessage failed: status={status} data={data}")
+            time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+        self._release_and_blacklist(activation_key)
+        return ""
+
+    def _cancel_recv(self, meta: dict[str, str]) -> bool:
+        order_id = str(meta.get("order_id") or "").strip()
+        if order_id:
+            self._request("/api/sms/cancelRecv", order_id=order_id)
+        else:
+            self._request("/api/sms/cancelRecvByPhone", pid=meta.get("pid"), phone=meta.get("phone"))
+        return True
+
+    def _add_blacklist(self, meta: dict[str, str]) -> bool:
+        order_id = str(meta.get("order_id") or "").strip()
+        if order_id:
+            self._request("/api/sms/addBlackList", order_id=order_id)
+        else:
+            self._request("/api/sms/addBlackListByPhone", pid=meta.get("pid"), phone=meta.get("phone"))
+        return True
+
+    def _release_and_blacklist(self, activation_id: str) -> bool:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key or activation_key in self._closed_activations:
+            return False
+        meta = self._activation_meta(activation_key)
+        ok = True
+        try:
+            self._cancel_recv(meta)
+        except Exception as exc:
+            ok = False
+            logger.warning("FeiHuMsg cancelRecv failed for %s: %s", activation_key, exc)
+        try:
+            self._add_blacklist(meta)
+        except Exception as exc:
+            ok = False
+            logger.warning("FeiHuMsg addBlackList failed for %s: %s", activation_key, exc)
+        self._closed_activations.add(activation_key)
+        _release_sms_number(self.PROVIDER_KEY, meta.get("phone") or activation_key)
+        self._activations.pop(activation_key, None)
+        return ok
+
+    def cancel(self, activation_id: str) -> bool:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key:
+            return False
+        meta = self._activation_meta(activation_key)
+        try:
+            self._cancel_recv(meta)
+            return True
+        finally:
+            self._closed_activations.add(activation_key)
+            _release_sms_number(self.PROVIDER_KEY, meta.get("phone") or activation_key)
+            self._activations.pop(activation_key, None)
+
+    def report_success(self, activation_id: str) -> bool:
+        return self._release_and_blacklist(activation_id)
+
+    def block(self, activation_id: str) -> bool:
+        activation_key = str(activation_id or "").strip()
+        if not activation_key:
+            return False
+        meta = self._activation_meta(activation_key)
+        try:
+            self._add_blacklist(meta)
+            return True
+        finally:
+            _release_sms_number(self.PROVIDER_KEY, meta.get("phone") or activation_key)
+            self._activations.pop(activation_key, None)
+
+    def mark_code_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
+
+    def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
+
+
+class HaoZhuMaProvider(BaseSmsProvider):
+    """HaoZhuMa provider (api.haozhuyun.com)."""
+
+    BASE_URL = HAOZHUMA_DEFAULT_BASE_URL
+    PROVIDER_KEY = "haozhuma"
+
+    def __init__(
+        self,
+        *,
+        user: str = "",
+        password: str = "",
+        token: str = "",
+        sid: str = "",
+        phone: str = "",
+        isp: str = "",
+        province: str = "",
+        ascription: str = "",
+        paragraph: str = "",
+        exclude: str = "",
+        uid: str = "",
+        author: str = "",
+        batch_size: int = 1,
+        batch_param: str = "num",
+        poll_interval: int = 15,
+        proxy: str | None = None,
+        base_url: str = "",
+        token_store: Callable[[str], None] | None = None,
+    ):
+        self.token = str(token or "").strip()
+        self.user = str(user or "").strip()
+        self.password = str(password or "").strip()
+        self.sid = str(sid or "").strip()
+        self.phone = str(phone or "").strip()
+        self.isp = str(isp or "").strip()
+        self.province = str(province or "").strip()
+        self.ascription = str(ascription or "").strip()
+        self.paragraph = str(paragraph or "").strip()
+        self.exclude = str(exclude or "").strip()
+        self.uid = str(uid or "").strip()
+        self.author = str(author or "").strip()
+        self.batch_size = max(1, _safe_int(batch_size, 1))
+        self.batch_param = str(batch_param or "num").strip() or "num"
+        self.poll_interval = max(1, _safe_int(poll_interval, 15))
+        self.base_url = str(base_url or self.BASE_URL).strip() or self.BASE_URL
+        self.proxies = {"http": proxy, "https": proxy} if proxy else None
+        self._token_store = token_store
+        self._activation_sids: dict[str, str] = {}
+        self._closed_activations: set[str] = set()
+
+    def _send_request(self, payload: dict[str, str]) -> dict:
+        resp = requests.get(self.base_url, params=payload, timeout=20, proxies=self.proxies)
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise RuntimeError(f"HaoZhuMa {payload.get('api')} returned invalid JSON: {resp.text[:200]}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"HaoZhuMa {payload.get('api')} returned unexpected response: {data!r}")
+        return data
+
+    def _request(self, api: str, *, needs_token: bool = True, **params) -> dict:
+        payload = {"api": api}
+        used_cached_token = bool(self.token)
+        if needs_token:
+            payload["token"] = self._token()
+        for key, value in params.items():
+            if value not in (None, ""):
+                payload[key] = value
+        data = self._send_request(payload)
+        code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"} and api == "getMessage" and _haozhuma_message_waiting_data(data):
+            raise RuntimeError(f"HaoZhuMa {api} pending: {data.get('msg') or data}")
+        if code not in {"0", "200"} and needs_token and used_cached_token and self.user and self.password:
+            self.token = ""
+            payload["token"] = self._token()
+            data = self._send_request(payload)
+            code = str(data.get("code", "")).strip()
+        if code not in {"0", "200"}:
+            raise RuntimeError(f"HaoZhuMa {api} failed: {data.get('msg') or data}")
+        return data
+
+    def _token(self) -> str:
+        if self.token:
+            return self.token
+        if not self.user or not self.password:
+            raise RuntimeError("HaoZhuMa 未配置 API 账号密码")
+        data = self._request("login", needs_token=False, user=self.user, **{"pass": self.password})
+        self.token = str(data.get("token") or "").strip()
+        if not self.token:
+            raise RuntimeError(f"HaoZhuMa login did not return token: {data}")
+        if self._token_store:
+            try:
+                self._token_store(self.token)
+            except Exception as exc:
+                logger.warning("HaoZhuMa cached token store failed: %s", exc)
+        return self.token
+
+    def _sid(self, service: str = "") -> str:
+        return self._sid_candidates(service)[0]
+
+    def _sid_candidates(self, service: str = "") -> list[str]:
+        raw = str(self.sid or service or "").strip()
+        sids: list[str] = []
+        for part in re.split(r"[\s,，;；|]+", raw):
+            sid = part.strip()
+            if sid and sid not in sids:
+                sids.append(sid)
+        if not sids:
+            raise RuntimeError("HaoZhuMa 需要配置项目 ID(haozhuma_sid)")
+        return sids
+
+    def get_balance(self):
+        data = self._request("getSummary")
+        value = data.get("money")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+
+    def get_number(self, *, service: str, country: str = "") -> SmsActivation:
+        sids = self._sid_candidates(service)
+        data: dict[str, Any] = {}
+        phone = ""
+        selected_sid = ""
+        errors: list[str] = []
+        for sid in sids:
+            data = {}
+            for attempt in range(2):
+                extra_params = {}
+                if self.batch_size > 1 and not self.phone:
+                    extra_params[self.batch_param] = str(self.batch_size)
+                try:
+                    data = self._request(
+                        "getPhone",
+                        sid=sid,
+                        phone=self.phone,
+                        isp=self.isp,
+                        Province=country or self.province,
+                        ascription=self.ascription,
+                        paragraph=self.paragraph,
+                        exclude=self.exclude,
+                        uid=self.uid,
+                        author=self.author,
+                        **extra_params,
+                    )
+                except RuntimeError as exc:
+                    errors.append(f"{sid}: {exc}")
+                    logger.warning("HaoZhuMa getPhone failed for sid %s; trying next project ID: %s", sid, exc)
+                    break
+                for candidate in self._phone_candidates(data):
+                    if _reserve_sms_number(self.PROVIDER_KEY, candidate):
+                        phone = candidate
+                        selected_sid = sid
+                        break
+                    logger.warning("HaoZhuMa getPhone returned duplicate active phone %s; trying another candidate", candidate)
+                if phone:
+                    break
+            if phone:
+                break
+            if data:
+                errors.append(f"{sid}: no usable phone in response {data}")
+                logger.warning("HaoZhuMa getPhone returned no usable phone for sid %s; trying next project ID", sid)
+        if not phone:
+            detail = "; ".join(errors[-5:]) if errors else str(data)
+            raise RuntimeError(f"HaoZhuMa getPhone 未返回可用手机号: {detail}")
+        self._activation_sids[phone] = str(data.get("sid") or selected_sid).strip() or selected_sid
+        return SmsActivation(
+            activation_id=phone,
+            phone_number=phone,
+            country=country or self.province or str(data.get("country_code") or ""),
+            metadata={"sid": self._activation_sids[phone], "provider": "haozhuma", "raw": data},
+        )
+
+    def _phone_candidates(self, data: dict[str, Any]) -> list[str]:
+        raw_values = [
+            data.get("phone"),
+            data.get("phones"),
+            data.get("phone_list"),
+            data.get("data"),
+            data.get("list"),
+        ]
+        candidates: list[str] = []
+
+        def add(value: Any) -> None:
+            if value in (None, ""):
+                return
+            if isinstance(value, dict):
+                add(value.get("phone") or value.get("mobile") or value.get("number"))
+                return
+            if isinstance(value, list):
+                for item in value:
+                    add(item)
+                return
+            text = str(value).strip()
+            if not text:
+                return
+            for part in re.split(r"[\s,|;]+", text):
+                phone = part.strip()
+                if phone and phone not in candidates:
+                    candidates.append(phone)
+
+        for value in raw_values:
+            add(value)
+        return candidates
+
+    def get_code(self, activation_id: str, *, timeout: int = 120) -> str:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return ""
+        sid = self._activation_sids.get(phone) or self._sid("")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                data = self._request("getMessage", sid=sid, phone=phone)
+            except requests.RequestException as exc:
+                logger.warning("HaoZhuMa getMessage transient request error for %s: %s", phone, exc)
+                time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                continue
+            except RuntimeError as exc:
+                if _haozhuma_message_waiting_error(exc):
+                    time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+                    continue
+                raise
+            code = str(data.get("yzm") or "").strip() or _extract_uomsg_code(str(data.get("sms") or ""))
+            if code:
+                return code
+            time.sleep(min(self.poll_interval, max(0, deadline - time.time())))
+        self._release_and_blacklist(phone)
+        return ""
+
+    def _release(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return False
+        sid = self._activation_sids.get(phone) or self._sid("")
+        self._request("cancelRecv", sid=sid, phone=phone)
+        return True
+
+    def block(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone:
+            return False
+        sid = self._activation_sids.get(phone) or self._sid("")
+        self._request("addBlacklist", sid=sid, phone=phone)
+        return True
+
+    def _release_and_blacklist(self, activation_id: str) -> bool:
+        phone = str(activation_id or "").strip()
+        if not phone or phone in self._closed_activations:
+            return False
+        ok = True
+        try:
+            self._release(phone)
+        except Exception as exc:
+            ok = False
+            logger.warning("HaoZhuMa cancelRecv failed for %s: %s", phone, exc)
+        try:
+            self.block(phone)
+        except Exception as exc:
+            ok = False
+            logger.warning("HaoZhuMa addBlacklist failed for %s: %s", phone, exc)
+        self._closed_activations.add(phone)
+        _release_sms_number(self.PROVIDER_KEY, phone)
+        self._activation_sids.pop(phone, None)
+        return ok
+
+    def cancel(self, activation_id: str) -> bool:
+        return self._release_and_blacklist(activation_id)
+
+    def report_success(self, activation_id: str) -> bool:
+        return self._release_and_blacklist(activation_id)
+
+    def mark_code_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
+
+    def mark_send_failed(self, activation_id: str, reason: str = "") -> None:
+        self._release_and_blacklist(activation_id)
+
+
+def _haozhuma_message_waiting_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in ("等待", "尚未", "未收到", "wait", "waiting", "no message"))
+
+
+def _haozhuma_message_waiting_data(data: dict[str, Any]) -> bool:
+    text = str(data.get("msg") or data.get("message") or data).lower()
+    return any(token in text for token in ("等待", "尚未", "未收到", "wait", "waiting", "no message"))
 
 
 def is_herosms_phone_cache_alive(config: dict | None = None) -> tuple[bool, dict]:
@@ -1056,12 +1887,59 @@ def is_herosms_phone_cache_alive(config: dict | None = None) -> tuple[bool, dict
     return bool(info.get("alive")), info
 
 
+def _haozhuma_token_store(provider_key: str) -> Callable[[str], None]:
+    keys = [provider_key]
+    if provider_key != "haozhuma_api":
+        keys.append("haozhuma_api")
+
+    def _store(token: str) -> None:
+        cached_token = str(token or "").strip()
+        if not cached_token:
+            return
+        try:
+            from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+            repo = ProviderSettingsRepository()
+            for key in keys:
+                if repo.update_auth_values("sms", key, {"haozhuma_cached_token": cached_token}):
+                    return
+        except Exception as exc:
+            logger.warning("HaoZhuMa cached token persistence failed: %s", exc)
+
+    return _store
+
+
+def _feihumsg_token_store(provider_key: str) -> Callable[[str], None]:
+    keys = [provider_key]
+    if provider_key != "feihumsg_api":
+        keys.append("feihumsg_api")
+
+    def _store(token: str) -> None:
+        cached_token = str(token or "").strip()
+        if not cached_token:
+            return
+        try:
+            from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+            repo = ProviderSettingsRepository()
+            for key in keys:
+                if repo.update_auth_values("sms", key, {"feihumsg_cached_token": cached_token}):
+                    return
+        except Exception as exc:
+            logger.warning("FeiHuMsg cached token persistence failed: %s", exc)
+
+    return _store
+
+
 # ---------------------------------------------------------------------------
 # Factory and browser callback adapter
 # ---------------------------------------------------------------------------
 
 def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
     """Create an SMS provider instance from config."""
+    # SMS provider APIs are control-plane calls; keep get-number/get-code direct
+    # even when the target platform registration uses a proxy.
+    sms_api_proxy = None
     if provider_key in ("sms_activate", "sms_activate_api"):
         api_key = config.get("sms_activate_api_key", "")
         if not api_key:
@@ -1069,7 +1947,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
         return SmsActivateProvider(
             api_key=api_key,
             default_country=config.get("sms_activate_country", config.get("sms_activate_default_country", "")),
-            proxy=config.get("sms_proxy") or config.get("proxy") or None,
+            proxy=sms_api_proxy,
         )
     if provider_key in ("herosms", "herosms_api"):
         api_key = str(config.get("herosms_api_key", "") or "").strip()
@@ -1080,7 +1958,7 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             default_service=str(config.get("sms_service") or config.get("herosms_service") or config.get("herosms_default_service") or HERO_SMS_DEFAULT_SERVICE),
             default_country=str(config.get("sms_country") or config.get("herosms_country") or config.get("herosms_default_country") or HERO_SMS_DEFAULT_COUNTRY),
             max_price=_safe_float(config.get("herosms_max_price"), -1),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             reuse_phone_to_max=_safe_bool(config.get("register_reuse_phone_to_max"), True),
             phone_success_max=max(0, _safe_int(config.get("register_phone_extra_max") or config.get("register_phone_success_max"), 3)),
         )
@@ -1093,9 +1971,85 @@ def create_sms_provider(provider_key: str, config: dict) -> BaseSmsProvider:
             default_service=str(config.get("sms_service") or config.get("smsbower_service") or config.get("smsbower_default_service") or HERO_SMS_DEFAULT_SERVICE),
             default_country=str(config.get("sms_country") or config.get("smsbower_country") or config.get("smsbower_default_country") or HERO_SMS_DEFAULT_COUNTRY),
             max_price=_safe_float(config.get("smsbower_max_price"), -1),
-            proxy=str(config.get("sms_proxy") or config.get("proxy") or "") or None,
+            proxy=sms_api_proxy,
             reuse_phone_to_max=_safe_bool(config.get("register_reuse_phone_to_max"), True),
             phone_success_max=max(0, _safe_int(config.get("register_phone_extra_max") or config.get("register_phone_success_max"), 3)),
+        )
+    if provider_key in ("uomsg", "uomsg_api"):
+        token = str(config.get("uomsg_token") or config.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("UOMsg 未配置 API Token")
+        return UOMsgProvider(
+            token=token,
+            default_keyword=str(config.get("uomsg_keyword") or config.get("sms_keyword") or "").strip(),
+            province=str(config.get("uomsg_province") or config.get("sms_country") or "").strip(),
+            card_type=str(config.get("uomsg_card_type") or "全部").strip() or "全部",
+            phone=str(config.get("uomsg_phone") or "").strip(),
+            poll_interval=_safe_int(config.get("uomsg_poll_interval"), 3),
+            proxy=sms_api_proxy,
+            base_url=str(config.get("uomsg_base_url") or "").strip(),
+        )
+    if provider_key in ("eomsg", "eomsg_api"):
+        token = str(config.get("eomsg_token") or config.get("token") or "").strip()
+        if not token:
+            raise RuntimeError("EOMsg 未配置 API Token")
+        return EOMsgProvider(
+            token=token,
+            default_keyword=str(config.get("eomsg_keyword") or config.get("sms_keyword") or "").strip(),
+            province=str(config.get("eomsg_province") or config.get("sms_country") or "").strip(),
+            card_type=str(config.get("eomsg_card_type") or "全部").strip() or "全部",
+            phone=str(config.get("eomsg_phone") or "").strip(),
+            poll_interval=_safe_int(config.get("eomsg_poll_interval"), 3),
+            proxy=sms_api_proxy,
+            base_url=str(config.get("eomsg_base_url") or "").strip(),
+        )
+    if provider_key in ("feihumsg", "feihumsg_api"):
+        user = str(config.get("feihumsg_user") or config.get("feihumsg_username") or "").strip()
+        password = str(config.get("feihumsg_password") or "").strip()
+        token = str(config.get("feihumsg_cached_token") or config.get("feihumsg_token") or config.get("token") or "").strip()
+        if (not user or not password) and not token:
+            raise RuntimeError("FeiHuMsg 未配置 API 账号密码")
+        return FeiHuMsgProvider(
+            user=user,
+            password=password,
+            token=token,
+            pid=str(config.get("feihumsg_pid") or "").strip(),
+            phone=str(config.get("feihumsg_phone") or "").strip(),
+            isp=str(config.get("feihumsg_isp") or "").strip(),
+            province=str(config.get("feihumsg_province") or config.get("sms_country") or "").strip(),
+            card_type=str(config.get("feihumsg_card_type") or "").strip(),
+            include=str(config.get("feihumsg_include") or "").strip(),
+            exclude=str(config.get("feihumsg_exclude") or "").strip(),
+            author=str(config.get("feihumsg_author") or "").strip(),
+            poll_interval=_safe_int(config.get("feihumsg_poll_interval"), 10),
+            proxy=sms_api_proxy,
+            base_url=str(config.get("feihumsg_base_url") or "").strip(),
+            token_store=_feihumsg_token_store(provider_key),
+        )
+    if provider_key in ("haozhuma", "haozhuma_api"):
+        user = str(config.get("haozhuma_user") or config.get("haozhuma_username") or "").strip()
+        password = str(config.get("haozhuma_password") or "").strip()
+        if not user or not password:
+            raise RuntimeError("HaoZhuMa 未配置 API 账号密码")
+        return HaoZhuMaProvider(
+            user=user,
+            password=password,
+            token=str(config.get("haozhuma_cached_token") or "").strip(),
+            sid=str(config.get("haozhuma_sid") or config.get("sms_service") or "").strip(),
+            phone=str(config.get("haozhuma_phone") or "").strip(),
+            isp=str(config.get("haozhuma_isp") or "").strip(),
+            province=str(config.get("haozhuma_province") or config.get("sms_country") or "").strip(),
+            ascription=str(config.get("haozhuma_ascription") or "").strip(),
+            paragraph=str(config.get("haozhuma_paragraph") or "").strip(),
+            exclude=str(config.get("haozhuma_exclude") or "").strip(),
+            uid=str(config.get("haozhuma_uid") or "").strip(),
+            author=str(config.get("haozhuma_author") or "").strip(),
+            batch_size=_safe_int(config.get("haozhuma_batch_size"), 5),
+            batch_param=str(config.get("haozhuma_batch_param") or "num").strip(),
+            poll_interval=_safe_int(config.get("haozhuma_poll_interval"), 15),
+            proxy=sms_api_proxy,
+            base_url=str(config.get("haozhuma_base_url") or "").strip(),
+            token_store=_haozhuma_token_store(provider_key),
         )
     raise RuntimeError(f"未知的接码服务: {provider_key}")
 
@@ -1128,11 +2082,11 @@ class PhoneCallbackController:
                 _HERO_SMS_VERIFY_LOCK.acquire()
                 self._verify_lock_acquired = True
 
-            # 智能国家选择：如果启用了 auto_select_country，自动查询最优国家
+            # æ™ºèƒ½å›½å®¶é€‰æ‹©ï¼šå¦‚æžœå¯ç”¨äº† auto_select_countryï¼Œè‡ªåŠ¨æŸ¥è¯¢æœ€ä¼˜å›½å®¶
             effective_country = self.country
             auto_select = _safe_bool(self.config.get("herosms_auto_country") or self.config.get("smsbower_auto_country"), False)
             if auto_select and isinstance(provider, HeroSmsProvider):
-                self.log("正在查询最优国家（价格最低 + 库存充足）...")
+                self.log("æ­£åœ¨æŸ¥è¯¢æœ€ä¼˜å›½å®¶ï¼ˆä»·æ ¼æœ€ä½Ž + åº“å­˜å……è¶³ï¼‰...")
                 try:
                     min_stock = _safe_int(self.config.get("herosms_auto_country_min_stock") or self.config.get("smsbower_auto_country_min_stock"), 20)
                     max_price_limit = _safe_float(self.config.get("herosms_auto_country_max_price") or self.config.get("smsbower_auto_country_max_price"), 0)
@@ -1142,12 +2096,12 @@ class PhoneCallbackController:
                         max_price=max_price_limit,
                     )
                     if best:
-                        self.log(f"自动选择最优国家: {best}")
+                        self.log(f"è‡ªåŠ¨é€‰æ‹©æœ€ä¼˜å›½å®¶: {best}")
                         effective_country = best
                     else:
-                        self.log("未找到满足条件的国家，使用默认配置")
+                        self.log("æœªæ‰¾åˆ°æ»¡è¶³æ¡ä»¶çš„å›½å®¶ï¼Œä½¿ç”¨é»˜è®¤é…ç½®")
                 except Exception as exc:
-                    self.log(f"智能国家选择失败({exc})，使用默认配置")
+                    self.log(f"æ™ºèƒ½å›½å®¶é€‰æ‹©å¤±è´¥({exc})ï¼Œä½¿ç”¨é»˜è®¤é…ç½®")
 
             country_label = effective_country or self.config.get("sms_country") or self.config.get("sms_activate_country") or "default"
             self.log(f"已进入 add_phone，准备租用手机号: provider={self.provider_key} service={self.service} country={country_label}")
@@ -1155,10 +2109,10 @@ class PhoneCallbackController:
             try:
                 self.activation = provider.get_number(service=self.service, country=effective_country)
             except Exception as first_exc:
-                # 如果是自动选择的国家失败了，回退到默认国家重试
+                # å¦‚æžœæ˜¯è‡ªåŠ¨é€‰æ‹©çš„å›½å®¶å¤±è´¥äº†ï¼Œå›žé€€åˆ°é»˜è®¤å›½å®¶é‡è¯•
                 fallback_country = self.country or self.config.get("sms_country") or self.config.get("herosms_country") or ""
                 if auto_select and effective_country != fallback_country and fallback_country:
-                    self.log(f"自动选择的国家({effective_country})获取号码失败，回退到默认国家({fallback_country})...")
+                    self.log(f"è‡ªåŠ¨é€‰æ‹©çš„å›½å®¶({effective_country})èŽ·å–å·ç å¤±è´¥ï¼Œå›žé€€åˆ°é»˜è®¤å›½å®¶({fallback_country})...")
                     try:
                         self.activation = provider.get_number(service=self.service, country=fallback_country)
                     except Exception:
@@ -1187,7 +2141,7 @@ class PhoneCallbackController:
                 else:
                     self.awaiting_external_success = True
             else:
-                self.log(f"⚠️ 未收到验证码: activation_id={self.activation.activation_id}")
+                self.log(f"未收到验证码: activation_id={self.activation.activation_id}")
             return code
         return ""
 

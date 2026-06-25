@@ -335,7 +335,10 @@ class BasePlatform(ABC):
         if not provider_key:
             provider_key = self._resolve_captcha_solver()
         self._prepare_captcha_provider(provider_key)
-        return create_captcha_solver(provider_key, self.config.extra)
+        captcha_extra = dict(self.config.extra or {})
+        if self.config.proxy and not any(captcha_extra.get(key) for key in ("proxy", "proxy_url", "proxyUrl")):
+            captcha_extra["proxy"] = self.config.proxy
+        return create_captcha_solver(provider_key, captcha_extra)
 
     def _has_configured_captcha(self, solver_name: str) -> bool:
         from .base_captcha import has_captcha_configured
@@ -426,6 +429,41 @@ class BasePlatform(ABC):
             except Exception as exc:
                 errors.append(f"{provider_key}: {exc}")
                 self.log(f"Turnstile provider 失败: {provider_key} -> {exc}")
+
+        raise RuntimeError("；".join(errors))
+
+    def solve_recaptcha_with_fallback(
+        self,
+        page_url: str,
+        site_key: str,
+        *,
+        enterprise: bool = False,
+        action: str = "",
+    ) -> str:
+        errors: list[str] = []
+        candidates = self._get_captcha_solver_candidates()
+        if not candidates:
+            raise RuntimeError("未找到可用的 reCAPTCHA 验证码 provider")
+
+        for provider_key in candidates:
+            try:
+                self.log(f"尝试 reCAPTCHA provider: {provider_key}")
+                solver = self._make_captcha(provider_key=provider_key)
+                token = str(
+                    solver.solve_recaptcha(
+                        page_url,
+                        site_key,
+                        enterprise=enterprise,
+                        action=action,
+                    )
+                    or ""
+                ).strip()
+                if token:
+                    return token
+                raise RuntimeError("未返回有效 token")
+            except Exception as exc:
+                errors.append(f"{provider_key}: {exc}")
+                self.log(f"reCAPTCHA provider 失败: {provider_key} -> {exc}")
 
         raise RuntimeError("；".join(errors))
 

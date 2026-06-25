@@ -112,9 +112,6 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
         ctx.log(f"[SMS] provider={provider_key} (来源={source}) 已找到 definition，但认证字段 {auth_fields} 全部为空，phone_callback=None")
         return None, None
 
-    if ctx.proxy and not str(merged.get("sms_proxy") or merged.get("proxy") or "").strip():
-        merged["sms_proxy"] = ctx.proxy
-
     country = str(
         merged.get("sms_country")
         or merged.get("phone_country")
@@ -124,6 +121,9 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
         or merged.get("herosms_default_country")
         or merged.get("smsbower_country")
         or merged.get("smsbower_default_country")
+        or merged.get("eomsg_province")
+        or merged.get("feihumsg_province")
+        or merged.get("haozhuma_province")
         or ""
     ).strip()
     sms_service = str(
@@ -132,6 +132,8 @@ def build_phone_callbacks(ctx: RegistrationContext, *, service: str | None = Non
         or merged.get("herosms_default_service")
         or merged.get("smsbower_service")
         or merged.get("smsbower_default_service")
+        or merged.get("feihumsg_pid")
+        or merged.get("haozhuma_sid")
         or merged.get("sms_activate_service")
         or merged.get("sms_activate_default_service")
         or service

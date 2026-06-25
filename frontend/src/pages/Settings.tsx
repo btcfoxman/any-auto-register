@@ -269,6 +269,118 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
     sections: [],
   },
   {
+    id: 'lingya_qq', label: 'LingYaQQ', icon: Shield,
+    sections: [{
+      section: 'Lingya2API',
+      desc: '将 LingYaQQ Cookie 同步到 lingya2api，同时由本系统负责保活、续期与额度刷新。',
+      items: [
+        { key: 'lingya2api_url', label: '接口地址', placeholder: 'http://localhost:8000' },
+        { key: 'lingya2api_api_key', label: '接口密钥', secret: true },
+        { key: 'lingya2api_max_concurrency', label: '最大并发', placeholder: '1' },
+        { key: 'lingya_qq_keepalive_enabled', label: '启用本地保活', placeholder: 'true' },
+        { key: 'lingya_qq_heartbeat_interval_seconds', label: '心跳间隔秒数', placeholder: '300' },
+        { key: 'lingya_qq_balance_interval_seconds', label: '额度刷新间隔秒数', placeholder: '60' },
+        { key: 'lingya_qq_keepalive_concurrency', label: '本地保活并发', placeholder: '1' },
+        { key: 'lingya_qq_keepalive_retire_enabled', label: '低额度自动停保活', placeholder: 'true' },
+        { key: 'lingya_qq_keepalive_retire_quota_threshold', label: '停保活额度阈值', placeholder: '57' },
+        { key: 'lingya_qq_keepalive_retire_after_hours', label: '停保活账号年龄小时', placeholder: '24' },
+      ],
+    }, {
+      section: '注册后自动化',
+      desc: 'LingYaQQ 手机登录完成后的签到和作品发布。作品内容来源为第三方 GET 接口。',
+      items: [
+        { key: 'lingya_qq_daily_sign_in_enabled', label: '启用签到功能', placeholder: 'true' },
+        { key: 'lingya_qq_auto_daily_sign_in', label: '注册后自动签到', placeholder: 'true' },
+        { key: 'lingya_qq_auto_publish_after_register', label: '注册后自动发布', placeholder: 'true' },
+        { key: 'lingya_qq_publish_required', label: '发布失败视为注册失败', placeholder: 'false' },
+        { key: 'lingya_qq_publish_source_url', label: '内容接口地址', placeholder: 'https://example.com/api/work' },
+        { key: 'lingya_qq_publish_source_timeout', label: '内容接口超时秒数', placeholder: '60' },
+        { key: 'lingya_qq_publish_source_retries', label: '内容接口重试次数', placeholder: '3' },
+        // { key: 'lingya_qq_video_upload_service_id', label: '视频上传服务 ID', placeholder: '1000226_20250923195211_7dda2b6b' },
+        // { key: 'lingya_qq_publish_creation_process_text', label: '创作过程文本', placeholder: 'Seedance 2.0 全能参考' },
+        // { key: 'lingya_qq_publish_cover_url', label: '备用封面地址', placeholder: 'https://example.com/cover.jpg' },
+        { key: 'lingya_qq_publish_initial_delay', label: '审核初始等待秒数', placeholder: '600' },
+        { key: 'lingya_qq_publish_poll_interval', label: '审核轮询间隔秒数', placeholder: '60' },
+        { key: 'lingya_qq_publish_timeout', label: '审核超时秒数', placeholder: '7200' },
+        { key: 'lingya_qq_publish_generation_timeout', label: '生成超时秒数', placeholder: '600' },
+        { key: 'lingya_qq_publish_generation_poll_interval', label: '生成轮询间隔秒数', placeholder: '5' },
+        { key: 'lingya_qq_publish_credit_timeout', label: '首发积分等待秒数', placeholder: '1800' },
+        { key: 'lingya_qq_publish_credit_poll_interval', label: '首发积分轮询秒数', placeholder: '30' },
+        { key: 'lingya_qq_publish_post_quota_delay', label: '发布后额度刷新等待秒数', placeholder: '10' },
+      ],
+    }],
+  },
+  {
+    id: 'freebeat', label: 'Freebeat', icon: Shield,
+    sections: [{
+      section: '自动签到',
+      desc: '后台按动态时间区间扫描 Freebeat 账号，未签到时自动领取每日积分。',
+      items: [
+        { key: 'freebeat_daily_sign_in_enabled', label: '启用自动签到', placeholder: 'true' },
+        { key: 'freebeat_daily_sign_in_min_interval_seconds', label: '最小间隔秒数', placeholder: '1800' },
+        { key: 'freebeat_daily_sign_in_max_interval_seconds', label: '最大间隔秒数', placeholder: '7200' },
+      ],
+    }, {
+      section: '注册后自动化',
+      desc: 'Freebeat 邮箱验证码注册/登录完成后的自动领取动作。',
+      items: [
+        { key: 'freebeat_auto_questionnaire', label: '注册后自动问卷', placeholder: 'true' },
+        { key: 'freebeat_auto_daily_sign_in', label: '注册后自动签到', placeholder: 'true' },
+      ],
+    }, {
+      section: 'Freebeat2API',
+      desc: '将 Freebeat token 同步到 freebeat2api，并在注册、保活、签到后同步最新账号状态。',
+      items: [
+        { key: 'freebeat2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8788' },
+        { key: 'freebeat2api_api_key', label: '接口密钥', placeholder: 'sk-test-api-key', secret: true },
+        { key: 'freebeat2api_max_concurrency', label: '最大并发', placeholder: '1' },
+        { key: 'freebeat2api_enable_auto_maintenance', label: '启用远端维护', placeholder: 'true' },
+      ],
+    }],
+  },
+  {
+    id: 'quickframe', label: 'QuickFrame', icon: Shield,
+    sections: [{
+      section: 'QuickFrame 自动心跳保活',
+      desc: '按捕获记录执行 /session、/token、auth.checkSession 保活链路，并同步下游状态。',
+      items: [
+        { key: 'quickframe_keepalive_enabled', label: '启用自动保活', placeholder: 'true' },
+        { key: 'quickframe_heartbeat_interval_seconds', label: '心跳间隔秒数', placeholder: '300' },
+      ],
+    }, {
+      section: 'QuickFrame2API',
+      desc: '同步 QuickFrame token、Cookie、账号状态到 quickframe2api，供下游自动化使用。',
+      items: [
+        { key: 'quickframe2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8789' },
+        { key: 'quickframe2api_api_key', label: '接口密钥', placeholder: 'sk-test-api-key', secret: true },
+        { key: 'quickframe2api_max_concurrency', label: '最大并发', placeholder: '1' },
+        { key: 'quickframe2api_enable_auto_maintenance', label: '启用远端维护', placeholder: 'true' },
+      ],
+    }],
+  },
+  {
+    id: 'imgs_weryai', label: 'ImgsWeryai', icon: Shield,
+    sections: [{
+      section: 'ImgsWeryai keepalive',
+      desc: 'Refresh WeryAI account credits and sync account state to imgs2api in the background.',
+      items: [
+        { key: 'imgs_weryai_keepalive_enabled', label: 'Enable keepalive', placeholder: 'true' },
+        { key: 'imgs_weryai_heartbeat_interval_seconds', label: 'Heartbeat interval seconds', placeholder: '300' },
+      ],
+    }, {
+      section: 'Imgs2API',
+      desc: 'Sync WeryAI token, team/product IDs, device fingerprint, cookies, proxy and credit state to imgs2api.',
+      items: [
+        { key: 'imgs2api_url', label: 'API URL', placeholder: 'http://127.0.0.1:8790' },
+        { key: 'imgs2api_api_key', label: 'API key', placeholder: 'sk-test-api-key', secret: true },
+        { key: 'imgs2api_max_concurrency', label: 'Max concurrency', placeholder: '1' },
+        { key: 'imgs2api_auto_sync_after_register', label: 'Auto sync after register', placeholder: 'true' },
+        { key: 'imgs2api_enable_auto_maintenance', label: 'Remote maintenance', placeholder: 'true' },
+        { key: 'imgs2api_proxy_host_override', label: 'Proxy host override', placeholder: '192.168.3.5' },
+      ],
+    }],
+  },
+  {
     id: 'platform_caps', label: '高级：平台能力', icon: Sliders,
     sections: [],
   },

@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import pytest
 from core.base_sms import (
+    EOMsgProvider,
+    FeiHuMsgProvider,
     HeroSmsProvider,
+    HaoZhuMaProvider,
     SmsActivation,
     SmsActivateProvider,
+    UOMsgProvider,
     create_sms_provider,
     create_phone_callbacks,
     SMS_ACTIVATE_SERVICES,
@@ -31,6 +35,12 @@ class TestSmsActivateCountryMapping:
 
     def test_ru_maps_to_0(self):
         assert SMS_ACTIVATE_COUNTRIES["ru"] == "0"
+
+
+def test_sms_candidate_rejects_single_digit_placeholder_code():
+    assert sms_module._make_sms_candidate("act_1", "test", "0") is None
+    assert sms_module._parse_hero_status_text("STATUS_OK:0")["status"] == "wait_code"
+    assert sms_module._parse_hero_status_text("STATUS_OK:123456") == {"status": "ok", "code": "123456"}
 
     def test_th_maps_to_52(self):
         assert SMS_ACTIVATE_COUNTRIES["th"] == "52"
@@ -71,9 +81,707 @@ class TestCreateSmsProvider:
         with pytest.raises(RuntimeError, match="HeroSMS 未配置"):
             create_sms_provider("herosms", {})
 
+    def test_uomsg(self):
+        provider = create_sms_provider("uomsg_api", {"uomsg_token": "tok123", "uomsg_keyword": "腾讯"})
+        assert isinstance(provider, UOMsgProvider)
+        assert provider.token == "tok123"
+        assert provider.default_keyword == "腾讯"
+
+    def test_uomsg_missing_token(self):
+        with pytest.raises(RuntimeError, match="UOMsg 未配置"):
+            create_sms_provider("uomsg_api", {})
+
+    def test_eomsg(self):
+        provider = create_sms_provider("eomsg_api", {"eomsg_token": "tok123", "eomsg_keyword": "腾讯"})
+        assert isinstance(provider, EOMsgProvider)
+        assert provider.token == "tok123"
+        assert provider.default_keyword == "腾讯"
+        assert provider.base_url == "http://api.eomsg.com/zc/data.php"
+
+    def test_eomsg_missing_token(self):
+        with pytest.raises(RuntimeError, match="EOMsg 未配置"):
+            create_sms_provider("eomsg_api", {})
+
+    def test_feihumsg(self):
+        provider = create_sms_provider(
+            "feihumsg_api",
+            {"feihumsg_user": "user1", "feihumsg_password": "pass1", "feihumsg_pid": "1001"},
+        )
+        assert isinstance(provider, FeiHuMsgProvider)
+        assert provider.user == "user1"
+        assert provider.password == "pass1"
+        assert provider.pid == "1001"
+
+    def test_feihumsg_missing_auth(self):
+        with pytest.raises(RuntimeError, match="FeiHuMsg 未配置"):
+            create_sms_provider("feihumsg_api", {"feihumsg_pid": "1001"})
+
+    def test_feihumsg_does_not_treat_generic_sms_service_as_pid(self):
+        provider = create_sms_provider(
+            "feihumsg_api",
+            {
+                "feihumsg_user": "user1",
+                "feihumsg_password": "pass1",
+                "sms_service": "qq",
+            },
+        )
+
+        assert isinstance(provider, FeiHuMsgProvider)
+        assert provider.pid == ""
+        with pytest.raises(RuntimeError, match="FeiHuMsg .*feihumsg_pid.*"):
+            provider.get_number(service="qq")
+
+    def test_haozhuma(self):
+        provider = create_sms_provider(
+            "haozhuma_api",
+            {
+                "haozhuma_user": "user1",
+                "haozhuma_password": "pass1",
+                "haozhuma_cached_token": "cached-token",
+                "haozhuma_sid": "1000",
+            },
+        )
+        assert isinstance(provider, HaoZhuMaProvider)
+        assert provider.user == "user1"
+        assert provider.password == "pass1"
+        assert provider.token == "cached-token"
+        assert provider.sid == "1000"
+
+    def test_haozhuma_does_not_use_sms_or_generic_proxy(self):
+        provider = create_sms_provider(
+            "haozhuma_api",
+            {
+                "haozhuma_user": "user1",
+                "haozhuma_password": "pass1",
+                "haozhuma_sid": "1000",
+                "sms_proxy": "socks5://127.0.0.1:1080",
+                "proxy": "socks5://127.0.0.1:1080",
+            },
+        )
+
+        assert isinstance(provider, HaoZhuMaProvider)
+        assert provider.proxies is None
+
+    def test_haozhuma_missing_auth(self):
+        with pytest.raises(RuntimeError, match="HaoZhuMa 未配置"):
+            create_sms_provider("haozhuma_api", {"haozhuma_sid": "1000"})
+
     def test_unknown_provider(self):
         with pytest.raises(RuntimeError, match="未知"):
             create_sms_provider("unknown", {})
+
+
+class TestUOMsgProvider:
+    def test_get_number_get_code_and_release(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            code = (params or {}).get("code")
+            if code == "getPhone":
+                return FakeResponse("16512345678")
+            if code == "getMsg":
+                return FakeResponse("【腾讯科技】验证码123456，用于登录")
+            if code == "release":
+                return FakeResponse("释放成功")
+            raise AssertionError(f"unexpected code: {code}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯", province="广东", card_type="实卡")
+        activation = provider.get_number(service="qq")
+        code = provider.get_code(activation.activation_id, timeout=5)
+
+        assert activation.activation_id == "16512345678"
+        assert activation.phone_number == "16512345678"
+        assert code == "123456"
+        assert provider.cancel(activation.activation_id) is True
+        assert calls[0][1] == {
+            "code": "getPhone",
+            "token": "tok",
+            "keyWord": "腾讯",
+            "province": "广东",
+            "cardType": "实卡",
+        }
+        assert calls[1][1]["code"] == "getMsg"
+        assert calls[1][1]["phone"] == "16512345678"
+        assert calls[1][1]["keyWord"] == "腾讯"
+        assert calls[2][1] == {"code": "release", "token": "tok", "phone": "16512345678"}
+
+    def test_maps_qq_service_to_tencent_keyword(self, monkeypatch):
+        class FakeResponse:
+            text = "16512345678"
+
+            def raise_for_status(self):
+                return None
+
+        seen = {}
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            seen.update(params or {})
+            return FakeResponse()
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = UOMsgProvider("tok")
+        activation = provider.get_number(service="qq")
+        sms_module._release_sms_number("uomsg", activation.activation_id)
+
+        assert seen["keyWord"] == "腾讯"
+
+    def test_duplicate_active_number_is_retried_once(self, monkeypatch):
+        responses = ["16511111111", "16511111111", "16522222222"]
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            code = (params or {}).get("code")
+            if code == "getPhone":
+                return FakeResponse(responses.pop(0))
+            if code == "release":
+                return FakeResponse("release ok")
+            raise AssertionError(f"unexpected code: {code}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider_a = UOMsgProvider("tok", default_keyword="qq")
+        provider_b = UOMsgProvider("tok", default_keyword="qq")
+        activation_a = provider_a.get_number(service="qq")
+        activation_b = provider_b.get_number(service="qq")
+
+        assert activation_a.phone_number == "16511111111"
+        assert activation_b.phone_number == "16522222222"
+        assert [call["code"] for call in calls[:3]] == ["getPhone", "getPhone", "getPhone"]
+
+        provider_a.cancel(activation_a.activation_id)
+        provider_b.cancel(activation_b.activation_id)
+
+    def test_get_code_after_ignores_old_message(self, monkeypatch):
+        messages = [
+            "【腾讯科技】验证码111111，用于登录",
+            "【腾讯科技】验证码111111，用于登录",
+            "【腾讯科技】验证码222222，用于登录",
+        ]
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            assert (params or {}).get("code") == "getMsg"
+            return FakeResponse(messages.pop(0))
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯")
+
+        assert provider.get_code_after("16512345678", timeout=5, ignore_text="【腾讯科技】验证码111111，用于登录") == "222222"
+
+    def test_get_code_after_continues_after_request_timeout(self, monkeypatch):
+        responses = [
+            sms_module.requests.exceptions.ReadTimeout("read timeout"),
+            "[尚未收到]",
+            "【腾讯科技】验证码333333，用于登录",
+        ]
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return FakeResponse(item)
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯")
+
+        assert provider.get_code_after("16512345678", timeout=5) == "333333"
+
+    def test_get_code_after_waits_for_new_message_after_unparsable_sms(self, monkeypatch):
+        messages = [
+            "【腾讯科技】登录提醒，请勿转发",
+            "【腾讯科技】登录提醒，请勿转发",
+            "【腾讯科技】验证码444444，用于登录",
+        ]
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            return FakeResponse(messages.pop(0))
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = UOMsgProvider("tok", default_keyword="腾讯")
+
+        assert provider.get_code_after("16512345678", timeout=5) == "444444"
+
+
+class TestEOMsgProvider:
+    def test_get_number_uses_eomsg_endpoint_and_provider_key(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            code = (params or {}).get("code")
+            if code == "getPhone":
+                return FakeResponse("16512345678")
+            if code == "release":
+                return FakeResponse("释放成功")
+            raise AssertionError(f"unexpected code: {code}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = EOMsgProvider("tok", default_keyword="腾讯")
+        activation = provider.get_number(service="qq")
+
+        assert activation.activation_id == "16512345678"
+        assert activation.metadata["provider"] == "eomsg"
+        assert calls[0][0] == "http://api.eomsg.com/zc/data.php"
+        assert calls[0][1]["keyWord"] == "腾讯"
+
+        provider.cancel(activation.activation_id)
+        assert calls[1][1] == {"code": "release", "token": "tok", "phone": "16512345678"}
+
+
+class TestFeiHuMsgProvider:
+    def test_get_number_get_code_release_and_blacklist(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            path = url.rsplit("api/sms/", 1)[-1]
+            if path == "login":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"token": "tok123"}})
+            if path == "getPhone":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"pid": 1001, "phone": "16512345678", "order_id": "order-1", "province": "广东"}})
+            if path == "getMessage":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"order_id": "order-1", "phone": "16512345678", "code": "654321", "message": "验证码 654321", "status": 3}})
+            if path in {"cancelRecv", "addBlackList"}:
+                return FakeResponse({"code": 200, "msg": "OK", "data": {}})
+            raise AssertionError(f"unexpected path: {path}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        stored_tokens = []
+        provider = FeiHuMsgProvider(
+            user="user1",
+            password="pass1",
+            pid="1001",
+            province="19",
+            poll_interval=10,
+            token_store=stored_tokens.append,
+        )
+        activation = provider.get_number(service="qq")
+
+        assert activation.activation_id == "order-1"
+        assert activation.phone_number == "16512345678"
+        assert activation.metadata["pid"] == "1001"
+        assert provider.get_code(activation.activation_id, timeout=5) == "654321"
+        assert provider.report_success(activation.activation_id) is True
+        assert calls[0][1] == {"user": "user1", "pass": "pass1"}
+        assert calls[1][1] == {"token": "tok123", "pid": "1001", "province": "19"}
+        assert calls[2][1] == {"token": "tok123", "order_id": "order-1"}
+        assert calls[3][1] == {"token": "tok123", "order_id": "order-1"}
+        assert calls[4][1] == {"token": "tok123", "order_id": "order-1"}
+        assert stored_tokens == ["tok123"]
+
+    def test_get_number_tries_multiple_pids_in_order(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            payload = dict(params or {})
+            calls.append(payload)
+            path = url.rsplit("api/sms/", 1)[-1]
+            if path == "getPhone" and payload.get("pid") == "1000":
+                return FakeResponse({"code": 500, "msg": "NO_NUMBERS", "data": {}})
+            if path == "getPhone" and payload.get("pid") == "1001":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {"pid": 1001, "phone": "16533333333", "order_id": "order-2"}})
+            if path == "cancelRecv":
+                return FakeResponse({"code": 200, "msg": "OK", "data": {}})
+            raise AssertionError(f"unexpected path: {path}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = FeiHuMsgProvider(token="tok123", pid="1000,1001")
+        activation = provider.get_number(service="qq")
+
+        assert activation.activation_id == "order-2"
+        assert activation.phone_number == "16533333333"
+        assert [call["pid"] for call in calls if "pid" in call] == ["1000", "1001"]
+
+        provider.cancel(activation.activation_id)
+
+    def test_get_code_ignores_single_digit_placeholder_code(self, monkeypatch):
+        responses = [
+            {"code": 200, "msg": "OK", "data": {"status": 1, "code": "0", "message": ""}},
+            {"code": 200, "msg": "OK", "data": {"status": 3, "code": "112233", "message": "验证码 112233"}},
+        ]
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            return FakeResponse(responses.pop(0))
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = FeiHuMsgProvider(token="tok123", pid="1001", poll_interval=10)
+        provider._activations["order-1"] = {"pid": "1001", "phone": "16512345678", "order_id": "order-1"}
+
+        assert provider.get_code("order-1", timeout=5) == "112233"
+
+
+class TestHaoZhuMaProvider:
+    def test_get_number_get_code_release_and_blacklist(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append((url, dict(params or {}), timeout, proxies))
+            api = (params or {}).get("api")
+            if api == "login":
+                return FakeResponse({"code": "0", "msg": "success", "token": "tok123"})
+            if api == "getPhone":
+                return FakeResponse({"code": "0", "sid": "1000", "phone": "16512345678", "country_code": "cn"})
+            if api == "getMessage":
+                return FakeResponse({"code": "0", "sms": "【腾讯】验证码为：654321", "yzm": "654321"})
+            if api == "cancelRecv":
+                return FakeResponse({"code": "0", "msg": "释放成功"})
+            if api == "addBlacklist":
+                return FakeResponse({"code": "0", "msg": "success"})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        stored_tokens = []
+        provider = HaoZhuMaProvider(
+            user="user1",
+            password="pass1",
+            sid="1000",
+            province="44",
+            poll_interval=1,
+            token_store=stored_tokens.append,
+        )
+        activation = provider.get_number(service="qq")
+        assert activation.activation_id == "16512345678"
+        assert activation.metadata["sid"] == "1000"
+        assert provider.get_code(activation.activation_id, timeout=5) == "654321"
+        assert provider.report_success(activation.activation_id) is True
+        assert calls[0][1] == {"api": "login", "user": "user1", "pass": "pass1"}
+        assert calls[1][1] == {"api": "getPhone", "token": "tok123", "sid": "1000", "Province": "44"}
+        assert calls[2][1] == {"api": "getMessage", "token": "tok123", "sid": "1000", "phone": "16512345678"}
+        assert calls[3][1] == {"api": "cancelRecv", "token": "tok123", "sid": "1000", "phone": "16512345678"}
+        assert calls[4][1] == {"api": "addBlacklist", "token": "tok123", "sid": "1000", "phone": "16512345678"}
+        assert len([call for call in calls if call[1]["api"] == "login"]) == 1
+        assert stored_tokens == ["tok123"]
+        provider.cancel(activation.activation_id)
+        assert len([call for call in calls if call[1]["api"] == "cancelRecv"]) == 1
+
+    def test_get_number_uses_batch_param_and_skips_active_candidate(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            api = (params or {}).get("api")
+            if api == "getPhone" and len([call for call in calls if call["api"] == "getPhone"]) == 1:
+                return FakeResponse({"code": "0", "sid": "1000", "phone": "16511111111"})
+            if api == "getPhone":
+                return FakeResponse({"code": "0", "sid": "1000", "phone": ["16511111111", "16522222222"]})
+            if api in {"cancelRecv", "addBlacklist"}:
+                return FakeResponse({"code": "0", "msg": "ok"})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider_a = HaoZhuMaProvider(token="tok123", sid="1000", batch_size=5)
+        provider_b = HaoZhuMaProvider(token="tok123", sid="1000", batch_size=5)
+        activation_a = provider_a.get_number(service="qq")
+        activation_b = provider_b.get_number(service="qq")
+
+        assert activation_a.phone_number == "16511111111"
+        assert activation_b.phone_number == "16522222222"
+        get_phone_calls = [call for call in calls if call["api"] == "getPhone"]
+        assert get_phone_calls[0]["num"] == "5"
+        assert get_phone_calls[1]["num"] == "5"
+
+        provider_a.cancel(activation_a.activation_id)
+        provider_b.cancel(activation_b.activation_id)
+
+    def test_get_number_tries_multiple_sids_in_order(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            payload = dict(params or {})
+            calls.append(payload)
+            if payload.get("api") == "getPhone" and payload.get("sid") == "1000":
+                return FakeResponse({"code": "-1", "msg": "NO_NUMBERS"})
+            if payload.get("api") == "getPhone" and payload.get("sid") == "1001":
+                return FakeResponse({"code": "0", "sid": "1001", "phone": "16533333333"})
+            if payload.get("api") in {"cancelRecv", "addBlacklist"}:
+                return FakeResponse({"code": "0", "msg": "ok"})
+            raise AssertionError(f"unexpected payload: {payload}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        provider = HaoZhuMaProvider(token="tok123", sid="1000, 1001")
+        activation = provider.get_number(service="qq")
+
+        assert activation.phone_number == "16533333333"
+        assert activation.metadata["sid"] == "1001"
+        assert [call["sid"] for call in calls if call["api"] == "getPhone"] == ["1000", "1001"]
+
+        provider.cancel(activation.activation_id)
+
+    def test_cached_token_is_refreshed_once_when_rejected(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            api = (params or {}).get("api")
+            if api == "getSummary" and (params or {}).get("token") == "stale-token":
+                return FakeResponse({"code": "-1", "msg": "token invalid"})
+            if api == "login":
+                return FakeResponse({"code": "0", "msg": "success", "token": "fresh-token"})
+            if api == "getSummary":
+                return FakeResponse({"code": "0", "money": "36.00", "num": 50})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        stored_tokens = []
+
+        provider = HaoZhuMaProvider(
+            user="user1",
+            password="pass1",
+            token="stale-token",
+            sid="1000",
+            token_store=stored_tokens.append,
+        )
+
+        assert provider.get_balance() == 36.0
+        assert [call["api"] for call in calls] == ["getSummary", "login", "getSummary"]
+        assert calls[0]["token"] == "stale-token"
+        assert calls[2]["token"] == "fresh-token"
+        assert stored_tokens == ["fresh-token"]
+
+    def test_factory_persists_login_token_to_provider_setting(self, monkeypatch):
+        from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            api = (params or {}).get("api")
+            if api == "login":
+                return FakeResponse({"code": "0", "msg": "success", "token": "persisted-token"})
+            if api == "getSummary":
+                return FakeResponse({"code": "0", "money": "36.00", "num": 50})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+
+        repo = ProviderSettingsRepository()
+        repo.save(
+            setting_id=None,
+            provider_type="sms",
+            provider_key="haozhuma_api",
+            display_name="HaoZhuMa",
+            auth_mode="password",
+            enabled=True,
+            is_default=True,
+            config={"haozhuma_sid": "1000"},
+            auth={"haozhuma_user": "user1", "haozhuma_password": "pass1"},
+            metadata={},
+        )
+        settings = repo.resolve_runtime_settings("sms", "haozhuma_api", {})
+
+        provider = create_sms_provider("haozhuma_api", settings)
+        assert provider.get_balance() == 36.0
+
+        saved = repo.get_by_key("sms", "haozhuma_api")
+        assert saved is not None
+        assert saved.get_auth()["haozhuma_cached_token"] == "persisted-token"
+
+    def test_timeout_releases_and_blacklists(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            api = (params or {}).get("api")
+            if api == "getMessage":
+                return FakeResponse({"code": "0", "sms": "", "yzm": ""})
+            return FakeResponse({"code": "0", "msg": "ok"})
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = HaoZhuMaProvider(user="user1", password="pass1", token="tok123", sid="1000", poll_interval=1)
+        provider._activation_sids["16512345678"] = "1000"
+
+        assert provider.get_code("16512345678", timeout=0) == ""
+        assert [call["api"] for call in calls] == ["cancelRecv", "addBlacklist"]
+
+    def test_get_message_wait_response_is_polled_not_failed(self, monkeypatch):
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+                self.text = str(data)
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return dict(self._data)
+
+        def fake_get(url, params=None, timeout=20, proxies=None):
+            calls.append(dict(params or {}))
+            api = (params or {}).get("api")
+            if api == "getMessage" and len(calls) == 1:
+                return FakeResponse({"code": "-1", "msg": "等待"})
+            if api == "getMessage":
+                return FakeResponse({"code": "0", "sms": "【腾讯】验证码为：112233", "yzm": "112233"})
+            raise AssertionError(f"unexpected api: {api}")
+
+        monkeypatch.setattr("core.base_sms.requests.get", fake_get)
+        monkeypatch.setattr("core.base_sms.time.sleep", lambda seconds: None)
+
+        provider = HaoZhuMaProvider(user="user1", password="pass1", token="tok123", sid="1000", poll_interval=1)
+        provider._activation_sids["16512345678"] = "1000"
+
+        assert provider.get_code("16512345678", timeout=5) == "112233"
+        assert [call["api"] for call in calls] == ["getMessage", "getMessage"]
 
 
 class TestCreatePhoneCallbacks:

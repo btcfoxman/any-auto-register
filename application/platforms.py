@@ -7,11 +7,13 @@ EXECUTOR_LABELS = {
     "protocol": "协议模式",
     "headless": "后台浏览器自动",
     "headed": "可视浏览器自动",
+    "manual_assisted": "人工辅助",
 }
 
 IDENTITY_MODE_LABELS = {
     "mailbox": "系统邮箱",
     "oauth_browser": "第三方账号",
+    "manual_phone": "手机号（人工发送短信）",
 }
 
 OAUTH_PROVIDER_LABELS = {

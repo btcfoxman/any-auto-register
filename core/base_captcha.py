@@ -8,6 +8,10 @@ class BaseCaptcha(ABC):
         """返回 Turnstile token"""
         ...
 
+    def solve_recaptcha(self, page_url: str, site_key: str, *, enterprise: bool = False, action: str = "") -> str:
+        """返回 reCAPTCHA token"""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support reCAPTCHA")
+
     @abstractmethod
     def solve_image(self, image_b64: str) -> str:
         """返回图片验证码文字"""
@@ -83,7 +87,10 @@ def create_captcha_solver(provider_key: str, extra: dict | None = None) -> BaseC
     driver_type = (definition.driver_type if definition else key).lower()
 
     if driver_type == "local_solver":
-        return LocalSolverCaptcha(str(merged.get("solver_url", "") or ""))
+        return LocalSolverCaptcha(
+            str(merged.get("solver_url", "") or ""),
+            proxy_url=str(merged.get("proxy") or merged.get("proxy_url") or merged.get("proxyUrl") or ""),
+        )
     if driver_type == "yescaptcha_api":
         client_key = str(merged.get("yescaptcha_key", "") or "")
         if not client_key:

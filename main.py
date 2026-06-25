@@ -44,8 +44,10 @@ from api.account_checks import router as account_checks_router
 from api.accounts import router as accounts_router
 from api.actions import router as actions_router
 from api.auth import router as auth_router
+from api.browser import router as browser_router
 from api.config import router as config_router
 from core.auth import AuthMiddleware
+from core.cors import PrivateNetworkAccessMiddleware
 from api.health import router as health_router
 from api.lifecycle import router as lifecycle_router
 from api.platform_capabilities import router as platform_capabilities_router
@@ -76,6 +78,14 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     from services.task_runtime import task_runtime
     task_runtime.start()
+    from services.lingya_keepalive import lingya_keepalive_worker
+    lingya_keepalive_worker.start()
+    from services.freebeat_daily_signin import freebeat_daily_signin_worker
+    freebeat_daily_signin_worker.start()
+    from services.quickframe_keepalive import quickframe_keepalive_worker
+    quickframe_keepalive_worker.start()
+    from services.imgs_weryai_keepalive import imgs_weryai_keepalive_worker
+    imgs_weryai_keepalive_worker.start()
     from services.solver_manager import start_async
     start_async()
     from core.lifecycle import lifecycle_manager
@@ -87,6 +97,14 @@ async def lifespan(app: FastAPI):
     _scheduler.stop()
     from services.task_runtime import task_runtime as _task_runtime
     _task_runtime.stop()
+    from services.lingya_keepalive import lingya_keepalive_worker as _lingya_keepalive_worker
+    _lingya_keepalive_worker.stop()
+    from services.freebeat_daily_signin import freebeat_daily_signin_worker as _freebeat_daily_signin_worker
+    _freebeat_daily_signin_worker.stop()
+    from services.quickframe_keepalive import quickframe_keepalive_worker as _quickframe_keepalive_worker
+    _quickframe_keepalive_worker.stop()
+    from services.imgs_weryai_keepalive import imgs_weryai_keepalive_worker as _imgs_weryai_keepalive_worker
+    _imgs_weryai_keepalive_worker.stop()
     from services.solver_manager import stop
     stop()
 
@@ -100,11 +118,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PrivateNetworkAccessMiddleware)
 
 app.include_router(accounts_router, prefix="/api")
 app.include_router(account_checks_router, prefix="/api")
 app.include_router(actions_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(browser_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
 app.include_router(lifecycle_router, prefix="/api")

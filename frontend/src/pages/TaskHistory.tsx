@@ -1,10 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type KeyboardEvent } from 'react'
 import { getPlatforms } from '@/lib/app-data'
 import { apiFetch } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { TaskLogPanel } from '@/components/tasks/TaskLogPanel'
 import { getTaskStatusText, TASK_STATUS_VARIANTS } from '@/lib/tasks'
-import { RefreshCw, Activity, CheckCircle2, AlertTriangle, Clock3, ChevronDown } from 'lucide-react'
+import { RefreshCw, Activity, CheckCircle2, AlertTriangle, Clock3, ChevronDown, FileText, X } from 'lucide-react'
+
+type PlatformOption = {
+  name: string
+  display_name: string
+}
+
+type TaskItem = {
+  id: string
+  task_id?: string
+  type?: string
+  platform?: string
+  status: string
+  progress?: string
+  success?: number
+  error_count?: number
+  error?: string
+  created_at?: string | null
+}
+
+type TasksListResponse = {
+  items?: TaskItem[]
+}
 
 function shortId(id: string) {
   if (!id) return '-'
@@ -32,34 +55,35 @@ function formatError(error: string | null | undefined): string {
 }
 
 export default function TaskHistory() {
-  const [tasks, setTasks] = useState<any[]>([])
+  const [tasks, setTasks] = useState<TaskItem[]>([])
   const [platform, setPlatform] = useState('')
   const [status, setStatus] = useState('')
-  const [platforms, setPlatforms] = useState<any[]>([])
+  const [platforms, setPlatforms] = useState<PlatformOption[]>([])
   const [loading, setLoading] = useState(false)
+  const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams({ page: '1', page_size: '50' })
       if (platform) params.set('platform', platform)
       if (status) params.set('status', status)
-      const data = await apiFetch(`/tasks?${params}`)
-      setTasks(data.items || [])
+      const data = await apiFetch(`/tasks?${params}`) as TasksListResponse
+      setTasks(Array.isArray(data.items) ? data.items : [])
     } finally {
       setLoading(false)
     }
-  }
+  }, [platform, status])
 
   useEffect(() => {
     getPlatforms()
-      .then((data) => setPlatforms(data || []))
+      .then((data) => setPlatforms(Array.isArray(data) ? data as PlatformOption[] : []))
       .catch(() => setPlatforms([]))
   }, [])
 
   useEffect(() => {
     load()
-  }, [platform, status])
+  }, [load])
 
   const succeeded = tasks.filter((t) => t.status === 'succeeded').length
   const failed = tasks.filter((t) => t.status === 'failed').length
@@ -73,6 +97,24 @@ export default function TaskHistory() {
     { label: '失败', value: failed, icon: AlertTriangle, tone: 'text-red-500' },
     { label: '进行中', value: running, icon: Clock3, tone: 'text-amber-500' },
   ]
+
+  const openTask = (task: TaskItem) => {
+    setSelectedTask(task)
+  }
+
+  const handleTaskKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, task: TaskItem) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      openTask(task)
+    }
+  }
+
+  const handleTaskDone = (taskId: string, nextStatus: string) => {
+    setTasks(prev => prev.map(item => item.id === taskId ? { ...item, status: nextStatus } : item))
+    setSelectedTask((current) =>
+      current?.id === taskId ? { ...current, status: nextStatus } : current
+    )
+  }
 
   return (
     <div className="space-y-5">
@@ -116,7 +158,7 @@ export default function TaskHistory() {
                 className="h-8 appearance-none rounded-md border border-[var(--border)] bg-[var(--bg-input)] pl-3 pr-7 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] focus:border-[var(--accent)]"
               >
                 <option value="">全部平台</option>
-                {platforms.map((item: any) => (
+                {platforms.map((item) => (
                   <option key={item.name} value={item.name}>{item.display_name}</option>
                 ))}
               </select>
@@ -176,7 +218,11 @@ export default function TaskHistory() {
                 return (
                   <tr
                     key={task.id}
-                    className="border-b border-[var(--border)]/50 transition-colors hover:bg-[var(--bg-hover)]"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openTask(task)}
+                    onKeyDown={(event) => handleTaskKeyDown(event, task)}
+                    className="cursor-pointer border-b border-[var(--border)]/50 outline-none transition-colors hover:bg-[var(--bg-hover)] focus-visible:bg-[var(--bg-hover)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--accent)]"
                   >
                     <td className="whitespace-nowrap px-4 py-3 text-xs text-[var(--text-muted)]">
                       {task.created_at
@@ -190,12 +236,15 @@ export default function TaskHistory() {
                         : '-'}
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className="cursor-default font-mono text-xs text-[var(--text-muted)]"
-                        title={task.id}
-                      >
-                        {shortId(task.id)}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+                        <span
+                          className="font-mono text-xs text-[var(--text-muted)]"
+                          title={task.id}
+                        >
+                          {shortId(task.id)}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant="secondary">{task.platform || '-'}</Badge>
@@ -254,6 +303,70 @@ export default function TaskHistory() {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+      {selectedTask ? (
+        <TaskHistoryLogModal
+          task={selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onDone={(nextStatus) => handleTaskDone(selectedTask.id, nextStatus)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function TaskHistoryLogModal({
+  task,
+  onClose,
+  onDone,
+}: {
+  task: TaskItem
+  onClose: () => void
+  onDone: (status: string) => void
+}) {
+  const taskStatus = task.status || 'pending'
+
+  return (
+    <div className="dialog-backdrop" onClick={onClose}>
+      <div
+        className="dialog-panel flex w-[min(960px,calc(100vw-32px))] max-w-none flex-col overflow-hidden"
+        onClick={event => event.stopPropagation()}
+        style={{ maxHeight: '90vh' }}
+      >
+        <div className="relative overflow-hidden border-b border-[var(--border)] px-6 py-5">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_0%,rgba(9,182,162,0.18),transparent_34%),linear-gradient(90deg,rgba(255,255,255,0.04),transparent)]" />
+          <div className="relative flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="mb-2 inline-flex rounded-full border border-[var(--border)] bg-[var(--chip-bg)] px-3 py-1 text-[11px] tracking-[0.12em] text-[var(--text-muted)]">
+                {task.type || 'task'}
+              </div>
+              <h2 className="truncate text-lg font-semibold text-[var(--text-primary)]">执行日志</h2>
+              <p className="mt-1 truncate font-mono text-xs text-[var(--text-muted)]">{task.id}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">{task.platform || '-'}</Badge>
+              <Badge variant={TASK_STATUS_VARIANTS[taskStatus] || 'secondary'}>
+                {getTaskStatusText(taskStatus)}
+              </Badge>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-full border border-[var(--border)] bg-[var(--bg-hover)] p-2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                aria-label="关闭"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          <TaskLogPanel taskId={task.id} onDone={onDone} />
+        </div>
+        <div className="flex items-center justify-end border-t border-[var(--border)] px-6 py-3">
+          <Button variant="outline" size="sm" onClick={onClose}>
+            关闭
+          </Button>
         </div>
       </div>
     </div>
