@@ -93,6 +93,39 @@ def test_build_freebeat2api_payload_accepts_proxy_aliases():
     assert payload["proxy_url"] == "http://legacy-proxy.example:8080"
 
 
+def test_build_freebeat2api_payload_carries_latest_credits():
+    account = Account(
+        platform="freebeat",
+        email="user@example.com",
+        password="",
+        token="tok_123",
+        extra={
+            "account_overview": {
+                "total_credits": 1200,
+                "remaining_credits": "1200",
+                "free_credits": 900,
+                "boost_credits": 300,
+                "signed_today": True,
+                "last_daily_sign_in_status": "signed",
+            },
+            "credits": {"totalCredits": 1200, "free": 900, "boost": 300},
+            "signin": {"signedToday": True, "canSignIn": False},
+        },
+    )
+
+    payload = build_freebeat2api_payload(account)
+
+    assert payload["total_credits"] == 1200
+    assert payload["remaining_credits"] == "1200"
+    assert payload["free_credits"] == 900
+    assert payload["boost_credits"] == 300
+    assert payload["signed_today"] is True
+    assert payload["last_daily_sign_in_status"] == "signed"
+    assert payload["credits"] == {"totalCredits": 1200, "free": 900, "boost": 300}
+    assert payload["signin"] == {"signedToday": True, "canSignIn": False}
+    assert payload["account_overview"]["total_credits"] == 1200
+
+
 def test_freebeat2api_client_upserts_account_with_bearer_key():
     resp = Mock()
     resp.raise_for_status = Mock()

@@ -16,6 +16,7 @@ from platforms.freebeat.core import (
     FREEBEAT_FALLBACK_NEXT_ACTIONS,
     FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE,
     FreebeatClient,
+    _total_credits_from_state,
     _extract_login_payload,
 )
 from platforms.freebeat.plugin import FreebeatPlatform
@@ -441,6 +442,35 @@ def test_freebeat_daily_sign_in_submit_retries_transient_failure(monkeypatch):
 
     assert result["status"] == "signed"
     assert submit_calls == ["tok_123", "tok_123"]
+    assert sleep_calls == [0.25]
+
+
+def test_freebeat_fetch_account_state_after_reward_polls_until_credits_refresh(monkeypatch):
+    client = FreebeatClient(log_fn=lambda message: None)
+    states = [
+        {"credits": {"totalCredits": 1000}, "signin_status": {"signedToday": True}},
+        {"credits": {"totalCredits": 1200}, "signin_status": {"signedToday": True}},
+    ]
+    calls: list[tuple[str, float | None]] = []
+    sleep_calls: list[float] = []
+
+    def fake_fetch(token, *, timeout_seconds=None):
+        calls.append((token, timeout_seconds))
+        return states.pop(0)
+
+    monkeypatch.setattr(client, "fetch_account_state", fake_fetch)
+    monkeypatch.setattr("platforms.freebeat.core.time.sleep", sleep_calls.append)
+
+    result = client.fetch_account_state_after_reward(
+        "tok_123",
+        expected_min_total_credits=1200,
+        attempts=2,
+        interval_seconds=0.25,
+        timeout_seconds=3.0,
+    )
+
+    assert _total_credits_from_state(result) == 1200
+    assert calls == [("tok_123", 3.0), ("tok_123", 3.0)]
     assert sleep_calls == [0.25]
 
 
@@ -1086,6 +1116,7 @@ def test_freebeat_keepalive_sync_pushes_to_freebeat2api(monkeypatch):
 
 def test_freebeat_daily_sign_in_syncs_to_freebeat2api(monkeypatch):
     calls: list[tuple[bool, bool, bool, str]] = []
+    load_calls: list[dict] = []
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -1101,21 +1132,23 @@ def test_freebeat_daily_sign_in_syncs_to_freebeat2api(monkeypatch):
 
     monkeypatch.setattr("platforms.freebeat.plugin.FreebeatClient", FakeClient)
     monkeypatch.setattr("platforms.freebeat.plugin.sync_account_to_freebeat2api", fake_sync)
-    monkeypatch.setattr(
-        FreebeatPlatform,
-        "_load_state",
-        lambda self, account, **kwargs: {
+    def fake_load_state(self, account, **kwargs):
+        load_calls.append(dict(kwargs))
+        total = 1000 if len(load_calls) == 1 else 1200
+        return {
             "token": account.token,
             "access_token": account.token,
+            "credits": {"totalCredits": total},
             "summary": {
                 "valid": True,
                 "email": account.email,
                 "user_id": account.user_id,
                 "access_token": account.token,
-                "total_credits": 1200,
+                "total_credits": total,
             },
-        },
-    )
+        }
+
+    monkeypatch.setattr(FreebeatPlatform, "_load_state", fake_load_state)
 
     platform = FreebeatPlatform(RegisterConfig(executor_type="protocol"))
     account = Account(
@@ -1131,7 +1164,9 @@ def test_freebeat_daily_sign_in_syncs_to_freebeat2api(monkeypatch):
 
     assert result["ok"] is True
     assert result["data"]["daily_sign_in_status"] == "signed"
+    assert result["data"]["total_credits"] == 1200
     assert result["data"]["freebeat2api_synced"] is True
+    assert load_calls == [{}, {"expected_min_total_credits": 1200}]
     assert calls == [(False, True, True, "tok_123")]
 
 

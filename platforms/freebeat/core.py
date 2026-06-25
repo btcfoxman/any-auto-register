@@ -51,6 +51,9 @@ FREEBEAT_SEC_CH_UA = '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand"
 FREEBEAT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 FREEBEAT_ZH_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8"
 FREEBEAT_EN_ACCEPT_LANGUAGE = FREEBEAT_ACCEPT_LANGUAGE
+FREEBEAT_REWARD_REFRESH_ATTEMPTS = 4
+FREEBEAT_REWARD_REFRESH_INTERVAL_SECONDS = 1.0
+FREEBEAT_REWARD_REFRESH_TIMEOUT_SECONDS = 4.0
 
 DEFAULT_ONBOARDING_ANSWERS = [
     {"questionKey": "q1_describe_you", "options": ["content_creator"]},
@@ -304,6 +307,22 @@ def _boolish(value: Any) -> bool:
 
 def _credit_value(credits: dict[str, Any], key: str) -> int:
     return _safe_int(credits.get(key), 0)
+
+
+def _total_credits_from_state(state: dict[str, Any] | None) -> int | None:
+    if not isinstance(state, dict):
+        return None
+    candidates: list[Any] = []
+    credits = state.get("credits")
+    if isinstance(credits, dict):
+        candidates.extend((credits.get("totalCredits"), credits.get("total_credits")))
+    for container in (state.get("summary"), state.get("account_overview"), state):
+        if isinstance(container, dict):
+            candidates.extend((container.get("total_credits"), container.get("remaining_credits")))
+    for value in candidates:
+        if value not in (None, ""):
+            return _safe_int(value, 0)
+    return None
 
 
 def summarize_freebeat_account_state(state: dict[str, Any], *, fallback_email: str = "") -> dict[str, Any]:
@@ -900,6 +919,43 @@ class FreebeatClient:
         state.update(self.auth_state())
         return state
 
+    def fetch_account_state_after_reward(
+        self,
+        token: str,
+        *,
+        expected_min_total_credits: int | None = None,
+        attempts: int = FREEBEAT_REWARD_REFRESH_ATTEMPTS,
+        interval_seconds: float = FREEBEAT_REWARD_REFRESH_INTERVAL_SECONDS,
+        timeout_seconds: float | None = FREEBEAT_REWARD_REFRESH_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        expected_total = expected_min_total_credits if expected_min_total_credits is not None else None
+        total_attempts = max(1, int(attempts or 1))
+        wait_seconds = max(0.0, float(interval_seconds or 0))
+        last_state: dict[str, Any] | None = None
+        last_error: Exception | None = None
+        for attempt in range(1, total_attempts + 1):
+            try:
+                state = self.fetch_account_state(token, timeout_seconds=timeout_seconds)
+                last_state = state
+                current_total = _total_credits_from_state(state)
+                if expected_total is None or current_total is None or current_total >= expected_total:
+                    return state
+                if attempt < total_attempts:
+                    self.log(
+                        "Freebeat credits not refreshed yet: "
+                        f"{current_total}/{expected_total}, retrying ({attempt}/{total_attempts})"
+                    )
+            except Exception as exc:
+                last_error = exc
+                if attempt >= total_attempts:
+                    break
+                self.log(f"Freebeat credits refresh failed, retrying ({attempt}/{total_attempts}): {exc}")
+            if attempt < total_attempts and wait_seconds:
+                time.sleep(wait_seconds)
+        if last_state is not None:
+            return last_state
+        raise last_error or RuntimeError("Freebeat credits refresh failed")
+
 
 def load_freebeat_account_state(
     account: Any,
@@ -908,6 +964,7 @@ def load_freebeat_account_state(
     log_fn: Callable[[str], None] = print,
     force_refresh: bool = False,
     auto_sign_in: bool = False,
+    expected_min_total_credits: int | None = None,
 ) -> dict[str, Any]:
     context = extract_freebeat_account_context(account)
     client = FreebeatClient(proxy=proxy, log_fn=log_fn, cookie_header=context["cookies"])
@@ -916,9 +973,26 @@ def load_freebeat_account_state(
         raise RuntimeError("缺少 Freebeat token，无法查询账号状态")
 
     daily_result: dict[str, Any] | None = None
+    pre_sign_state: dict[str, Any] | None = None
     if auto_sign_in:
-        daily_result = client.daily_sign_in(token)
-    state = client.fetch_account_state(token)
+        before_status = None
+        try:
+            pre_sign_state = client.fetch_account_state(token, timeout_seconds=FREEBEAT_REWARD_REFRESH_TIMEOUT_SECONDS)
+            before_status = {"code": 0, "msg": "", "data": dict(pre_sign_state.get("signin_status") or {})}
+        except Exception:
+            pass
+        daily_result = client.daily_sign_in(token, before_status=before_status)
+        before_total = _total_credits_from_state(pre_sign_state)
+        reward_amount = _safe_int(daily_result.get("reward_amount"))
+        if daily_result.get("status") == "signed" and reward_amount > 0 and before_total is not None:
+            expected_min_total_credits = max(
+                _safe_int(expected_min_total_credits, before_total + reward_amount),
+                before_total + reward_amount,
+            )
+    state = client.fetch_account_state_after_reward(
+        token,
+        expected_min_total_credits=expected_min_total_credits,
+    )
     state.update(
         {
             "email": context["email"],

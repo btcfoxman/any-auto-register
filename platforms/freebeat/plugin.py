@@ -13,6 +13,8 @@ from platforms.freebeat.core import (
     FREEBEAT_DEFAULT_VERIFY_SOURCE,
     FREEBEAT_ONBOARDING_CODE,
     FreebeatClient,
+    _safe_int,
+    _total_credits_from_state,
     load_freebeat_account_state,
     partial_freebeat_account_state,
     summarize_freebeat_account_state,
@@ -218,6 +220,7 @@ class FreebeatPlatform(BasePlatform):
         *,
         force_refresh: bool = False,
         auto_sign_in: bool = False,
+        expected_min_total_credits: int | None = None,
     ) -> dict[str, Any]:
         return load_freebeat_account_state(
             account,
@@ -225,6 +228,7 @@ class FreebeatPlatform(BasePlatform):
             log_fn=self.log,
             force_refresh=force_refresh,
             auto_sign_in=auto_sign_in,
+            expected_min_total_credits=expected_min_total_credits,
         )
 
     def check_valid(self, account: Account) -> bool:
@@ -500,6 +504,7 @@ class FreebeatPlatform(BasePlatform):
 
         if action_id == "daily_sign_in":
             context_state = self._load_state(account)
+            before_total = _total_credits_from_state(context_state)
             token = str(context_state.get("token") or context_state.get("access_token") or account.token or "").strip()
             client = FreebeatClient(
                 proxy=self._proxy_for_account(account),
@@ -507,7 +512,13 @@ class FreebeatPlatform(BasePlatform):
                 cookie_header=str(context_state.get("cookie_header") or context_state.get("cookies") or ""),
             )
             daily = client.daily_sign_in(token)
-            state = self._load_state(account)
+            reward_amount = _safe_int(daily.get("reward_amount"))
+            expected_total = (
+                before_total + reward_amount
+                if daily.get("status") == "signed" and reward_amount > 0 and before_total is not None
+                else None
+            )
+            state = self._load_state(account, expected_min_total_credits=expected_total)
             data = dict(state.get("summary") or {})
             _attach_auth_state(data, state)
             data.update(
@@ -532,6 +543,7 @@ class FreebeatPlatform(BasePlatform):
 
         if action_id == "claim_questionnaire":
             context_state = self._load_state(account)
+            before_total = _total_credits_from_state(context_state)
             token = str(context_state.get("token") or context_state.get("access_token") or account.token or "").strip()
             client = FreebeatClient(
                 proxy=self._proxy_for_account(account),
@@ -539,7 +551,13 @@ class FreebeatPlatform(BasePlatform):
                 cookie_header=str(context_state.get("cookie_header") or context_state.get("cookies") or ""),
             )
             questionnaire = client.claim_questionnaire(token, questionnaire_code=FREEBEAT_ONBOARDING_CODE)
-            state = self._load_state(account)
+            credits_granted = _safe_int(questionnaire.get("credits_granted"))
+            expected_total = (
+                before_total + credits_granted
+                if questionnaire.get("status") == "claimed" and credits_granted > 0 and before_total is not None
+                else None
+            )
+            state = self._load_state(account, expected_min_total_credits=expected_total)
             data = dict(state.get("summary") or {})
             _attach_auth_state(data, state)
             data.update(

@@ -7,6 +7,8 @@ from typing import Any, Callable
 from platforms.freebeat.core import (
     FREEBEAT_DEFAULT_VERIFY_SOURCE,
     FreebeatClient,
+    _safe_int,
+    _total_credits_from_state,
     partial_freebeat_account_state,
     summarize_freebeat_account_state,
 )
@@ -53,6 +55,21 @@ def _signin_payload_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(signin_status, dict) and signin_status:
         return {"code": 0, "msg": "", "data": signin_status}
     return None
+
+
+def _fetch_account_state_after_rewards(
+    client: FreebeatClient,
+    token: str,
+    *,
+    expected_min_total_credits: int | None,
+) -> dict[str, Any]:
+    if hasattr(client, "fetch_account_state_after_reward"):
+        return client.fetch_account_state_after_reward(
+            token,
+            expected_min_total_credits=expected_min_total_credits,
+            timeout_seconds=FREEBEAT_POST_LOGIN_STATE_TIMEOUT_SECONDS,
+        )
+    return client.fetch_account_state(token, timeout_seconds=FREEBEAT_POST_LOGIN_STATE_TIMEOUT_SECONDS)
 
 
 class FreebeatProtocolMailboxWorker:
@@ -130,10 +147,14 @@ class FreebeatProtocolMailboxWorker:
             self.log(f"Freebeat 登录成功，但查询积分/状态失败，先保存账号: {exc}")
             self.log("Freebeat 登录后状态轮询失败不会跳过奖励，继续尝试问卷和每日签到")
 
+        expected_total = _total_credits_from_state(state)
         questionnaire: dict[str, Any] = {"status": "skipped"}
         if auto_questionnaire:
             try:
                 questionnaire = self.client.claim_questionnaire(token)
+                credits_granted = _safe_int(questionnaire.get("credits_granted"))
+                if questionnaire.get("status") == "claimed" and credits_granted > 0 and expected_total is not None:
+                    expected_total += credits_granted
                 self.log(f"Freebeat 问卷奖励状态: {questionnaire.get('status')} +{questionnaire.get('credits_granted', 0)}")
             except Exception as exc:
                 if questionnaire_required:
@@ -146,6 +167,9 @@ class FreebeatProtocolMailboxWorker:
                 if questionnaire.get("status") != "skipped" and FREEBEAT_REWARD_SETTLE_SECONDS:
                     time.sleep(FREEBEAT_REWARD_SETTLE_SECONDS)
                 daily_sign_in = self.client.daily_sign_in(token, before_status=_signin_payload_from_state(state))
+                reward_amount = _safe_int(daily_sign_in.get("reward_amount"))
+                if daily_sign_in.get("status") == "signed" and reward_amount > 0 and expected_total is not None:
+                    expected_total += reward_amount
                 self.log(f"Freebeat 每日签到状态: {daily_sign_in.get('status')} +{daily_sign_in.get('reward_amount', 0)}")
             except Exception as exc:
                 if daily_sign_in_required:
@@ -158,7 +182,11 @@ class FreebeatProtocolMailboxWorker:
             time.sleep(FREEBEAT_REWARD_SETTLE_SECONDS)
         if not state_partial or rewards_attempted:
             try:
-                state = self.client.fetch_account_state(token, timeout_seconds=FREEBEAT_POST_LOGIN_STATE_TIMEOUT_SECONDS)
+                state = _fetch_account_state_after_rewards(
+                    self.client,
+                    token,
+                    expected_min_total_credits=expected_total,
+                )
             except Exception as exc:
                 previous_state = dict(state or {})
                 state = partial_freebeat_account_state(token, client=self.client, error=exc)

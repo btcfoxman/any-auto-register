@@ -134,6 +134,13 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def _clamp_concurrency(value: Any, default: int = 1) -> int:
     return min(max(_as_int(value, default), 1), 10)
 
@@ -211,7 +218,7 @@ def build_freebeat2api_payload(
     if _as_bool(extra.get("freebeat_keepalive_disabled"), False) or _as_bool(extra.get("freebeat_retired"), False):
         auto_maintenance_enabled = False
 
-    return {
+    payload = {
         "name": name[:80],
         "token": token,
         "email": email,
@@ -232,6 +239,56 @@ def build_freebeat2api_payload(
         "enable_auto_maintenance": auto_maintenance_enabled,
         "max_concurrency": _clamp_concurrency(extra.get("freebeat2api_max_concurrency"), max_concurrency),
     }
+    for key in (
+        "total_credits",
+        "remaining_credits",
+        "free_credits",
+        "boost_credits",
+        "event_credits",
+        "membership_credits",
+        "signed_today",
+        "can_sign_in",
+        "last_daily_sign_in_status",
+        "daily_sign_in_status",
+        "daily_sign_in_at",
+        "reward_amount",
+        "last_keepalive_at",
+    ):
+        value = _first_present(extra.get(key))
+        if value is not None:
+            payload[key] = value
+    total_credits = _first_present(extra.get("total_credits"), extra.get("remaining_credits"))
+    if total_credits is not None:
+        payload["total_credits"] = total_credits
+        payload["remaining_credits"] = str(total_credits)
+    if isinstance(extra.get("credits"), dict):
+        payload["credits"] = extra.get("credits")
+    if isinstance(extra.get("signin"), dict):
+        payload["signin"] = extra.get("signin")
+    account_overview = extra.get("account_overview")
+    if isinstance(account_overview, dict):
+        payload["account_overview"] = {
+            key: value
+            for key, value in account_overview.items()
+            if key
+            in {
+                "total_credits",
+                "remaining_credits",
+                "free_credits",
+                "boost_credits",
+                "event_credits",
+                "membership_credits",
+                "signed_today",
+                "can_sign_in",
+                "last_daily_sign_in_status",
+                "daily_sign_in_status",
+                "daily_sign_in_at",
+                "reward_amount",
+                "last_keepalive_at",
+                "checked_at",
+            }
+        }
+    return payload
 
 
 def sync_account_to_freebeat2api(
