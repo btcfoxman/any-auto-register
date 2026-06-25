@@ -13,6 +13,7 @@ from platforms.freebeat.core import (
     FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE,
     FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE,
     FREEBEAT_DEFAULT_NEXT_ACTION,
+    FREEBEAT_FALLBACK_NEXT_ACTIONS,
     FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE,
     FreebeatClient,
     _extract_login_payload,
@@ -76,6 +77,8 @@ def test_freebeat_verify_email_code_uses_english_root_action_route_by_default():
     assert calls[0]["headers"]["referer"] == "https://freebeat.ai/"
     assert calls[0]["headers"]["accept-language"] == "en-US,en;q=0.9"
     assert calls[0]["headers"]["next-action"] == FREEBEAT_DEFAULT_NEXT_ACTION
+    assert calls[0]["headers"]["cache-control"] == "no-cache"
+    assert calls[0]["headers"]["pragma"] == "no-cache"
     assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
     assert calls[0]["headers"]["x-deployment-id"] == "dpl_test"
     assert calls[0]["data"] == '[{"email":"user@example.com","code":"123456"}]'
@@ -206,6 +209,47 @@ def test_freebeat_verify_email_code_falls_back_to_legacy_tw_after_default_and_zh
     ]
     assert calls[2]["headers"]["referer"] == "https://freebeat.ai/tw"
     assert calls[2]["headers"]["next-router-state-tree"] == FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE
+
+
+def test_freebeat_verify_email_code_retries_fallback_action_after_all_routes_miss():
+    calls: list[dict] = []
+
+    class Response404:
+        status_code = 404
+        text = "Server action not found."
+
+    class Response200:
+        status_code = 200
+        text = (
+            '2:"$Sreact.fragment"\n'
+            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
+            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
+        )
+
+    client = FreebeatClient(log_fn=lambda message: None, deployment_id="dpl_test")
+    client._warmup_frontend_session = lambda: None
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response200() if len(calls) == 4 else Response404()
+
+    client.s.post = fake_post
+
+    result = client.verify_email_code("user@example.com", "123456")
+
+    assert result["data"]["token"] == "tok_123"
+    assert [item["url"] for item in calls] == [
+        "https://freebeat.ai/",
+        "https://freebeat.ai/zh/ai-video-generator",
+        "https://freebeat.ai/tw",
+        "https://freebeat.ai/",
+    ]
+    assert [item["headers"]["next-action"] for item in calls] == [
+        FREEBEAT_DEFAULT_NEXT_ACTION,
+        FREEBEAT_DEFAULT_NEXT_ACTION,
+        FREEBEAT_DEFAULT_NEXT_ACTION,
+        FREEBEAT_FALLBACK_NEXT_ACTIONS[0],
+    ]
 
 
 def test_freebeat_authenticated_api_sends_current_frontend_token_headers():
