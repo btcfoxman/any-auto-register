@@ -77,11 +77,24 @@ jobs:
     name: Pull and Restart on LAN Runner
     needs: build-image
     runs-on: [self-hosted, linux, x64, any-auto-register]
+    env:
+      LAN_HTTP_PROXY: http://127.0.0.1:10809
+      LAN_SOCKS_PROXY: socks5://127.0.0.1:10808
+      LAN_NO_PROXY: localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Log in to GHCR
+        env:
+          HTTP_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          HTTPS_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          ALL_PROXY: ${{ env.LAN_SOCKS_PROXY }}
+          http_proxy: ${{ env.LAN_HTTP_PROXY }}
+          https_proxy: ${{ env.LAN_HTTP_PROXY }}
+          all_proxy: ${{ env.LAN_SOCKS_PROXY }}
+          NO_PROXY: ${{ env.LAN_NO_PROXY }}
+          no_proxy: ${{ env.LAN_NO_PROXY }}
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5; do
@@ -93,13 +106,17 @@ jobs:
           done
           echo "::warning::docker login failed after retries; deployment will try local image build fallback"
 
-      - name: Download image fallback artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.IMAGE_ARTIFACT }}
-          path: /tmp
-
-      - name: Pull image and restart service
+      - name: Pull image through GHCR
+        id: pull_image
+        env:
+          HTTP_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          HTTPS_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          ALL_PROXY: ${{ env.LAN_SOCKS_PROXY }}
+          http_proxy: ${{ env.LAN_HTTP_PROXY }}
+          https_proxy: ${{ env.LAN_HTTP_PROXY }}
+          all_proxy: ${{ env.LAN_SOCKS_PROXY }}
+          NO_PROXY: ${{ env.LAN_NO_PROXY }}
+          no_proxy: ${{ env.LAN_NO_PROXY }}
         run: |
           set -euo pipefail
           cd "${DEPLOY_PATH}"
@@ -117,7 +134,43 @@ jobs:
             done
             return 1
           }
-          if ! pull_service; then
+          if pull_service; then
+            echo "pulled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pulled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::docker compose pull failed after retries; deployment will download image artifact fallback"
+          fi
+
+      - name: Download image fallback artifact
+        if: steps.pull_image.outputs.pulled != 'true'
+        uses: actions/download-artifact@v4
+        env:
+          HTTP_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          HTTPS_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          ALL_PROXY: ${{ env.LAN_SOCKS_PROXY }}
+          http_proxy: ${{ env.LAN_HTTP_PROXY }}
+          https_proxy: ${{ env.LAN_HTTP_PROXY }}
+          all_proxy: ${{ env.LAN_SOCKS_PROXY }}
+          NO_PROXY: ${{ env.LAN_NO_PROXY }}
+          no_proxy: ${{ env.LAN_NO_PROXY }}
+        with:
+          name: ${{ env.IMAGE_ARTIFACT }}
+          path: /tmp
+
+      - name: Restart service
+        env:
+          HTTP_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          HTTPS_PROXY: ${{ env.LAN_HTTP_PROXY }}
+          ALL_PROXY: ${{ env.LAN_SOCKS_PROXY }}
+          http_proxy: ${{ env.LAN_HTTP_PROXY }}
+          https_proxy: ${{ env.LAN_HTTP_PROXY }}
+          all_proxy: ${{ env.LAN_SOCKS_PROXY }}
+          NO_PROXY: ${{ env.LAN_NO_PROXY }}
+          no_proxy: ${{ env.LAN_NO_PROXY }}
+        run: |
+          set -euo pipefail
+          cd "${DEPLOY_PATH}"
+          if [ "${{ steps.pull_image.outputs.pulled }}" != "true" ]; then
             echo "docker compose pull failed after retries; loading image artifact"
             gzip -dc "/tmp/${IMAGE_TAR}" | docker load
           fi
