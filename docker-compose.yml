@@ -1,5 +1,6 @@
 services:
   app:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-btcfoxman}/${IMAGE_NAME:-any-auto-register}:${IMAGE_TAG:-latest}
     build: .
     ports:
       - "8000:8000"   # FastAPI / Web UI
