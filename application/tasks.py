@@ -313,9 +313,8 @@ def append_task_event(task_id: str, message: str, *, event_type: str = "log", le
 
 def mark_incomplete_tasks_interrupted() -> None:
     with Session(engine) as session:
-        non_terminal = [TASK_STATUS_PENDING] + list(ACTIVE_TASK_STATUSES)
         tasks = session.exec(
-            select(TaskModel).where(TaskModel.status.in_(non_terminal))
+            select(TaskModel).where(TaskModel.status.in_(list(ACTIVE_TASK_STATUSES)))
         ).all()
         for task in tasks:
             task.status = TASK_STATUS_INTERRUPTED
@@ -331,6 +330,33 @@ def mark_incomplete_tasks_interrupted() -> None:
             event_type="state",
             level="warning",
         )
+
+
+def recover_orphaned_claimed_tasks(active_task_ids: set[str]) -> int:
+    """Return claimed tasks to the queue when the dispatcher lost their worker."""
+    active_task_ids = set(active_task_ids or set())
+    with Session(engine) as session:
+        tasks = session.exec(
+            select(TaskModel).where(TaskModel.status == TASK_STATUS_CLAIMED)
+        ).all()
+        recovered: list[str] = []
+        for task in tasks:
+            if task.id in active_task_ids:
+                continue
+            task.status = TASK_STATUS_PENDING
+            task.started_at = None
+            task.updated_at = _utcnow()
+            session.add(task)
+            recovered.append(task.id)
+        session.commit()
+    for task_id in recovered:
+        append_task_event(
+            task_id,
+            "任务调度器恢复了未启动的排队任务",
+            event_type="state",
+            level="warning",
+        )
+    return len(recovered)
 
 
 def request_cancel(task_id: str) -> Optional[dict[str, Any]]:

@@ -105,7 +105,7 @@ export function TaskLogPanel({
       }
     }
 
-    const es = new EventSource(`${API_BASE}/tasks/${taskId}/logs/stream`)
+    const es = new EventSource(`${API_BASE}/tasks/${taskId}/logs/stream`, { withCredentials: true })
     eventSourceRef.current = es
     es.onopen = () => {
       sseHealthyRef.current = true

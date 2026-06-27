@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -20,10 +20,19 @@ def auth_check():
 
 
 @router.post("/login")
-def auth_login(body: LoginRequest):
+def auth_login(body: LoginRequest, response: Response):
     password = os.environ.get("APP_PASSWORD", "").strip()
     if not password:
+        response.delete_cookie("_auth")
         return {"ok": True}
     if body.password == password:
+        response.set_cookie(
+            "_auth",
+            password,
+            max_age=60 * 60 * 24 * 30,
+            httponly=True,
+            samesite="lax",
+        )
         return {"ok": True, "token": password}
+    response.delete_cookie("_auth")
     return {"ok": False, "error": "密码错误"}
