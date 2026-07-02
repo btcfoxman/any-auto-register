@@ -366,6 +366,8 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
       items: [
         { key: 'imgs_weryai_keepalive_enabled', label: 'Enable keepalive', placeholder: 'true' },
         { key: 'imgs_weryai_heartbeat_interval_seconds', label: 'Heartbeat interval seconds', placeholder: '300' },
+        { key: 'imgs_weryai_daily_sign_in_enabled', label: 'Enable daily sign-in', placeholder: 'true' },
+        { key: 'imgs_weryai_daily_sign_in_day', label: 'Daily sign-in day override', placeholder: 'optional' },
       ],
     }, {
       section: 'Imgs2API',

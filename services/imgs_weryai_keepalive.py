@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlmodel import Session, select
@@ -103,15 +104,24 @@ class ImgsWeryaiKeepaliveWorker:
 
     def _run_for_accounts(self) -> None:
         runtime = PlatformRuntime()
+        config = self._config()
+        daily_sign_enabled = _as_bool(config.get("imgs_weryai_daily_sign_in_enabled"), True)
         for account_id in self._target_account_ids():
             if not self._try_lock_account(account_id):
                 continue
             try:
+                should_sign = daily_sign_enabled and self._daily_sign_due(account_id)
+                action_id = "daily_sign_in" if should_sign else "keepalive_sync"
+                params = {"force_refresh": "false"}
+                if should_sign:
+                    configured_day = str(config.get("imgs_weryai_daily_sign_in_day") or "").strip()
+                    if configured_day:
+                        params["day"] = configured_day
                 command = ActionExecutionCommand(
                     platform="imgs_weryai",
                     account_id=account_id,
-                    action_id="keepalive_sync",
-                    params={"force_refresh": "false"},
+                    action_id=action_id,
+                    params=params,
                 )
                 result = runtime.execute_action(command, log_fn=lambda message: print(f"[ImgsWeryaiKeepalive] {message}"))
                 if not getattr(result, "ok", False):
@@ -120,6 +130,29 @@ class ImgsWeryaiKeepaliveWorker:
                 print(f"[ImgsWeryaiKeepalive] account {account_id} failed: {exc}")
             finally:
                 self._unlock_account(account_id)
+
+    def _daily_sign_due(self, account_id: int) -> bool:
+        today = datetime.now(timezone.utc).date().isoformat()
+        try:
+            with Session(engine) as session:
+                graph = load_account_graphs(session, [account_id]).get(account_id, {})
+                overview = graph.get("overview") or {}
+                if _as_bool(overview.get("imgs_weryai_daily_sign_in_disabled"), False):
+                    return False
+                status = str(
+                    overview.get("daily_sign_in_status")
+                    or overview.get("last_daily_sign_in_status")
+                    or ""
+                ).strip().lower()
+                signed_date = str(overview.get("imgs_weryai_daily_sign_in_date") or "").strip()
+                if not signed_date:
+                    signed_at = str(overview.get("daily_sign_in_at") or "").strip()
+                    signed_date = signed_at[:10] if len(signed_at) >= 10 else ""
+                if signed_date == today and status in {"signed", "already_signed"}:
+                    return False
+                return True
+        except Exception:
+            return True
 
     def _try_lock_account(self, account_id: int) -> bool:
         with self._lock:

@@ -19,6 +19,7 @@ WERYAI_DEFAULT_APP_KEY = "20006012"
 WERYAI_DEFAULT_VER_CODE = "1.9.0"
 WERYAI_DEFAULT_LANG = "en"
 WERYAI_DEFAULT_CHANNEL = "official"
+WERYAI_DEFAULT_PRODUCT_ID = "327805"
 WERYAI_DEFAULT_IMPERSONATE = "chrome"
 WERYAI_IMPERSONATE_FALLBACKS = ("chrome", "chrome136", "chrome133a", "chrome131", "chrome124", "chrome120", "chrome110")
 WERYAI_DEFAULT_USER_AGENT = (
@@ -119,6 +120,11 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(float(str(value).strip()))
     except Exception:
         return default
+
+
+def normalize_sign_day(value: Any, default: int = 1) -> int:
+    day = safe_int(value, default)
+    return min(max(day, 1), 31)
 
 
 def random_df_id(length: int = 48) -> str:
@@ -230,6 +236,54 @@ def raise_weryai_api_error(data: Any, label: str) -> None:
     raise WeryAIAuthError(f"WeryAI {label} failed: {message}")
 
 
+def _weryai_api_ok(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return True
+    status = data.get("status")
+    success = data.get("success")
+    code = data.get("code")
+    return (status in (None, 0, 200) or str(status) in {"0", "200"}) and success is not False and code not in {"ERROR"}
+
+
+def summarize_weryai_sign_result(data: dict[str, Any], *, day: int) -> dict[str, Any]:
+    payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+    message = first_text(
+        payload.get("message"),
+        payload.get("msg"),
+        data.get("message"),
+        data.get("msg"),
+        data.get("desc"),
+    )
+    message_lower = message.lower()
+    already_signed = any(token in message_lower for token in ("already", "signed today", "repeat", "重复", "已签到"))
+    signed = _weryai_api_ok(data) and not already_signed
+    status = "already_signed" if already_signed else ("signed" if signed else "failed")
+    reward = first_text(
+        payload.get("reward"),
+        payload.get("reward_amount"),
+        payload.get("credits"),
+        payload.get("credit"),
+        payload.get("score"),
+        data.get("reward"),
+        data.get("credits"),
+        data.get("credit"),
+    )
+    next_day = normalize_sign_day(
+        first_text(payload.get("next_day"), payload.get("nextDay"), payload.get("sign_day"), payload.get("signDay")),
+        day + 1,
+    )
+    return {
+        "status": status,
+        "signed": signed,
+        "already_signed": already_signed,
+        "day": day,
+        "next_day": next_day,
+        "reward_amount": safe_float(reward, 0.0),
+        "message": message,
+        "raw": data,
+    }
+
+
 class WeryAIClient:
     def __init__(
         self,
@@ -334,6 +388,7 @@ class WeryAIClient:
         auth: bool = False,
         label: str = "request",
         timeout_seconds: float | None = None,
+        raise_api_errors: bool = True,
     ) -> dict[str, Any]:
         request_timeout = timeout_seconds if timeout_seconds is not None else 30
         response = None
@@ -362,7 +417,8 @@ class WeryAIClient:
         response.raise_for_status()
         data = response_json(response)
         if isinstance(data, dict):
-            raise_weryai_api_error(data, label)
+            if raise_api_errors:
+                raise_weryai_api_error(data, label)
             return data
         return {"data": data}
 
@@ -454,6 +510,39 @@ class WeryAIClient:
             label="credits balance",
             timeout_seconds=timeout_seconds,
         )
+
+    def daily_sign_in(
+        self,
+        *,
+        team_id: Any = "",
+        product_id: Any = "",
+        day: Any = 1,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        resolved_team_id = text(team_id)
+        resolved_product_id = text(product_id) or WERYAI_DEFAULT_PRODUCT_ID
+        sign_day = normalize_sign_day(day, 1)
+        body_product_id: Any = safe_int(resolved_product_id, 0)
+        if not body_product_id:
+            body_product_id = resolved_product_id
+        data = self._request_json(
+            "POST",
+            "/api/v1/auth/sign/everydaySign",
+            params=self.common_params(team_id=resolved_team_id, product_id=resolved_product_id),
+            body={
+                "day": sign_day,
+                "team_id": resolved_team_id,
+                "product_id": body_product_id,
+            },
+            auth=True,
+            label="daily sign-in",
+            timeout_seconds=timeout_seconds,
+            raise_api_errors=False,
+        )
+        result = summarize_weryai_sign_result(data, day=sign_day)
+        if result.get("status") == "failed":
+            raise_weryai_api_error(data, "daily sign-in")
+        return result
 
     def auth_state(self) -> dict[str, Any]:
         cookies = cookie_list_from_session(self.session)

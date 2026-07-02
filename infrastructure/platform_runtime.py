@@ -412,6 +412,15 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             "last_keepalive_at",
             "session_refreshed",
             "imgs2api_synced",
+            "daily_sign_in_status",
+            "last_daily_sign_in_status",
+            "daily_sign_in_at",
+            "imgs_weryai_daily_sign_in_date",
+            "imgs_weryai_daily_sign_in_day",
+            "imgs_weryai_daily_sign_in_next_day",
+            "imgs_weryai_daily_sign_signed",
+            "imgs_weryai_daily_sign_already_signed",
+            "reward_amount",
             "imgs_weryai_keepalive_disabled",
             "imgs_weryai_keepalive_state",
             "imgs_weryai_keepalive_disabled_reason",
@@ -424,6 +433,8 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
                 overview[key] = data.get(key)
         if isinstance(data.get("credits"), dict):
             overview["credits"] = data.get("credits")
+        if isinstance(data.get("daily_sign_in"), dict):
+            overview["daily_sign_in"] = data.get("daily_sign_in")
         if data.get("email"):
             overview["remote_email"] = str(data.get("email") or "")
         balance = data.get("remaining_credits")
@@ -443,6 +454,8 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
             overview["chips"].append("session refreshed")
         if data.get("imgs2api_synced"):
             overview["chips"].append("imgs2api synced")
+        if data.get("daily_sign_in_status") or data.get("last_daily_sign_in_status"):
+            overview["chips"].append(f"sign-in {data.get('daily_sign_in_status') or data.get('last_daily_sign_in_status')}")
         if data.get("imgs_weryai_keepalive_disabled") is True:
             overview["chips"].append("keepalive stopped")
         elif data.get("imgs_weryai_keepalive_disabled") is False:

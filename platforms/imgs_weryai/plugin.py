@@ -11,9 +11,11 @@ from core.imgs2api_sync import sync_account_to_imgs2api
 from core.registration import OtpSpec, ProtocolMailboxAdapter, RegistrationResult
 from core.registry import register
 from platforms.imgs_weryai.core import (
+    WERYAI_DEFAULT_PRODUCT_ID,
     WeryAIClient,
     extract_weryai_account_context,
     load_weryai_account_state,
+    normalize_sign_day,
     summarize_weryai_account_state,
     text,
 )
@@ -231,6 +233,15 @@ class ImgsWeryaiPlatform(BasePlatform):
             {"id": "get_account_state", "label": "Query account state", "params": []},
             {"id": "query_state", "label": "Query account state", "params": []},
             {
+                "id": "daily_sign_in",
+                "label": "Daily sign-in and sync",
+                "params": [
+                    {"key": "day", "label": "sign day(optional)", "type": "text"},
+                    {"key": "product_id", "label": "product id(default 327805)", "type": "text"},
+                    {"key": "proxy", "label": "proxy(optional, defaults to account proxy)", "type": "text"},
+                ],
+            },
+            {
                 "id": "keepalive_sync",
                 "label": "Refresh balance and sync",
                 "params": [
@@ -378,6 +389,56 @@ class ImgsWeryaiPlatform(BasePlatform):
             data["imgs2api"] = sync_result
         return {"ok": True, "data": data}
 
+    def _daily_sign_in(self, account: Account, params: dict[str, Any]) -> dict[str, Any]:
+        context_state = self._load_state(account, force_refresh=_truthy(params.get("force_refresh"), False))
+        context_summary = dict(context_state.get("summary") or {})
+        context_overview = dict(context_summary.get("account_overview") or context_summary)
+        team_id = text(params.get("team_id") or params.get("teamId") or context_state.get("team_id") or context_overview.get("team_id"))
+        product_id = text(
+            params.get("product_id")
+            or params.get("productId")
+            or context_state.get("product_id")
+            or context_overview.get("product_id")
+            or WERYAI_DEFAULT_PRODUCT_ID
+        )
+        previous_day = context_overview.get("imgs_weryai_daily_sign_in_next_day") or context_overview.get("imgs_weryai_daily_sign_in_day")
+        day = normalize_sign_day(params.get("day") or previous_day or 1, 1)
+        proxy = self._proxy_for_account(account, params)
+        client = self._client_for_account(account, params, proxy=proxy)
+        daily = client.daily_sign_in(team_id=team_id, product_id=product_id, day=day)
+        state = client.fetch_account_state(
+            access_token=text(context_state.get("access_token") or context_state.get("authorization") or account.token or client.access_token),
+            team_id=team_id,
+            product_id=product_id,
+        )
+        state["force_refresh"] = True
+        data = dict(state.get("summary") or {})
+        _attach_auth_state(data, state)
+        data.update(
+            {
+                "daily_sign_in_status": daily.get("status", ""),
+                "last_daily_sign_in_status": daily.get("status", ""),
+                "daily_sign_in_at": _utcnow_iso(),
+                "imgs_weryai_daily_sign_in_date": _utcnow_iso()[:10],
+                "imgs_weryai_daily_sign_in_day": daily.get("day", day),
+                "imgs_weryai_daily_sign_in_next_day": daily.get("next_day", day + 1),
+                "imgs_weryai_daily_sign_signed": bool(daily.get("signed")),
+                "imgs_weryai_daily_sign_already_signed": bool(daily.get("already_signed")),
+                "reward_amount": daily.get("reward_amount", 0),
+                "daily_sign_in": daily,
+                "message": "ImgsWeryai daily sign-in completed; balance refreshed and synced to Imgs2API",
+            }
+        )
+        sync_result = sync_account_to_imgs2api(
+            _account_with_extra(account, {**dict(account.extra or {}), **_with_sync_proxy(account, params, {**state, **data}, proxy)}),
+            log_fn=self.log,
+            balance=True,
+        )
+        data["imgs2api_synced"] = bool(sync_result)
+        if sync_result:
+            data["imgs2api"] = sync_result
+        return {"ok": True, "data": data}
+
     def _handle_keepalive_preference(self, account: Account, params: dict | None = None, *, disabled: bool) -> dict:
         params = dict(params or {})
         now = _utcnow_iso()
@@ -446,6 +507,9 @@ class ImgsWeryaiPlatform(BasePlatform):
 
         if action_id == "resume_keepalive":
             return self._handle_keepalive_preference(account, params, disabled=False)
+
+        if action_id == "daily_sign_in":
+            return self._daily_sign_in(account, params)
 
         if action_id == "send_login_code":
             email = text(params.get("email") or account.email)
