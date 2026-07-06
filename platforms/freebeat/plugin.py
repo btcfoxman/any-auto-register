@@ -138,6 +138,7 @@ class FreebeatPlatform(BasePlatform):
     version = "1.0.0"
     supported_executors = ["protocol"]
     supported_identity_modes = ["mailbox"]
+    protocol_captcha_order = ("local_solver", "twocaptcha_api", "yescaptcha_api")
 
     def __init__(self, config: RegisterConfig = None, mailbox: BaseMailbox = None):
         super().__init__(config)
@@ -188,9 +189,14 @@ class FreebeatPlatform(BasePlatform):
             from platforms.freebeat.protocol_mailbox import FreebeatProtocolMailboxWorker
 
             extra = dict(ctx.extra or {})
+            turnstile_solver_enabled = _truthy(
+                _runtime_value(extra, "freebeat_send_code_turnstile_solver_enabled", True),
+                True,
+            )
             return FreebeatProtocolMailboxWorker(
                 proxy=ctx.proxy,
                 log_fn=ctx.log,
+                turnstile_solver=self.solve_turnstile_with_fallback if turnstile_solver_enabled else None,
                 next_action=extra.get("freebeat_next_action"),
                 next_router_state_tree=extra.get("freebeat_next_router_state_tree"),
                 frontend_path=_frontend_path_value(extra),
@@ -200,6 +206,50 @@ class FreebeatPlatform(BasePlatform):
                 browser_send_code=_truthy(_runtime_value(extra, "freebeat_send_code_browser_enabled", True), True),
                 browser_send_code_headless=_truthy(_runtime_value(extra, "freebeat_send_code_browser_headless", True), True),
                 browser_send_code_required=_truthy(_runtime_value(extra, "freebeat_send_code_browser_required", False), False),
+                browser_send_code_allow_protocol_fallback=_truthy(
+                    _runtime_value(extra, "freebeat_send_code_protocol_fallback_enabled", False),
+                    False,
+                ),
+                browser_send_code_engine=str(
+                    _runtime_value(extra, "freebeat_send_code_browser_engine", "playwright") or "playwright"
+                ),
+                browser_send_code_channel=str(_runtime_value(extra, "freebeat_send_code_browser_channel", "") or ""),
+                browser_send_code_cdp_url=str(
+                    _runtime_value(extra, "freebeat_send_code_browser_cdp_url", "") or ""
+                ),
+                browser_send_code_user_data_dir=str(
+                    _runtime_value(extra, "freebeat_send_code_browser_user_data_dir", "") or ""
+                ),
+                browser_send_code_stealth=_truthy(
+                    _runtime_value(extra, "freebeat_send_code_stealth_enabled", True),
+                    True,
+                ),
+                browser_send_code_humanize=_truthy(
+                    _runtime_value(extra, "freebeat_send_code_humanize_enabled", True),
+                    True,
+                ),
+                browser_send_code_turnstile_click=_truthy(
+                    _runtime_value(extra, "freebeat_send_code_turnstile_click_enabled", True),
+                    True,
+                ),
+                browser_send_code_turnstile_wait_seconds=_runtime_float(
+                    extra,
+                    "freebeat_send_code_turnstile_wait_seconds",
+                    30,
+                ),
+                browser_send_code_accept_language=str(
+                    _runtime_value(extra, "freebeat_send_code_browser_accept_language", "en-US,en;q=0.9")
+                    or "en-US,en;q=0.9"
+                ),
+                browser_send_code_locale=str(_runtime_value(extra, "freebeat_send_code_browser_locale", "en-US") or "en-US"),
+                browser_send_code_timezone=str(
+                    _runtime_value(extra, "freebeat_send_code_browser_timezone", "America/New_York")
+                    or "America/New_York"
+                ),
+                browser_send_code_user_agent=str(
+                    _runtime_value(extra, "freebeat_send_code_browser_user_agent", "")
+                    or ""
+                ),
                 browser_send_code_timeout_seconds=_runtime_float(extra, "freebeat_send_code_browser_timeout_seconds", 120),
             )
 

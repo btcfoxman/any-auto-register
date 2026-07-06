@@ -412,7 +412,16 @@ class BasePlatform(ABC):
 
             start()
 
-    def solve_turnstile_with_fallback(self, page_url: str, site_key: str) -> str:
+    def solve_turnstile_with_fallback(
+        self,
+        page_url: str,
+        site_key: str,
+        *,
+        action: str = "",
+        cdata: str = "",
+        pagedata: str = "",
+        proxy: str = "",
+    ) -> str:
         errors: list[str] = []
         candidates = self._get_captcha_solver_candidates()
         if not candidates:
@@ -422,7 +431,20 @@ class BasePlatform(ABC):
             try:
                 self.log(f"尝试 Turnstile provider: {provider_key}")
                 solver = self._make_captcha(provider_key=provider_key)
-                token = str(solver.solve_turnstile(page_url, site_key) or "").strip()
+                try:
+                    raw_token = solver.solve_turnstile(
+                        page_url,
+                        site_key,
+                        action=action,
+                        cdata=cdata,
+                        pagedata=pagedata,
+                        proxy=proxy,
+                    )
+                except TypeError:
+                    if action or cdata or pagedata or proxy:
+                        raise
+                    raw_token = solver.solve_turnstile(page_url, site_key)
+                token = str(raw_token or "").strip()
                 if token:
                     return token
                 raise RuntimeError("未返回有效 token")

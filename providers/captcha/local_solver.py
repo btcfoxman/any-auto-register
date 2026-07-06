@@ -28,11 +28,27 @@ class LocalSolverCaptcha(BaseCaptcha):
             return f"socks5://{proxy.split('://', 1)[1]}"
         return proxy
 
-    def solve_turnstile(self, page_url: str, site_key: str) -> str:
+    def solve_turnstile(
+        self,
+        page_url: str,
+        site_key: str,
+        *,
+        action: str = "",
+        cdata: str = "",
+        pagedata: str = "",
+        proxy: str = "",
+    ) -> str:
         import requests, time
         params = {"url": page_url, "sitekey": site_key}
-        if self.proxy_url:
-            params["proxy"] = self.proxy_url
+        if action:
+            params["action"] = str(action)
+        if cdata:
+            params["cdata"] = str(cdata)
+        if pagedata:
+            params["pagedata"] = str(pagedata)
+        proxy_url = self._normalize_proxy_url(proxy) or self.proxy_url
+        if proxy_url:
+            params["proxy"] = proxy_url
         # 提交任务
         r = requests.get(
             f"{self.solver_url}/turnstile",

@@ -11,7 +11,16 @@ class ManualCaptcha(BaseCaptcha):
     def from_config(cls, config: dict) -> 'ManualCaptcha':
         return cls()
 
-    def solve_turnstile(self, page_url: str, site_key: str) -> str:
+    def solve_turnstile(
+        self,
+        page_url: str,
+        site_key: str,
+        *,
+        action: str = "",
+        cdata: str = "",
+        pagedata: str = "",
+        proxy: str = "",
+    ) -> str:
         return input(f"请手动获取 Turnstile token ({page_url}): ").strip()
 
     def solve_recaptcha(self, page_url: str, site_key: str, *, enterprise: bool = False, action: str = "") -> str:

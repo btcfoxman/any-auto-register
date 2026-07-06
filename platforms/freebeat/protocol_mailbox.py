@@ -12,7 +12,13 @@ from platforms.freebeat.core import (
     partial_freebeat_account_state,
     summarize_freebeat_account_state,
 )
-from platforms.freebeat.browser_email import send_email_verify_code_in_browser
+from platforms.freebeat.browser_email import (
+    FREEBEAT_BROWSER_ACCEPT_LANGUAGE,
+    FREEBEAT_BROWSER_LOCALE,
+    FREEBEAT_BROWSER_TIMEZONE,
+    FREEBEAT_BROWSER_USER_AGENT,
+    send_email_verify_code_in_browser,
+)
 
 
 FREEBEAT_POST_LOGIN_STATE_ATTEMPTS = 3
@@ -79,6 +85,7 @@ class FreebeatProtocolMailboxWorker:
         *,
         proxy: str | None = None,
         log_fn: Callable[[str], None] = print,
+        turnstile_solver: Callable[..., str] | None = None,
         next_action: str | None = None,
         next_router_state_tree: str | None = None,
         frontend_path: str = "",
@@ -88,10 +95,24 @@ class FreebeatProtocolMailboxWorker:
         browser_send_code: bool = False,
         browser_send_code_headless: bool = True,
         browser_send_code_required: bool = False,
+        browser_send_code_allow_protocol_fallback: bool = False,
+        browser_send_code_engine: str = "playwright",
+        browser_send_code_channel: str = "",
+        browser_send_code_cdp_url: str = "",
+        browser_send_code_user_data_dir: str = "",
+        browser_send_code_stealth: bool = True,
+        browser_send_code_humanize: bool = True,
+        browser_send_code_turnstile_click: bool = True,
+        browser_send_code_turnstile_wait_seconds: float = 30.0,
+        browser_send_code_accept_language: str = FREEBEAT_BROWSER_ACCEPT_LANGUAGE,
+        browser_send_code_locale: str = FREEBEAT_BROWSER_LOCALE,
+        browser_send_code_timezone: str = FREEBEAT_BROWSER_TIMEZONE,
+        browser_send_code_user_agent: str = FREEBEAT_BROWSER_USER_AGENT,
         browser_send_code_timeout_seconds: float = 120,
     ):
         self.proxy = proxy
         self.frontend_path = frontend_path
+        self.turnstile_solver = turnstile_solver
         self.client = FreebeatClient(
             proxy=proxy,
             log_fn=log_fn,
@@ -106,6 +127,19 @@ class FreebeatProtocolMailboxWorker:
         self.browser_send_code = bool(browser_send_code)
         self.browser_send_code_headless = bool(browser_send_code_headless)
         self.browser_send_code_required = bool(browser_send_code_required)
+        self.browser_send_code_allow_protocol_fallback = bool(browser_send_code_allow_protocol_fallback)
+        self.browser_send_code_engine = str(browser_send_code_engine or "playwright").strip() or "playwright"
+        self.browser_send_code_channel = str(browser_send_code_channel or "").strip()
+        self.browser_send_code_cdp_url = str(browser_send_code_cdp_url or "").strip()
+        self.browser_send_code_user_data_dir = str(browser_send_code_user_data_dir or "").strip()
+        self.browser_send_code_stealth = bool(browser_send_code_stealth)
+        self.browser_send_code_humanize = bool(browser_send_code_humanize)
+        self.browser_send_code_turnstile_click = bool(browser_send_code_turnstile_click)
+        self.browser_send_code_turnstile_wait_seconds = max(1.0, float(browser_send_code_turnstile_wait_seconds or 30.0))
+        self.browser_send_code_accept_language = str(browser_send_code_accept_language or FREEBEAT_BROWSER_ACCEPT_LANGUAGE).strip()
+        self.browser_send_code_locale = str(browser_send_code_locale or FREEBEAT_BROWSER_LOCALE).strip()
+        self.browser_send_code_timezone = str(browser_send_code_timezone or FREEBEAT_BROWSER_TIMEZONE).strip()
+        self.browser_send_code_user_agent = str(browser_send_code_user_agent or FREEBEAT_BROWSER_USER_AGENT).strip()
         self.browser_send_code_timeout_seconds = max(10.0, float(browser_send_code_timeout_seconds or 120))
 
     def _send_email_verify_code(self, email: str) -> dict[str, Any]:
@@ -115,9 +149,22 @@ class FreebeatProtocolMailboxWorker:
                     email,
                     proxy=self.proxy,
                     log_fn=self.log,
+                    turnstile_solver=self.turnstile_solver,
                     frontend_path=self.frontend_path,
                     verify_source=self.verify_source,
                     headless=self.browser_send_code_headless,
+                    browser_engine=self.browser_send_code_engine,
+                    browser_channel=self.browser_send_code_channel,
+                    browser_cdp_url=self.browser_send_code_cdp_url,
+                    user_data_dir=self.browser_send_code_user_data_dir,
+                    stealth_enabled=self.browser_send_code_stealth,
+                    humanize=self.browser_send_code_humanize,
+                    turnstile_click_enabled=self.browser_send_code_turnstile_click,
+                    turnstile_wait_seconds=self.browser_send_code_turnstile_wait_seconds,
+                    accept_language=self.browser_send_code_accept_language,
+                    locale=self.browser_send_code_locale,
+                    timezone_id=self.browser_send_code_timezone,
+                    user_agent=self.browser_send_code_user_agent,
                     timeout_seconds=self.browser_send_code_timeout_seconds,
                 )
                 cookie_header = str(result.get("cookie_header") or "").strip()
@@ -128,7 +175,7 @@ class FreebeatProtocolMailboxWorker:
                 return result
             except Exception as exc:
                 message = f"Freebeat browser send email code failed: {exc}"
-                if self.browser_send_code_required:
+                if self.browser_send_code_required or not self.browser_send_code_allow_protocol_fallback:
                     raise RuntimeError(message) from exc
                 self.log(f"{message}; fallback to protocol send")
 

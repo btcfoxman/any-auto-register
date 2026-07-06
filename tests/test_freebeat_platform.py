@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlmodel import Session
 
 from core.account_graph import load_account_graphs
@@ -371,6 +372,111 @@ def test_freebeat_browser_send_code_rejects_external_oauth_urls():
     assert _is_freebeat_page_url("https://accounts.google.com/v3/signin/identifier") is False
 
 
+def test_freebeat_prefers_local_turnstile_solver():
+    assert FreebeatPlatform.protocol_captcha_order[0] == "local_solver"
+
+
+def test_local_solver_turnstile_forwards_action_cdata_and_proxy(monkeypatch):
+    from providers.captcha.local_solver import LocalSolverCaptcha
+
+    calls: list[tuple[str, dict, int]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict, status_code: int = 200, text: str = "{}"):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, *, params, timeout):
+        calls.append((url, dict(params), timeout))
+        if url.endswith("/turnstile"):
+            return FakeResponse({"taskId": "task_123"})
+        return FakeResponse({"status": "ready", "solution": {"token": "tok_123"}})
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    solver = LocalSolverCaptcha("http://127.0.0.1:8889", proxy_url="socks://fallback:1000")
+    token = solver.solve_turnstile(
+        "https://freebeat.ai/login?redirectTo=%2F",
+        "0xsite",
+        action="send_email_code",
+        cdata="em_abc",
+        pagedata="pd_abc",
+        proxy="socks://xray:20004",
+    )
+
+    assert token == "tok_123"
+    assert calls[0][0] == "http://127.0.0.1:8889/turnstile"
+    assert calls[0][1]["url"] == "https://freebeat.ai/login?redirectTo=%2F"
+    assert calls[0][1]["sitekey"] == "0xsite"
+    assert calls[0][1]["action"] == "send_email_code"
+    assert calls[0][1]["cdata"] == "em_abc"
+    assert calls[0][1]["pagedata"] == "pd_abc"
+    assert calls[0][1]["proxy"] == "socks5://xray:20004"
+
+
+def test_twocaptcha_turnstile_uses_v2_task_with_challenge_fields(monkeypatch):
+    from providers.captcha.twocaptcha import TwoCaptcha
+
+    calls: list[tuple[str, dict, int]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, *, json, timeout):
+        calls.append((url, dict(json), timeout))
+        if url.endswith("/createTask"):
+            return FakeResponse({"errorId": 0, "taskId": "task_123"})
+        return FakeResponse({"errorId": 0, "status": "ready", "solution": {"token": "tok_123"}})
+
+    monkeypatch.setattr("requests.post", fake_post)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+
+    token = TwoCaptcha("api_key").solve_turnstile(
+        "https://freebeat.ai/login?redirectTo=%2F",
+        "0xsite",
+        action="send_email_code",
+        cdata="em_abc",
+        pagedata="pd_abc",
+        proxy="socks5://user:pass@proxy.local:1080",
+    )
+
+    assert token == "tok_123"
+    create_payload = calls[0][1]
+    assert calls[0][0] == "https://api.2captcha.com/createTask"
+    assert create_payload["clientKey"] == "api_key"
+    assert create_payload["task"] == {
+        "type": "TurnstileTask",
+        "websiteURL": "https://freebeat.ai/login?redirectTo=%2F",
+        "websiteKey": "0xsite",
+        "action": "send_email_code",
+        "data": "em_abc",
+        "pagedata": "pd_abc",
+        "proxyType": "socks5",
+        "proxyAddress": "proxy.local",
+        "proxyPort": 1080,
+        "proxyLogin": "user",
+        "proxyPassword": "pass",
+    }
+    assert calls[1][0] == "https://api.2captcha.com/getTaskResult"
+    assert calls[1][1] == {"clientKey": "api_key", "taskId": "task_123"}
+
+
 def test_freebeat_questionnaire_check_failure_does_not_block_submit(monkeypatch):
     client = FreebeatClient(log_fn=lambda message: None)
     submit_calls: list[tuple[str, str]] = []
@@ -654,8 +760,21 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
     worker = FreebeatProtocolMailboxWorker(
         proxy="socks5://xray:20004",
         log_fn=lambda message: None,
+        turnstile_solver=lambda *args, **kwargs: "solver-token",
         browser_send_code=True,
         browser_send_code_headless=True,
+        browser_send_code_engine="patchright",
+        browser_send_code_channel="chrome",
+        browser_send_code_cdp_url="http://127.0.0.1:9222",
+        browser_send_code_user_data_dir="tmp/freebeat-browser-profile",
+        browser_send_code_stealth=False,
+        browser_send_code_humanize=False,
+        browser_send_code_turnstile_click=False,
+        browser_send_code_turnstile_wait_seconds=12,
+        browser_send_code_accept_language="ja-JP,ja;q=0.9,en;q=0.8",
+        browser_send_code_locale="ja-JP",
+        browser_send_code_timezone="Asia/Tokyo",
+        browser_send_code_user_agent="native",
         browser_send_code_timeout_seconds=30,
     )
     result = worker.run(
@@ -669,9 +788,85 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
     assert result["token"] == "tok_browser"
     assert calls[0][0] == "browser_send"
     assert calls[0][1]["proxy"] == "socks5://xray:20004"
+    assert callable(calls[0][1]["turnstile_solver"])
     assert calls[0][1]["headless"] is True
+    assert calls[0][1]["browser_engine"] == "patchright"
+    assert calls[0][1]["browser_channel"] == "chrome"
+    assert calls[0][1]["browser_cdp_url"] == "http://127.0.0.1:9222"
+    assert calls[0][1]["user_data_dir"] == "tmp/freebeat-browser-profile"
+    assert calls[0][1]["stealth_enabled"] is False
+    assert calls[0][1]["humanize"] is False
+    assert calls[0][1]["turnstile_click_enabled"] is False
+    assert calls[0][1]["turnstile_wait_seconds"] == 12
+    assert calls[0][1]["accept_language"] == "ja-JP,ja;q=0.9,en;q=0.8"
+    assert calls[0][1]["locale"] == "ja-JP"
+    assert calls[0][1]["timezone_id"] == "Asia/Tokyo"
+    assert calls[0][1]["user_agent"] == "native"
     assert ("merge_cookie", "fb_session=sess_123") in calls
     assert ("login_cookie", "fb_session=sess_123") in calls
+
+
+def test_freebeat_protocol_mailbox_worker_browser_failure_does_not_fallback_by_default(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def send_email_verify_code(self, email, *, verify_source):
+            calls.append(("protocol_send", email))
+            return {"code": 0, "data": True}
+
+    def fake_browser_send(email, **kwargs):
+        calls.append(("browser_send", {"email": email, **kwargs}))
+        raise RuntimeError("no sendEmailVerifyCodeV2 request; cfTokenLength=0")
+
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.FreebeatClient", FakeClient)
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.send_email_verify_code_in_browser", fake_browser_send)
+
+    worker = FreebeatProtocolMailboxWorker(
+        proxy="socks5://xray:20004",
+        log_fn=lambda message: None,
+        browser_send_code=True,
+    )
+
+    with pytest.raises(RuntimeError, match="Freebeat browser send email code failed"):
+        worker._send_email_verify_code("user@example.com")
+
+    assert calls[0][0] == "browser_send"
+    assert all(item[0] != "protocol_send" for item in calls)
+
+
+def test_freebeat_protocol_mailbox_worker_browser_failure_allows_explicit_protocol_fallback(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def send_email_verify_code(self, email, *, verify_source):
+            calls.append(("protocol_send", {"email": email, "verify_source": verify_source}))
+            return {"code": 0, "data": True}
+
+    def fake_browser_send(email, **kwargs):
+        calls.append(("browser_send", {"email": email, **kwargs}))
+        raise RuntimeError("browser blocked")
+
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.FreebeatClient", FakeClient)
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.send_email_verify_code_in_browser", fake_browser_send)
+
+    worker = FreebeatProtocolMailboxWorker(
+        proxy="socks5://xray:20004",
+        log_fn=lambda message: None,
+        browser_send_code=True,
+        browser_send_code_allow_protocol_fallback=True,
+    )
+
+    result = worker._send_email_verify_code("user@example.com")
+
+    assert result == {"code": 0, "data": True}
+    assert calls[0][0] == "browser_send"
+    assert calls[1] == ("protocol_send", {"email": "user@example.com", "verify_source": "WEB_SHOPIFY_LOGIN"})
 
 
 def test_freebeat_protocol_mailbox_worker_saves_token_when_state_refresh_times_out(monkeypatch):

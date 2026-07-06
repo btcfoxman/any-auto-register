@@ -17,12 +17,31 @@ class YesCaptcha(BaseCaptcha):
             raise RuntimeError("YesCaptcha Key 未配置")
         return cls(client_key)
 
-    def solve_turnstile(self, page_url: str, site_key: str) -> str:
+    def solve_turnstile(
+        self,
+        page_url: str,
+        site_key: str,
+        *,
+        action: str = "",
+        cdata: str = "",
+        pagedata: str = "",
+        proxy: str = "",
+    ) -> str:
         import requests, time
+        task = {
+            "type": "TurnstileTaskProxyless",
+            "websiteURL": page_url,
+            "websiteKey": site_key,
+        }
+        if action:
+            task["action"] = str(action)
+        if cdata:
+            task["data"] = str(cdata)
+        if pagedata:
+            task["pagedata"] = str(pagedata)
         r = insecure_request(requests.post, f"{self.api}/createTask", json={
             "clientKey": self.client_key,
-            "task": {"type": "TurnstileTaskProxyless",
-                     "websiteURL": page_url, "websiteKey": site_key}
+            "task": task,
         }, timeout=30)
         task_id = r.json().get("taskId")
         if not task_id:

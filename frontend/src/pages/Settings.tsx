@@ -326,6 +326,8 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
       items: [
         { key: 'freebeat_send_code_browser_enabled', label: '通过浏览器发送邮箱验证码', placeholder: 'true' },
         { key: 'freebeat_send_code_browser_headless', label: '发送验证码浏览器无头模式', placeholder: 'true' },
+        { key: 'freebeat_send_code_browser_cdp_url', label: '发送验证码外部浏览器 CDP 地址', placeholder: 'http://127.0.0.1:9222' },
+        { key: 'freebeat_send_code_turnstile_click_enabled', label: '自动点击 CF 验证器', placeholder: 'true' },
         { key: 'freebeat_send_code_browser_timeout_seconds', label: '发送验证码超时秒数', placeholder: '120' },
         { key: 'freebeat_send_code_browser_required', label: '浏览器发送失败则直接失败', placeholder: 'false' },
         { key: 'freebeat_auto_questionnaire', label: '注册后自动问卷', placeholder: 'true' },

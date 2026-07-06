@@ -4,7 +4,16 @@ from abc import ABC, abstractmethod
 
 class BaseCaptcha(ABC):
     @abstractmethod
-    def solve_turnstile(self, page_url: str, site_key: str) -> str:
+    def solve_turnstile(
+        self,
+        page_url: str,
+        site_key: str,
+        *,
+        action: str = "",
+        cdata: str = "",
+        pagedata: str = "",
+        proxy: str = "",
+    ) -> str:
         """返回 Turnstile token"""
         ...
 

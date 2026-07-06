@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import uuid
+import json
 import random
 import logging
 import asyncio
@@ -82,6 +83,12 @@ class TurnstileAPIServer:
         self.browser_name = browser_name
         self.browser_version = browser_version
         self.console = Console()
+        self.block_rendering = str(os.getenv("TURNSTILE_SOLVER_BLOCK_RENDERING", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         
         # Initialize useragent and sec_ch_ua attributes
         self.useragent = useragent
@@ -297,13 +304,13 @@ class TurnstileAPIServer:
             'px.ads.linkedin.com',
         ]
 
-        if any(domain in url for domain in blocked_domains):
+        if any(domain in url for domain in allowed_domains):
+            await route.continue_()
+        elif any(domain in url for domain in blocked_domains):
             await route.abort()
         elif resource_type in blocked_types:
             await route.abort()
         elif resource_type in allowed_types:
-            await route.continue_()
-        elif any(domain in url for domain in allowed_domains):
             await route.continue_()
         elif resource_type == 'image':
             await route.abort()
@@ -317,6 +324,38 @@ class TurnstileAPIServer:
     async def _unblock_rendering(self, page):
         """Разблокировка рендеринга"""
         await page.unroute("**/*", self._optimized_route_handler)
+
+    @staticmethod
+    def _is_retryable_goto_error(exc: Exception) -> bool:
+        message = str(exc)
+        return any(
+            marker in message
+            for marker in (
+                "ERR_CONNECTION_CLOSED",
+                "ERR_CONNECTION_RESET",
+                "ERR_CONNECTION_ABORTED",
+                "ERR_TIMED_OUT",
+                "net::ERR_HTTP2_PROTOCOL_ERROR",
+            )
+        )
+
+    async def _goto_with_retries(self, page, url: str, index: int, attempts: int = 3):
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= attempts or not self._is_retryable_goto_error(exc):
+                    raise
+                if self.debug:
+                    logger.warning(
+                        f"Browser {index}: Page.goto retry {attempt + 1}/{attempts} after {str(exc).splitlines()[0]}"
+                    )
+                await asyncio.sleep(0.9 * attempt)
+        if last_exc:
+            raise last_exc
 
     async def _find_turnstile_elements(self, page, index: int):
         """Умная проверка всех возможных Turnstile элементов"""
@@ -472,10 +511,26 @@ class TurnstileAPIServer:
                 logger.debug(f"Browser {index}: Safe click failed for '{selector}': {str(e)}")
             return False
 
-    async def _inject_captcha_directly(self, page, websiteKey: str, action: str = '', cdata: str = '', index: int = 0):
+    async def _inject_captcha_directly(
+        self,
+        page,
+        websiteKey: str,
+        action: str = '',
+        cdata: str = '',
+        pagedata: str = '',
+        index: int = 0,
+    ):
         """Inject CAPTCHA directly into the target website or use existing one"""
+        website_key_js = json.dumps(str(websiteKey or ""))
+        action_js = json.dumps(str(action or ""))
+        cdata_js = json.dumps(str(cdata or ""))
+        pagedata_js = json.dumps(str(pagedata or ""))
         script = f"""
         (function() {{
+        const websiteKey = {website_key_js};
+        const actionValue = {action_js};
+        const cdataValue = {cdata_js};
+        const pagedataValue = {pagedata_js};
         // Check if there's already a turnstile widget on the page with matching sitekey
         const existingWidgets = document.querySelectorAll('.cf-turnstile, [data-sitekey]');
         console.log('Turnstile Debug: Found ' + existingWidgets.length + ' potential widgets');
@@ -485,7 +540,7 @@ class TurnstileAPIServer:
         for (const widget of existingWidgets) {{
             const widgetSitekey = widget.getAttribute('data-sitekey');
             console.log('Turnstile Debug: Checking widget with sitekey:', widgetSitekey);
-            if (widgetSitekey === '{websiteKey}') {{
+            if (widgetSitekey === websiteKey) {{
                 useExisting = true;
                 foundSitekey = widgetSitekey;
                 console.log('Turnstile Debug: Found existing turnstile widget with matching sitekey');
@@ -528,16 +583,17 @@ class TurnstileAPIServer:
         // Remove any existing turnstile widgets that don't match our sitekey
         document.querySelectorAll('.cf-turnstile').forEach(el => el.remove());
         document.querySelectorAll('[data-sitekey]').forEach(el => {{
-            if (el.getAttribute('data-sitekey') !== '{websiteKey}') el.remove();
+            if (el.getAttribute('data-sitekey') !== websiteKey) el.remove();
         }});
         
         // Create turnstile widget directly on the page
         const captchaDiv = document.createElement('div');
         captchaDiv.className = 'cf-turnstile';
-        captchaDiv.setAttribute('data-sitekey', '{websiteKey}');
+        captchaDiv.setAttribute('data-sitekey', websiteKey);
         captchaDiv.setAttribute('data-callback', '_turnstileTokenCallback');
-        {f'captchaDiv.setAttribute("data-action", "{action}");' if action else ''}
-        {f'captchaDiv.setAttribute("data-cdata", "{cdata}");' if cdata else ''}
+        if (actionValue) captchaDiv.setAttribute('data-action', actionValue);
+        if (cdataValue) captchaDiv.setAttribute('data-cdata', cdataValue);
+        if (pagedataValue) captchaDiv.setAttribute('data-chl-pagedata', pagedataValue);
         captchaDiv.style.position = 'fixed';
         captchaDiv.style.top = '20px';
         captchaDiv.style.left = '20px';
@@ -564,9 +620,10 @@ class TurnstileAPIServer:
                     if (window.turnstile && window.turnstile.render) {{
                         try {{
                             window.turnstile.render(captchaDiv, {{
-                                sitekey: '{websiteKey}',
-                                {f'action: "{action}",' if action else ''}
-                                {f'cdata: "{cdata}",' if cdata else ''}
+                                sitekey: websiteKey,
+                                ...(actionValue ? {{ action: actionValue }} : {{}}),
+                                ...(cdataValue ? {{ cData: cdataValue }} : {{}}),
+                                ...(pagedataValue ? {{ chlPageData: pagedataValue }} : {{}}),
                                 callback: function(token) {{
                                     console.log('Turnstile solved with token:', token);
                                     window._turnstileTokenCallback(token);
@@ -594,9 +651,10 @@ class TurnstileAPIServer:
             console.log('Turnstile already loaded, rendering immediately');
             try {{
                 window.turnstile.render(captchaDiv, {{
-                    sitekey: '{websiteKey}',
-                    {f'action: "{action}",' if action else ''}
-                    {f'cdata: "{cdata}",' if cdata else ''}
+                    sitekey: websiteKey,
+                    ...(actionValue ? {{ action: actionValue }} : {{}}),
+                    ...(cdataValue ? {{ cData: cdataValue }} : {{}}),
+                    ...(pagedataValue ? {{ chlPageData: pagedataValue }} : {{}}),
                     callback: function(token) {{
                         console.log('Turnstile solved with token:', token);
                         window._turnstileTokenCallback(token);
@@ -637,6 +695,7 @@ class TurnstileAPIServer:
         sitekey: str,
         action: Optional[str] = None,
         cdata: Optional[str] = None,
+        pagedata: Optional[str] = None,
         proxy: Optional[str] = None,
     ):
         """Solve the Turnstile challenge."""
@@ -692,13 +751,16 @@ class TurnstileAPIServer:
                                 "username": username,
                                 "password": password
                             },
-                            "user_agent": browser_config['useragent']
+                            "user_agent": browser_config['useragent'],
+                            "locale": "en-US",
+                            "timezone_id": "America/New_York",
+                            "viewport": {"width": 1280, "height": 720},
                         }
                         
+                        headers = {'accept-language': 'en-US,en;q=0.9'}
                         if browser_config['sec_ch_ua'] and browser_config['sec_ch_ua'].strip():
-                            context_options['extra_http_headers'] = {
-                                'sec-ch-ua': browser_config['sec_ch_ua']
-                            }
+                            headers['sec-ch-ua'] = browser_config['sec_ch_ua']
+                        context_options['extra_http_headers'] = headers
                         
                         context = await browser.new_context(**context_options)
                     except ValueError:
@@ -715,13 +777,16 @@ class TurnstileAPIServer:
                                 "username": proxy_user,
                                 "password": proxy_pass
                             },
-                            "user_agent": browser_config['useragent']
+                            "user_agent": browser_config['useragent'],
+                            "locale": "en-US",
+                            "timezone_id": "America/New_York",
+                            "viewport": {"width": 1280, "height": 720},
                         }
                         
+                        headers = {'accept-language': 'en-US,en;q=0.9'}
                         if browser_config['sec_ch_ua'] and browser_config['sec_ch_ua'].strip():
-                            context_options['extra_http_headers'] = {
-                                'sec-ch-ua': browser_config['sec_ch_ua']
-                            }
+                            headers['sec-ch-ua'] = browser_config['sec_ch_ua']
+                        context_options['extra_http_headers'] = headers
                         
                         context = await browser.new_context(**context_options)
                     elif len(parts) == 3:
@@ -729,13 +794,16 @@ class TurnstileAPIServer:
                             logger.debug(f"Browser {index}: Creating context with proxy {proxy}")
                         context_options = {
                             "proxy": {"server": f"{proxy}"},
-                            "user_agent": browser_config['useragent']
+                            "user_agent": browser_config['useragent'],
+                            "locale": "en-US",
+                            "timezone_id": "America/New_York",
+                            "viewport": {"width": 1280, "height": 720},
                         }
                         
+                        headers = {'accept-language': 'en-US,en;q=0.9'}
                         if browser_config['sec_ch_ua'] and browser_config['sec_ch_ua'].strip():
-                            context_options['extra_http_headers'] = {
-                                'sec-ch-ua': browser_config['sec_ch_ua']
-                            }
+                            headers['sec-ch-ua'] = browser_config['sec_ch_ua']
+                        context_options['extra_http_headers'] = headers
                         
                         context = await browser.new_context(**context_options)
                     else:
@@ -743,21 +811,31 @@ class TurnstileAPIServer:
             else:
                 if self.debug:
                     logger.debug(f"Browser {index}: Creating context without proxy")
-                context_options = {"user_agent": browser_config['useragent']}
+                context_options = {
+                    "user_agent": browser_config['useragent'],
+                    "locale": "en-US",
+                    "timezone_id": "America/New_York",
+                    "viewport": {"width": 1280, "height": 720},
+                }
                 
+                headers = {'accept-language': 'en-US,en;q=0.9'}
                 if browser_config['sec_ch_ua'] and browser_config['sec_ch_ua'].strip():
-                    context_options['extra_http_headers'] = {
-                        'sec-ch-ua': browser_config['sec_ch_ua']
-                    }
+                    headers['sec-ch-ua'] = browser_config['sec_ch_ua']
+                context_options['extra_http_headers'] = headers
                 
                 context = await browser.new_context(**context_options)
         else:
-            context_options = {"user_agent": browser_config['useragent']}
+            context_options = {
+                "user_agent": browser_config['useragent'],
+                "locale": "en-US",
+                "timezone_id": "America/New_York",
+                "viewport": {"width": 1280, "height": 720},
+            }
             
+            headers = {'accept-language': 'en-US,en;q=0.9'}
             if browser_config['sec_ch_ua'] and browser_config['sec_ch_ua'].strip():
-                context_options['extra_http_headers'] = {
-                    'sec-ch-ua': browser_config['sec_ch_ua']
-                }
+                headers['sec-ch-ua'] = browser_config['sec_ch_ua']
+            context_options['extra_http_headers'] = headers
             
             context = await browser.new_context(**context_options)
 
@@ -765,7 +843,8 @@ class TurnstileAPIServer:
         
         await self._antishadow_inject(page)
         
-        await self._block_rendering(page)
+        if self.block_rendering:
+            await self._block_rendering(page)
         
         await page.add_init_script("""
         Object.defineProperty(navigator, 'webdriver', {
@@ -788,15 +867,18 @@ class TurnstileAPIServer:
 
         try:
             if self.debug:
-                logger.debug(f"Browser {index}: Starting Turnstile solve for URL: {url} with Sitekey: {sitekey} | Action: {action} | Cdata: {cdata} | Proxy: {proxy}")
-                logger.debug(f"Browser {index}: Setting up optimized page loading with resource blocking")
+                logger.debug(f"Browser {index}: Starting Turnstile solve for URL: {url} with Sitekey: {sitekey} | Action: {action} | Cdata: {cdata} | Pagedata: {pagedata} | Proxy: {proxy}")
+                logger.debug(
+                    f"Browser {index}: Resource blocking is {'enabled' if self.block_rendering else 'disabled'}"
+                )
 
             if self.debug:
                 logger.debug(f"Browser {index}: Loading real website directly: {url}")
 
-            await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            await self._goto_with_retries(page, url, index)
 
-            await self._unblock_rendering(page)
+            if self.block_rendering:
+                await self._unblock_rendering(page)
             
             # Wait for turnstile to load (it may be lazy loaded)
             if self.debug:
@@ -843,7 +925,14 @@ class TurnstileAPIServer:
                 except:
                     pass
             
-            inject_result = await self._inject_captcha_directly(page, sitekey, action or '', cdata or '', index)
+            inject_result = await self._inject_captcha_directly(
+                page,
+                sitekey,
+                action or '',
+                cdata or '',
+                pagedata or '',
+                index,
+            )
             
             if self.debug:
                 if inject_result == 'existing':
@@ -971,6 +1060,7 @@ class TurnstileAPIServer:
         sitekey = request.args.get('sitekey')
         action = request.args.get('action')
         cdata = request.args.get('cdata')
+        pagedata = request.args.get('pagedata')
         proxy = _normalize_proxy_url(request.args.get('proxy'))
 
         if not url or not sitekey:
@@ -988,6 +1078,7 @@ class TurnstileAPIServer:
             "sitekey": sitekey,
             "action": action,
             "cdata": cdata,
+            "pagedata": pagedata,
             "proxy": proxy
         })
 
@@ -999,6 +1090,7 @@ class TurnstileAPIServer:
                     sitekey=sitekey,
                     action=action,
                     cdata=cdata,
+                    pagedata=pagedata,
                     proxy=proxy,
                 )
             )
