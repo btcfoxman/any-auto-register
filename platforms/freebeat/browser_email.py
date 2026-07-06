@@ -223,6 +223,26 @@ def _api_response_ok(payload: dict[str, Any]) -> dict[str, Any]:
     return _validate_api_payload(payload, label="sendEmailVerifyCodeV2")
 
 
+def _is_transient_navigation_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "execution context was destroyed" in message
+        or "most likely because of a navigation" in message
+        or "navigation" in message and "interrupted" in message
+    )
+
+
+def _wait_after_navigation(page) -> None:
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=5000)
+    except Exception:
+        pass
+    try:
+        page.wait_for_timeout(750)
+    except Exception:
+        pass
+
+
 def _send_code_fetch_from_page(page, *, email: str, verify_source: str) -> dict[str, Any]:
     return page.evaluate(
         """
@@ -376,10 +396,24 @@ def send_email_verify_code_in_browser(
                 while time.monotonic() - start < per_url_timeout:
                     if response_record:
                         break
-                    _dismiss_popups(page)
-                    filled = _fill_email(page, target_email)
+                    try:
+                        _dismiss_popups(page)
+                        filled = _fill_email(page, target_email)
+                    except Exception as exc:
+                        if not _is_transient_navigation_error(exc):
+                            raise
+                        last_action = {"error": str(exc), "stage": "fill_email", "page_url": page_url}
+                        _wait_after_navigation(page)
+                        continue
                     if filled.get("ok"):
-                        clicked = _click_matching(page, send_patterns)
+                        try:
+                            clicked = _click_matching(page, send_patterns)
+                        except Exception as exc:
+                            if not _is_transient_navigation_error(exc):
+                                raise
+                            last_action = {"filled": filled, "error": str(exc), "stage": "click_send", "page_url": page_url}
+                            _wait_after_navigation(page)
+                            continue
                         last_action = {"filled": filled, "clicked": clicked, "page_url": page_url}
                         if not clicked.get("ok"):
                             try:
@@ -388,11 +422,24 @@ def send_email_verify_code_in_browser(
                             except Exception:
                                 pass
                         if not response_record:
-                            fetch_result = _send_code_fetch_from_page(
-                                page,
-                                email=target_email,
-                                verify_source=verify_source,
-                            )
+                            try:
+                                fetch_result = _send_code_fetch_from_page(
+                                    page,
+                                    email=target_email,
+                                    verify_source=verify_source,
+                                )
+                            except Exception as exc:
+                                if not _is_transient_navigation_error(exc):
+                                    raise
+                                last_action = {
+                                    "filled": filled,
+                                    "clicked": clicked,
+                                    "error": str(exc),
+                                    "stage": "fetch_fallback",
+                                    "page_url": page_url,
+                                }
+                                _wait_after_navigation(page)
+                                continue
                             if fetch_result.get("ok"):
                                 request_record.update(
                                     {
@@ -418,7 +465,14 @@ def send_email_verify_code_in_browser(
                                 )
                                 break
                     else:
-                        clicked = _click_matching(page, open_patterns)
+                        try:
+                            clicked = _click_matching(page, open_patterns)
+                        except Exception as exc:
+                            if not _is_transient_navigation_error(exc):
+                                raise
+                            last_action = {"filled": filled, "error": str(exc), "stage": "click_open", "page_url": page_url}
+                            _wait_after_navigation(page)
+                            continue
                         last_action = {"filled": filled, "clicked": clicked, "page_url": page_url}
                     page.wait_for_timeout(2500)
                 if response_record:
