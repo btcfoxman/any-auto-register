@@ -1178,6 +1178,9 @@ def send_email_verify_code_in_browser(
         }
         channel = str(browser_channel or "").strip()
         cdp_url = str(browser_cdp_url or "").strip()
+        effective_user_agent = str(user_agent or "").strip()
+        if cdp_launcher_url and effective_user_agent == FREEBEAT_BROWSER_USER_AGENT:
+            effective_user_agent = "native"
         if cdp_launcher_url:
             cdp_launcher_session = _launch_cdp_browser_session(
                 cdp_launcher_url,
@@ -1186,7 +1189,7 @@ def send_email_verify_code_in_browser(
                 headless=headless,
                 locale=locale,
                 timezone_id=timezone_id,
-                user_agent=user_agent,
+                user_agent=effective_user_agent,
                 timeout_seconds=timeout_seconds,
                 log_fn=log_fn,
             )
@@ -1219,7 +1222,7 @@ def send_email_verify_code_in_browser(
                 "accept-language": str(accept_language or FREEBEAT_BROWSER_ACCEPT_LANGUAGE),
             },
         }
-        ua = str(user_agent or "").strip()
+        ua = effective_user_agent
         if ua and ua.lower() != "native":
             context_options["user_agent"] = ua
         browser = None
