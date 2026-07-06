@@ -31,6 +31,7 @@ class ConfigRepository:
         "freebeat_send_code_browser_enabled", "freebeat_send_code_browser_headless",
         "freebeat_send_code_browser_required", "freebeat_send_code_browser_timeout_seconds",
         "freebeat_send_code_browser_cdp_url", "freebeat_send_code_browser_cdp_launcher_url",
+        "freebeat_send_code_browser_user_agent",
         "freebeat_send_code_turnstile_click_enabled",
         "freebeat2api_url", "freebeat2api_api_key", "freebeat2api_max_concurrency",
         "freebeat2api_enable_auto_maintenance",
