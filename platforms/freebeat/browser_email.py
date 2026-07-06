@@ -44,6 +44,14 @@ def _candidate_page_urls(frontend_path: str = "") -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _is_freebeat_page_url(url: Any) -> bool:
+    try:
+        hostname = urlparse(str(url or "")).hostname or ""
+    except Exception:
+        return False
+    return hostname == "freebeat.ai" or hostname.endswith(".freebeat.ai")
+
+
 def _playwright_proxy(proxy: str | None) -> dict[str, str] | None:
     raw = str(proxy or "").strip()
     if not raw:
@@ -126,11 +134,17 @@ def _install_capture_hooks(page) -> None:
     )
 
 
-def _click_matching(page, patterns: list[str]) -> dict[str, Any]:
+def _click_matching(page, patterns: list[str], reject_patterns: list[str] | None = None) -> dict[str, Any]:
     return page.evaluate(
         """
-(patterns) => {
+(args) => {
+  const patterns = args.patterns || [];
+  const rejectPatterns = args.rejectPatterns || [];
+  if (!/(^|\\.)freebeat\\.ai$/i.test(window.location.hostname || '')) {
+    return { ok: false, external: true, url: window.location.href };
+  }
   const re = new RegExp(patterns.join('|'), 'i');
+  const rejectRe = rejectPatterns.length ? new RegExp(rejectPatterns.join('|'), 'i') : null;
   const visible = (el) => {
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
@@ -148,13 +162,47 @@ def _click_matching(page, patterns: list[str]) -> dict[str, Any]:
       el.getAttribute('href')
     ].filter(Boolean).join(' ').trim();
     if (!text || !re.test(text)) continue;
+    if (rejectRe && rejectRe.test(text)) continue;
     el.click();
     return { ok: true, text: text.slice(0, 120), tag: el.tagName };
   }
   return { ok: false };
 }
         """,
-        patterns,
+        {"patterns": patterns, "rejectPatterns": reject_patterns or []},
+    )
+
+
+def _click_login_entry(page) -> dict[str, Any]:
+    return page.evaluate(
+        """
+() => {
+  if (!/(^|\\.)freebeat\\.ai$/i.test(window.location.hostname || '')) {
+    return { ok: false, external: true, url: window.location.href };
+  }
+  const visible = (el) => {
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  };
+  const nodes = Array.from(document.querySelectorAll('button,a,[role="button"],div'));
+  for (const el of nodes) {
+    if (!visible(el)) continue;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+    const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+    const href = el.getAttribute('href') || '';
+    const joined = `${text} ${href}`.toLowerCase();
+    if (joined.includes('google') || joined.includes('oauth') || joined.includes('apple') || joined.includes('facebook')) {
+      continue;
+    }
+    if (/^login$/i.test(text) || /^log\\s*in$/i.test(text) || /^sign\\s*in$/i.test(text)) {
+      el.click();
+      return { ok: true, text: text.slice(0, 120), tag: el.tagName };
+    }
+  }
+  return { ok: false };
+}
+        """
     )
 
 
@@ -162,6 +210,9 @@ def _fill_email(page, email: str) -> dict[str, Any]:
     return page.evaluate(
         """
 (email) => {
+  if (!/(^|\\.)freebeat\\.ai$/i.test(window.location.hostname || '')) {
+    return { ok: false, external: true, url: window.location.href };
+  }
   const visible = (el) => {
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
@@ -180,6 +231,24 @@ def _fill_email(page, email: str) -> dict[str, Any]:
     if (el.tagName === 'INPUT' && ['text', 'email', 'search', ''].includes((el.type || '').toLowerCase())) return 1;
     return 0;
   };
+  const exact = Array.from(document.querySelectorAll('input[placeholder="Continue with your email"], input[type="email"]'))
+    .find((el) => visible(el) && !el.disabled && !el.readOnly);
+  if (exact) {
+    exact.focus();
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    if (setter) setter.call(exact, email);
+    else exact.value = email;
+    exact.dispatchEvent(new Event('input', { bubbles: true }));
+    exact.dispatchEvent(new Event('change', { bubbles: true }));
+    return {
+      ok: true,
+      exact: true,
+      type: exact.type || '',
+      name: exact.name || '',
+      placeholder: exact.placeholder || '',
+      id: exact.id || ''
+    };
+  }
   const candidates = Array.from(document.querySelectorAll('input'))
     .filter((el) => visible(el) && !el.disabled && !el.readOnly)
     .map((el) => ({ el, score: scoreInput(el) }))
@@ -203,6 +272,40 @@ def _fill_email(page, email: str) -> dict[str, Any]:
 }
         """,
         email,
+    ) 
+
+
+def _click_email_submit(page) -> dict[str, Any]:
+    return page.evaluate(
+        """
+() => {
+  if (!/(^|\\.)freebeat\\.ai$/i.test(window.location.hostname || '')) {
+    return { ok: false, external: true, url: window.location.href };
+  }
+  const visible = (el) => {
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  };
+  const candidates = [
+    ...Array.from(document.querySelectorAll('button[aria-label="Send login code"]')),
+    ...Array.from(document.querySelectorAll('input[placeholder="Continue with your email"] ~ button')),
+    ...Array.from(document.querySelectorAll('input[type="email"] ~ button')),
+  ];
+  for (const button of candidates) {
+    if (!visible(button)) continue;
+    if (button.disabled || button.getAttribute('aria-disabled') === 'true') continue;
+    button.click();
+    return {
+      ok: true,
+      exact: true,
+      text: (button.innerText || button.textContent || button.getAttribute('aria-label') || '').trim().slice(0, 120),
+      tag: button.tagName
+    };
+  }
+  return { ok: false };
+}
+        """
     )
 
 
@@ -247,6 +350,9 @@ def _send_code_fetch_from_page(page, *, email: str, verify_source: str) -> dict[
     return page.evaluate(
         """
 async ({ path, email, verifySource }) => {
+  if (!/(^|\\.)freebeat\\.ai$/i.test(window.location.hostname || '')) {
+    return { ok: false, reason: 'external_origin', url: window.location.href };
+  }
   const state = window.__freebeatTurnstile || {};
   const tokens = Array.isArray(state.tokens) ? state.tokens.filter(Boolean) : [];
   const token = tokens.length ? String(tokens[tokens.length - 1]) : '';
@@ -369,16 +475,15 @@ def send_email_verify_code_in_browser(
             page.on("request", on_request)
             page.on("response", on_response)
             open_patterns = ["log\\s*in", "login", "sign\\s*in"]
+            open_reject_patterns = ["google", "accounts\\.google", "oauth", "apple", "facebook"]
             send_patterns = [
-                "continue",
                 "send",
                 "code",
                 "verify",
                 "email",
                 "next",
-                "log\\s*in",
-                "sign\\s*in",
             ]
+            send_reject_patterns = ["forgot", "google", "accounts\\.google", "oauth", "apple", "facebook"]
             last_action: dict[str, Any] = {}
             attempted_urls: list[str] = []
             per_url_timeout = max(15.0, (timeout_ms / 1000) / max(1, len(page_urls)))
@@ -396,6 +501,9 @@ def send_email_verify_code_in_browser(
                 while time.monotonic() - start < per_url_timeout:
                     if response_record:
                         break
+                    if not _is_freebeat_page_url(page.url):
+                        last_action = {"stage": "external_origin", "page_url": page_url, "current_url": page.url}
+                        break
                     try:
                         _dismiss_popups(page)
                         filled = _fill_email(page, target_email)
@@ -407,7 +515,9 @@ def send_email_verify_code_in_browser(
                         continue
                     if filled.get("ok"):
                         try:
-                            clicked = _click_matching(page, send_patterns)
+                            clicked = _click_email_submit(page)
+                            if not clicked.get("ok"):
+                                clicked = _click_matching(page, send_patterns, send_reject_patterns)
                         except Exception as exc:
                             if not _is_transient_navigation_error(exc):
                                 raise
@@ -466,7 +576,9 @@ def send_email_verify_code_in_browser(
                                 break
                     else:
                         try:
-                            clicked = _click_matching(page, open_patterns)
+                            clicked = _click_login_entry(page)
+                            if not clicked.get("ok"):
+                                clicked = _click_matching(page, open_patterns, open_reject_patterns)
                         except Exception as exc:
                             if not _is_transient_navigation_error(exc):
                                 raise
