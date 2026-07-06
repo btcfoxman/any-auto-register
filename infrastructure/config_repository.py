@@ -28,6 +28,8 @@ class ConfigRepository:
         "freebeat_daily_sign_in_enabled", "freebeat_daily_sign_in_min_interval_seconds",
         "freebeat_daily_sign_in_max_interval_seconds", "freebeat_auto_daily_sign_in",
         "freebeat_auto_questionnaire",
+        "freebeat_send_code_browser_enabled", "freebeat_send_code_browser_headless",
+        "freebeat_send_code_browser_required", "freebeat_send_code_browser_timeout_seconds",
         "freebeat2api_url", "freebeat2api_api_key", "freebeat2api_max_concurrency",
         "freebeat2api_enable_auto_maintenance",
         "quickframe_keepalive_enabled", "quickframe_heartbeat_interval_seconds",

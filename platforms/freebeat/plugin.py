@@ -44,6 +44,14 @@ def _runtime_value(extra: dict[str, Any], key: str, default: Any = "") -> Any:
         return default
 
 
+def _runtime_float(extra: dict[str, Any], key: str, default: float) -> float:
+    try:
+        value = _runtime_value(extra, key, default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
 def _frontend_path_value(data: dict[str, Any] | None) -> str:
     source = dict(data or {})
     return str(
@@ -188,6 +196,11 @@ class FreebeatPlatform(BasePlatform):
                 frontend_path=_frontend_path_value(extra),
                 deployment_id=_deployment_id_value(extra),
                 verify_source=str(extra.get("freebeat_verify_source") or FREEBEAT_DEFAULT_VERIFY_SOURCE),
+                turnstile_token=str(extra.get("turnstile_token") or extra.get("freebeat_turnstile_token") or ""),
+                browser_send_code=_truthy(_runtime_value(extra, "freebeat_send_code_browser_enabled", True), True),
+                browser_send_code_headless=_truthy(_runtime_value(extra, "freebeat_send_code_browser_headless", True), True),
+                browser_send_code_required=_truthy(_runtime_value(extra, "freebeat_send_code_browser_required", False), False),
+                browser_send_code_timeout_seconds=_runtime_float(extra, "freebeat_send_code_browser_timeout_seconds", 120),
             )
 
         def _run_worker(worker, ctx, artifacts):

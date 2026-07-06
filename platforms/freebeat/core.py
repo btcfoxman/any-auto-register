@@ -119,6 +119,22 @@ def _cookie_records_to_header(records: list[dict[str, Any]]) -> str:
     return _cookie_header_from_any(records)
 
 
+def _merge_cookie_headers(*headers: Any) -> str:
+    pairs: dict[str, str] = {}
+    for header in headers:
+        raw = _cookie_header_from_any(header)
+        if not raw:
+            continue
+        for item in raw.split(";"):
+            if "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            pair = _valid_cookie_pair(name.strip(), value.strip())
+            if pair:
+                pairs[pair[0]] = pair[1]
+    return "; ".join(f"{name}={value}" for name, value in pairs.items())
+
+
 def _auth_token_cookie(token: str) -> str:
     pair = _valid_cookie_pair("authToken", token)
     return f"{pair[0]}={pair[1]}" if pair else ""
@@ -509,6 +525,10 @@ class FreebeatClient:
         header = _cookie_records_to_header(self.cookie_records())
         return header or self._cookie_header
 
+    def merge_cookie_header(self, cookie_header: Any) -> str:
+        self._cookie_header = _merge_cookie_headers(self._cookie_header, cookie_header)
+        return self._cookie_header
+
     def auth_state(self) -> dict[str, Any]:
         cookie_header = self.cookie_header()
         return {
@@ -546,6 +566,10 @@ class FreebeatClient:
         if include_fetch_headers:
             request_headers["fb-language"] = "en"
             request_headers["x-platform-type"] = "web"
+            request_headers["priority"] = "u=1, i"
+            request_headers["sec-fetch-dest"] = "empty"
+            request_headers["sec-fetch-mode"] = "cors"
+            request_headers["sec-fetch-site"] = "same-origin"
         if content_type:
             request_headers["content-type"] = content_type
         if token:
@@ -630,8 +654,12 @@ class FreebeatClient:
         email: str,
         *,
         verify_source: str = FREEBEAT_DEFAULT_VERIFY_SOURCE,
+        turnstile_token: str = "",
     ) -> dict[str, Any]:
         payload = {"email": str(email).strip(), "verifySource": str(verify_source or FREEBEAT_DEFAULT_VERIFY_SOURCE)}
+        token = str(turnstile_token or "").strip()
+        if token:
+            payload["turnstileToken"] = token
         domain = _email_domain(email)
         label = f"sendEmailVerifyCodeV2 domain={domain}" if domain else "sendEmailVerifyCodeV2"
         result = self._api_json("POST", FREEBEAT_SEND_CODE_PATH, json_body=payload, label=label, validate_code=False)
@@ -702,6 +730,9 @@ class FreebeatClient:
                     "next-action": action_id,
                     "priority": "u=1, i",
                 }
+                cookie_header = self.cookie_header()
+                if cookie_header:
+                    headers["cookie"] = cookie_header
                 if state_tree:
                     headers["next-router-state-tree"] = state_tree
                 if self._deployment_id:

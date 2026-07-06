@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from sqlmodel import Session
 
 from core.account_graph import load_account_graphs
@@ -323,6 +325,38 @@ def test_freebeat_api_retries_once_after_vercel_403():
     assert "origin" not in {key.lower(): value for key, value in calls[0]["headers"].items()}
 
 
+def test_freebeat_send_code_includes_turnstile_token_when_provided():
+    calls: list[dict] = []
+
+    class Response200:
+        status_code = 200
+        text = '{"code":0,"data":true}'
+
+        def json(self):
+            return {"code": 0, "data": True}
+
+    client = FreebeatClient(log_fn=lambda message: None)
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        return Response200()
+
+    client.s.request = fake_request
+
+    result = client.send_email_verify_code(
+        "user@example.com",
+        turnstile_token="turnstile-token-123",
+    )
+
+    assert result["data"] is True
+    body = json.loads(calls[0]["data"])
+    assert body == {
+        "email": "user@example.com",
+        "verifySource": "WEB_SHOPIFY_LOGIN",
+        "turnstileToken": "turnstile-token-123",
+    }
+
+
 def test_freebeat_questionnaire_check_failure_does_not_block_submit(monkeypatch):
     client = FreebeatClient(log_fn=lambda message: None)
     submit_calls: list[tuple[str, str]] = []
@@ -547,6 +581,83 @@ def test_freebeat_protocol_mailbox_worker_claims_rewards(monkeypatch):
     assert result["account_overview"]["total_credits"] == 1000
     assert ("questionnaire", "tok_worker") in calls
     assert ("signin", "tok_worker") in calls
+
+
+def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.cookies = ""
+
+        def merge_cookie_header(self, cookie_header):
+            self.cookies = cookie_header
+            calls.append(("merge_cookie", cookie_header))
+
+        def send_email_verify_code(self, email, *, verify_source):
+            raise AssertionError("protocol send should not be used when browser send succeeds")
+
+        def verify_email_code(self, email, code, *, next_action=None, next_router_state_tree=None):
+            calls.append(("login_cookie", self.cookies))
+            return {
+                "code": 0,
+                "data": {
+                    "token": "tok_browser",
+                    "accessToken": "tok_browser",
+                    "deviceToken": "dev_browser",
+                    "userId": "user_browser",
+                    "newUser": True,
+                    "expireTime": 1781635058486,
+                },
+            }
+
+        def fetch_account_state(self, token, **kwargs):
+            return {
+                "token": token,
+                "credits": {"totalCredits": 1000},
+                "signin_status": {"signedToday": True, "canSignIn": False},
+            }
+
+        def claim_questionnaire(self, token, **kwargs):
+            return {"status": "skipped"}
+
+        def daily_sign_in(self, token, **kwargs):
+            return {"status": "skipped", "reward_amount": 0}
+
+    def fake_browser_send(email, **kwargs):
+        calls.append(("browser_send", {"email": email, **kwargs}))
+        return {
+            "ok": True,
+            "browser_sent": True,
+            "cookie_header": "fb_session=sess_123",
+            "turnstile_token": "turnstile-token-123",
+            "response": {"code": 0, "data": True},
+        }
+
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.FreebeatClient", FakeClient)
+    monkeypatch.setattr("platforms.freebeat.protocol_mailbox.send_email_verify_code_in_browser", fake_browser_send)
+
+    worker = FreebeatProtocolMailboxWorker(
+        proxy="socks5://xray:20004",
+        log_fn=lambda message: None,
+        browser_send_code=True,
+        browser_send_code_headless=True,
+        browser_send_code_timeout_seconds=30,
+    )
+    result = worker.run(
+        email="user@example.com",
+        otp_callback=lambda: "123456",
+        auto_questionnaire=False,
+        auto_daily_sign_in=False,
+    )
+
+    assert result["success"] is True
+    assert result["token"] == "tok_browser"
+    assert calls[0][0] == "browser_send"
+    assert calls[0][1]["proxy"] == "socks5://xray:20004"
+    assert calls[0][1]["headless"] is True
+    assert ("merge_cookie", "fb_session=sess_123") in calls
+    assert ("login_cookie", "fb_session=sess_123") in calls
 
 
 def test_freebeat_protocol_mailbox_worker_saves_token_when_state_refresh_times_out(monkeypatch):

@@ -12,6 +12,7 @@ from platforms.freebeat.core import (
     partial_freebeat_account_state,
     summarize_freebeat_account_state,
 )
+from platforms.freebeat.browser_email import send_email_verify_code_in_browser
 
 
 FREEBEAT_POST_LOGIN_STATE_ATTEMPTS = 3
@@ -83,7 +84,14 @@ class FreebeatProtocolMailboxWorker:
         frontend_path: str = "",
         deployment_id: str = "",
         verify_source: str = FREEBEAT_DEFAULT_VERIFY_SOURCE,
+        turnstile_token: str = "",
+        browser_send_code: bool = False,
+        browser_send_code_headless: bool = True,
+        browser_send_code_required: bool = False,
+        browser_send_code_timeout_seconds: float = 120,
     ):
+        self.proxy = proxy
+        self.frontend_path = frontend_path
         self.client = FreebeatClient(
             proxy=proxy,
             log_fn=log_fn,
@@ -94,6 +102,40 @@ class FreebeatProtocolMailboxWorker:
         self.next_action = str(next_action or "").strip() or None
         self.next_router_state_tree = str(next_router_state_tree or "").strip() or None
         self.verify_source = str(verify_source or FREEBEAT_DEFAULT_VERIFY_SOURCE).strip() or FREEBEAT_DEFAULT_VERIFY_SOURCE
+        self.turnstile_token = str(turnstile_token or "").strip()
+        self.browser_send_code = bool(browser_send_code)
+        self.browser_send_code_headless = bool(browser_send_code_headless)
+        self.browser_send_code_required = bool(browser_send_code_required)
+        self.browser_send_code_timeout_seconds = max(10.0, float(browser_send_code_timeout_seconds or 120))
+
+    def _send_email_verify_code(self, email: str) -> dict[str, Any]:
+        if self.browser_send_code and not self.turnstile_token:
+            try:
+                result = send_email_verify_code_in_browser(
+                    email,
+                    proxy=self.proxy,
+                    log_fn=self.log,
+                    frontend_path=self.frontend_path,
+                    verify_source=self.verify_source,
+                    headless=self.browser_send_code_headless,
+                    timeout_seconds=self.browser_send_code_timeout_seconds,
+                )
+                cookie_header = str(result.get("cookie_header") or "").strip()
+                if cookie_header and hasattr(self.client, "merge_cookie_header"):
+                    self.client.merge_cookie_header(cookie_header)
+                token = str(result.get("turnstile_token") or "").strip()
+                self.log(f"Freebeat browser sent email code; turnstile_token={'yes' if token else 'unknown'}")
+                return result
+            except Exception as exc:
+                message = f"Freebeat browser send email code failed: {exc}"
+                if self.browser_send_code_required:
+                    raise RuntimeError(message) from exc
+                self.log(f"{message}; fallback to protocol send")
+
+        kwargs = {"verify_source": self.verify_source}
+        if self.turnstile_token:
+            kwargs["turnstile_token"] = self.turnstile_token
+        return self.client.send_email_verify_code(email, **kwargs)
 
     def run(
         self,
@@ -112,7 +154,7 @@ class FreebeatProtocolMailboxWorker:
             raise RuntimeError("Freebeat 邮箱验证码回调未配置")
 
         self.log(f"Freebeat Step1: 发送邮箱验证码 {email}")
-        self.client.send_email_verify_code(email, verify_source=self.verify_source)
+        self._send_email_verify_code(email)
 
         self.log("等待 Freebeat 邮箱验证码...")
         code = str(otp_callback() or "").strip()

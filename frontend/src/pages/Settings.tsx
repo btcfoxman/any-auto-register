@@ -324,6 +324,10 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
       section: '注册后自动化',
       desc: 'Freebeat 邮箱验证码注册/登录完成后的自动领取动作。',
       items: [
+        { key: 'freebeat_send_code_browser_enabled', label: '通过浏览器发送邮箱验证码', placeholder: 'true' },
+        { key: 'freebeat_send_code_browser_headless', label: '发送验证码浏览器无头模式', placeholder: 'true' },
+        { key: 'freebeat_send_code_browser_timeout_seconds', label: '发送验证码超时秒数', placeholder: '120' },
+        { key: 'freebeat_send_code_browser_required', label: '浏览器发送失败则直接失败', placeholder: 'false' },
         { key: 'freebeat_auto_questionnaire', label: '注册后自动问卷', placeholder: 'true' },
         { key: 'freebeat_auto_daily_sign_in', label: '注册后自动签到', placeholder: 'true' },
       ],
