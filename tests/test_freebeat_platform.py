@@ -21,6 +21,7 @@ from platforms.freebeat.core import (
     _total_credits_from_state,
     _extract_login_payload,
 )
+from platforms.freebeat.browser_email import _candidate_page_urls
 from platforms.freebeat.plugin import FreebeatPlatform
 from platforms.freebeat.protocol_mailbox import FreebeatProtocolMailboxWorker
 
@@ -355,6 +356,14 @@ def test_freebeat_send_code_includes_turnstile_token_when_provided():
         "verifySource": "WEB_SHOPIFY_LOGIN",
         "turnstileToken": "turnstile-token-123",
     }
+
+
+def test_freebeat_browser_send_code_tries_login_pages_after_root():
+    assert _candidate_page_urls("/") == [
+        "https://freebeat.ai/",
+        "https://freebeat.ai/login?redirectTo=%2F",
+        "https://freebeat.ai/tw/login?redirectTo=%2Ftw",
+    ]
 
 
 def test_freebeat_questionnaire_check_failure_does_not_block_submit(monkeypatch):

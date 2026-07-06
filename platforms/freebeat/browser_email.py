@@ -34,6 +34,16 @@ def _page_url(frontend_path: str = "") -> str:
     return f"{FREEBEAT_BASE}{path}"
 
 
+def _candidate_page_urls(frontend_path: str = "") -> list[str]:
+    urls = [_page_url(frontend_path)]
+    for path in (
+        "/login?redirectTo=%2F",
+        "/tw/login?redirectTo=%2Ftw",
+    ):
+        urls.append(f"{FREEBEAT_BASE}{path}")
+    return list(dict.fromkeys(urls))
+
+
 def _playwright_proxy(proxy: str | None) -> dict[str, str] | None:
     raw = str(proxy or "").strip()
     if not raw:
@@ -213,6 +223,48 @@ def _api_response_ok(payload: dict[str, Any]) -> dict[str, Any]:
     return _validate_api_payload(payload, label="sendEmailVerifyCodeV2")
 
 
+def _send_code_fetch_from_page(page, *, email: str, verify_source: str) -> dict[str, Any]:
+    return page.evaluate(
+        """
+async ({ path, email, verifySource }) => {
+  const state = window.__freebeatTurnstile || {};
+  const tokens = Array.isArray(state.tokens) ? state.tokens.filter(Boolean) : [];
+  const token = tokens.length ? String(tokens[tokens.length - 1]) : '';
+  if (!token) return { ok: false, reason: 'missing_turnstile_token' };
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'accept': '*/*',
+      'content-type': 'application/json',
+      'fb-language': 'en',
+      'x-platform-type': 'web',
+      'cache-control': 'no-cache',
+      'pragma': 'no-cache',
+      'priority': 'u=1, i'
+    },
+    body: JSON.stringify({
+      email,
+      verifySource,
+      turnstileToken: token
+    })
+  });
+  return {
+    ok: true,
+    status: response.status,
+    text: await response.text(),
+    turnstileToken: token
+  };
+}
+        """,
+        {
+            "path": FREEBEAT_SEND_CODE_PATH,
+            "email": email,
+            "verifySource": verify_source,
+        },
+    )
+
+
 def send_email_verify_code_in_browser(
     email: str,
     *,
@@ -226,7 +278,7 @@ def send_email_verify_code_in_browser(
     target_email = str(email or "").strip()
     if not target_email:
         raise RuntimeError("Freebeat browser email sender requires email")
-    page_url = _page_url(frontend_path)
+    page_urls = _candidate_page_urls(frontend_path)
     timeout_ms = max(10_000, int(float(timeout_seconds or FREEBEAT_BROWSER_TIMEOUT_SECONDS) * 1000))
     request_record: dict[str, Any] = {}
     response_record: dict[str, Any] = {}
@@ -296,16 +348,7 @@ def send_email_verify_code_in_browser(
 
             page.on("request", on_request)
             page.on("response", on_response)
-            log_fn(f"Freebeat browser send-code open {page_url}")
-            page.goto(page_url, wait_until="domcontentloaded", timeout=timeout_ms)
-            try:
-                page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 15_000))
-            except Exception:
-                pass
-            page.wait_for_timeout(1500)
-
-            start = time.monotonic()
-            open_patterns = ["log\\s*in", "login", "sign\\s*in", "get\\s*started", "try\\s*now", "start"]
+            open_patterns = ["log\\s*in", "login", "sign\\s*in"]
             send_patterns = [
                 "continue",
                 "send",
@@ -317,24 +360,69 @@ def send_email_verify_code_in_browser(
                 "sign\\s*in",
             ]
             last_action: dict[str, Any] = {}
-            while time.monotonic() - start < timeout_ms / 1000:
+            attempted_urls: list[str] = []
+            per_url_timeout = max(15.0, (timeout_ms / 1000) / max(1, len(page_urls)))
+            for page_url in page_urls:
+                attempted_urls.append(page_url)
+                log_fn(f"Freebeat browser send-code open {page_url}")
+                page.goto(page_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 15_000))
+                except Exception:
+                    pass
+                page.wait_for_timeout(1500)
+
+                start = time.monotonic()
+                while time.monotonic() - start < per_url_timeout:
+                    if response_record:
+                        break
+                    _dismiss_popups(page)
+                    filled = _fill_email(page, target_email)
+                    if filled.get("ok"):
+                        clicked = _click_matching(page, send_patterns)
+                        last_action = {"filled": filled, "clicked": clicked, "page_url": page_url}
+                        if not clicked.get("ok"):
+                            try:
+                                page.keyboard.press("Enter")
+                                last_action["pressed_enter"] = True
+                            except Exception:
+                                pass
+                        if not response_record:
+                            fetch_result = _send_code_fetch_from_page(
+                                page,
+                                email=target_email,
+                                verify_source=verify_source,
+                            )
+                            if fetch_result.get("ok"):
+                                request_record.update(
+                                    {
+                                        "url": f"{FREEBEAT_BASE}{FREEBEAT_SEND_CODE_PATH}",
+                                        "method": "POST",
+                                        "body": {
+                                            "email": target_email,
+                                            "verifySource": verify_source,
+                                            "turnstileToken": fetch_result.get("turnstileToken", ""),
+                                        },
+                                        "source": "browser_fetch_fallback",
+                                    }
+                                )
+                                text = str(fetch_result.get("text") or "")
+                                response_record.update(
+                                    {
+                                        "url": f"{FREEBEAT_BASE}{FREEBEAT_SEND_CODE_PATH}",
+                                        "status": int(fetch_result.get("status") or 0),
+                                        "body": _parse_json_text(text),
+                                        "text": text,
+                                        "source": "browser_fetch_fallback",
+                                    }
+                                )
+                                break
+                    else:
+                        clicked = _click_matching(page, open_patterns)
+                        last_action = {"filled": filled, "clicked": clicked, "page_url": page_url}
+                    page.wait_for_timeout(2500)
                 if response_record:
                     break
-                _dismiss_popups(page)
-                filled = _fill_email(page, target_email)
-                if filled.get("ok"):
-                    clicked = _click_matching(page, send_patterns)
-                    last_action = {"filled": filled, "clicked": clicked}
-                    if not clicked.get("ok"):
-                        try:
-                            page.keyboard.press("Enter")
-                            last_action["pressed_enter"] = True
-                        except Exception:
-                            pass
-                else:
-                    clicked = _click_matching(page, open_patterns)
-                    last_action = {"filled": filled, "clicked": clicked}
-                page.wait_for_timeout(2500)
 
             if not response_record:
                 title = ""
@@ -344,7 +432,8 @@ def send_email_verify_code_in_browser(
                     pass
                 raise RuntimeError(
                     "Freebeat browser send-code did not capture sendEmailVerifyCodeV2 request "
-                    f"within {timeout_ms // 1000}s; page={page.url} title={title!r} action={last_action}"
+                    f"within {timeout_ms // 1000}s; tried={attempted_urls} page={page.url} "
+                    f"title={title!r} action={last_action}"
                 )
             if int(response_record.get("status") or 0) != 200:
                 raise RuntimeError(
