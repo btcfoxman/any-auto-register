@@ -207,6 +207,23 @@ def _click_login_entry(page) -> dict[str, Any]:
 
 
 def _fill_email(page, email: str) -> dict[str, Any]:
+    if not _is_freebeat_page_url(page.url):
+        return {"ok": False, "external": True, "url": page.url}
+    for selector in (
+        'input[placeholder="Continue with your email"]',
+        'input[type="email"]',
+    ):
+        try:
+            locator = page.locator(selector).first
+            if callable(locator):
+                locator = locator()
+            if locator.count() <= 0 or not locator.is_visible(timeout=1000):
+                continue
+            locator.click(timeout=5000)
+            locator.fill(email, timeout=5000)
+            return {"ok": True, "native": True, "selector": selector}
+        except Exception:
+            continue
     return page.evaluate(
         """
 (email) => {
@@ -276,6 +293,43 @@ def _fill_email(page, email: str) -> dict[str, Any]:
 
 
 def _click_email_submit(page) -> dict[str, Any]:
+    if not _is_freebeat_page_url(page.url):
+        return {"ok": False, "external": True, "url": page.url}
+    for selector in (
+        'button[aria-label="Send login code"]',
+        'input[placeholder="Continue with your email"] ~ button',
+        'input[type="email"] ~ button',
+        'button[type="submit"]',
+    ):
+        try:
+            locator = page.locator(selector).first
+            if callable(locator):
+                locator = locator()
+            if locator.count() <= 0 or not locator.is_visible(timeout=1000):
+                continue
+            text = ""
+            try:
+                text = str(locator.inner_text(timeout=1000) or "")
+            except Exception:
+                pass
+            label = ""
+            try:
+                label = str(locator.get_attribute("aria-label", timeout=1000) or "")
+            except Exception:
+                pass
+            lower = f"{text} {label}".lower()
+            if any(token in lower for token in ("forgot", "google", "oauth", "apple", "facebook")):
+                continue
+            locator.click(timeout=5000)
+            return {
+                "ok": True,
+                "native": True,
+                "selector": selector,
+                "text": (text or label)[:120],
+                "tag": "BUTTON",
+            }
+        except Exception:
+            continue
     return page.evaluate(
         """
 () => {
