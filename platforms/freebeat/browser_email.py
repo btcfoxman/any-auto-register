@@ -96,11 +96,16 @@ def _install_capture_hooks(page) -> None:
     page.add_init_script(
         """
 (() => {
-  window.__freebeatTurnstile = window.__freebeatTurnstile || { tokens: [], renders: [] };
+  window.__freebeatTurnstile = window.__freebeatTurnstile || { tokens: [], renders: [], widgets: [] };
   const install = () => {
     const ts = window.turnstile;
     if (!ts || ts.__freebeatHooked || typeof ts.render !== 'function') return;
     const originalRender = ts.render.bind(ts);
+    const originalExecute = typeof ts.execute === 'function' ? ts.execute.bind(ts) : null;
+    const originalGetResponse = typeof ts.getResponse === 'function' ? ts.getResponse.bind(ts) : null;
+    const rememberToken = (token) => {
+      if (token && String(token).length > 20) window.__freebeatTurnstile.tokens.push(String(token));
+    };
     ts.render = (container, options = {}) => {
       const copied = {};
       for (const key of ['sitekey', 'action', 'cData', 'chlPageData']) {
@@ -109,11 +114,34 @@ def _install_capture_hooks(page) -> None:
       window.__freebeatTurnstile.renders.push(copied);
       const originalCallback = options.callback;
       options.callback = (token, ...rest) => {
-        if (token) window.__freebeatTurnstile.tokens.push(String(token));
+        rememberToken(token);
         if (typeof originalCallback === 'function') return originalCallback(token, ...rest);
       };
-      return originalRender(container, options);
+      const widgetId = originalRender(container, options);
+      if (widgetId !== undefined && widgetId !== null) {
+        copied.widgetId = String(widgetId);
+        window.__freebeatTurnstile.widgets.push(widgetId);
+      }
+      return widgetId;
     };
+    if (originalExecute) {
+      ts.execute = (...args) => {
+        const result = originalExecute(...args);
+        if (result && typeof result.then === 'function') {
+          result.then(rememberToken).catch(() => {});
+        } else {
+          rememberToken(result);
+        }
+        return result;
+      };
+    }
+    if (originalGetResponse) {
+      ts.getResponse = (...args) => {
+        const result = originalGetResponse(...args);
+        rememberToken(result);
+        return result;
+      };
+    }
     ts.__freebeatHooked = true;
   };
   install();
@@ -400,16 +428,78 @@ def _wait_after_navigation(page) -> None:
         pass
 
 
-def _send_code_fetch_from_page(page, *, email: str, verify_source: str) -> dict[str, Any]:
+def _turnstile_state(page) -> dict[str, Any]:
     return page.evaluate(
         """
-async ({ path, email, verifySource }) => {
+() => {
+  const state = window.__freebeatTurnstile || {};
+  const tokens = Array.isArray(state.tokens) ? state.tokens.filter(Boolean).map(String).filter((token) => token.length > 20) : [];
+  const widgets = Array.isArray(state.widgets) ? state.widgets : [];
+  const inputTokens = Array.from(
+    document.querySelectorAll('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]')
+  ).map((el) => String(el.value || '')).filter((token) => token.length > 20);
+  const responseTokens = [];
+  if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
+    for (const widget of widgets) {
+      try {
+        const token = window.turnstile.getResponse(widget);
+        if (token && String(token).length > 20) responseTokens.push(String(token));
+      } catch (_) {}
+    }
+    try {
+      const token = window.turnstile.getResponse();
+      if (token && String(token).length > 20) responseTokens.push(String(token));
+    } catch (_) {}
+  }
+  const allTokens = [...tokens, ...inputTokens, ...responseTokens].filter(Boolean);
+  return {
+    tokens,
+    inputTokens,
+    responseTokens,
+    renders: Array.isArray(state.renders) ? state.renders : [],
+    widgets: widgets.map(String),
+    token: allTokens.length ? allTokens[allTokens.length - 1] : '',
+    hasTurnstile: !!window.turnstile,
+    url: window.location.href
+  };
+}
+        """
+    )
+
+
+def _wait_for_turnstile_token(page, *, timeout_seconds: float = 18.0) -> dict[str, Any]:
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds or 18.0))
+    last_state: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        if not _is_freebeat_page_url(page.url):
+            return {"token": "", "external": True, "url": page.url}
+        try:
+            state = _turnstile_state(page)
+        except Exception as exc:
+            if not _is_transient_navigation_error(exc):
+                raise
+            _wait_after_navigation(page)
+            continue
+        last_state = state if isinstance(state, dict) else {}
+        if str(last_state.get("token") or "").strip():
+            return last_state
+        page.wait_for_timeout(750)
+    return last_state
+
+
+def _send_code_fetch_from_page(page, *, email: str, verify_source: str, turnstile_token: str = "") -> dict[str, Any]:
+    return page.evaluate(
+        """
+async ({ path, email, verifySource, turnstileToken }) => {
   if (!/(^|\\.)freebeat\\.ai$/i.test(window.location.hostname || '')) {
     return { ok: false, reason: 'external_origin', url: window.location.href };
   }
   const state = window.__freebeatTurnstile || {};
-  const tokens = Array.isArray(state.tokens) ? state.tokens.filter(Boolean) : [];
-  const token = tokens.length ? String(tokens[tokens.length - 1]) : '';
+  const tokens = Array.isArray(state.tokens) ? state.tokens.filter(Boolean).map(String).filter((token) => token.length > 20) : [];
+  const inputTokens = Array.from(
+    document.querySelectorAll('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]')
+  ).map((el) => String(el.value || '')).filter((token) => token.length > 20);
+  const token = turnstileToken || (inputTokens.length ? inputTokens[inputTokens.length - 1] : '') || (tokens.length ? String(tokens[tokens.length - 1]) : '');
   if (!token) return { ok: false, reason: 'missing_turnstile_token' };
   const response = await fetch(path, {
     method: 'POST',
@@ -441,6 +531,7 @@ async ({ path, email, verifySource }) => {
             "path": FREEBEAT_SEND_CODE_PATH,
             "email": email,
             "verifySource": verify_source,
+            "turnstileToken": turnstile_token,
         },
     )
 
@@ -586,11 +677,42 @@ def send_email_verify_code_in_browser(
                             except Exception:
                                 pass
                         if not response_record:
+                            for _ in range(8):
+                                if response_record:
+                                    break
+                                page.wait_for_timeout(500)
+                            token_state: dict[str, Any] = {}
+                            if not response_record:
+                                try:
+                                    token_state = _wait_for_turnstile_token(page, timeout_seconds=18.0)
+                                except Exception as exc:
+                                    if not _is_transient_navigation_error(exc):
+                                        raise
+                                    last_action = {
+                                        "filled": filled,
+                                        "clicked": clicked,
+                                        "error": str(exc),
+                                        "stage": "wait_turnstile_token",
+                                        "page_url": page_url,
+                                    }
+                                    _wait_after_navigation(page)
+                                    continue
+                                last_action["turnstile"] = {
+                                    "hasTurnstile": token_state.get("hasTurnstile"),
+                                    "token": bool(str(token_state.get("token") or "").strip()),
+                                    "renders": token_state.get("renders"),
+                                    "widgets": token_state.get("widgets"),
+                                    "inputTokens": len(token_state.get("inputTokens") or []),
+                                    "responseTokens": len(token_state.get("responseTokens") or []),
+                                }
+                            if response_record:
+                                break
                             try:
                                 fetch_result = _send_code_fetch_from_page(
                                     page,
                                     email=target_email,
                                     verify_source=verify_source,
+                                    turnstile_token=str(token_state.get("token") or "").strip(),
                                 )
                             except Exception as exc:
                                 if not _is_transient_navigation_error(exc):
