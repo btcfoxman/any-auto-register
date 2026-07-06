@@ -766,6 +766,7 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
         browser_send_code_engine="patchright",
         browser_send_code_channel="chrome",
         browser_send_code_cdp_url="http://127.0.0.1:9222",
+        browser_send_code_cdp_launcher_url="http://172.18.0.1:9321",
         browser_send_code_user_data_dir="tmp/freebeat-browser-profile",
         browser_send_code_stealth=False,
         browser_send_code_humanize=False,
@@ -793,6 +794,7 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
     assert calls[0][1]["browser_engine"] == "patchright"
     assert calls[0][1]["browser_channel"] == "chrome"
     assert calls[0][1]["browser_cdp_url"] == "http://127.0.0.1:9222"
+    assert calls[0][1]["browser_cdp_launcher_url"] == "http://172.18.0.1:9321"
     assert calls[0][1]["user_data_dir"] == "tmp/freebeat-browser-profile"
     assert calls[0][1]["stealth_enabled"] is False
     assert calls[0][1]["humanize"] is False

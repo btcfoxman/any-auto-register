@@ -99,6 +99,7 @@ class FreebeatProtocolMailboxWorker:
         browser_send_code_engine: str = "playwright",
         browser_send_code_channel: str = "",
         browser_send_code_cdp_url: str = "",
+        browser_send_code_cdp_launcher_url: str = "",
         browser_send_code_user_data_dir: str = "",
         browser_send_code_stealth: bool = True,
         browser_send_code_humanize: bool = True,
@@ -131,6 +132,7 @@ class FreebeatProtocolMailboxWorker:
         self.browser_send_code_engine = str(browser_send_code_engine or "playwright").strip() or "playwright"
         self.browser_send_code_channel = str(browser_send_code_channel or "").strip()
         self.browser_send_code_cdp_url = str(browser_send_code_cdp_url or "").strip()
+        self.browser_send_code_cdp_launcher_url = str(browser_send_code_cdp_launcher_url or "").strip()
         self.browser_send_code_user_data_dir = str(browser_send_code_user_data_dir or "").strip()
         self.browser_send_code_stealth = bool(browser_send_code_stealth)
         self.browser_send_code_humanize = bool(browser_send_code_humanize)
@@ -156,6 +158,7 @@ class FreebeatProtocolMailboxWorker:
                     browser_engine=self.browser_send_code_engine,
                     browser_channel=self.browser_send_code_channel,
                     browser_cdp_url=self.browser_send_code_cdp_url,
+                    browser_cdp_launcher_url=self.browser_send_code_cdp_launcher_url,
                     user_data_dir=self.browser_send_code_user_data_dir,
                     stealth_enabled=self.browser_send_code_stealth,
                     humanize=self.browser_send_code_humanize,

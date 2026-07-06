@@ -5,6 +5,7 @@ import json
 import random
 import time
 from typing import Any, Callable
+from urllib import request as urlrequest
 from urllib.parse import unquote, urlparse
 
 from platforms.freebeat.core import (
@@ -29,6 +30,7 @@ FREEBEAT_BROWSER_USER_AGENT = (
 )
 FREEBEAT_BROWSER_TIMEOUT_SECONDS = 120
 FREEBEAT_BROWSER_ENGINE = "playwright"
+FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS = 20
 
 
 def _page_url(frontend_path: str = "") -> str:
@@ -118,6 +120,92 @@ def _parse_json_text(value: Any) -> Any:
         return json.loads(text)
     except Exception:
         return {"raw": text}
+
+
+def _join_url(base_url: str, path: str) -> str:
+    return f"{str(base_url or '').rstrip('/')}/{str(path or '').lstrip('/')}"
+
+
+def _post_json(url: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+    data = json.dumps(payload).encode("utf-8")
+    req = urlrequest.Request(
+        url,
+        data=data,
+        headers={"content-type": "application/json", "accept": "application/json"},
+        method="POST",
+    )
+    with urlrequest.urlopen(req, timeout=max(1.0, float(timeout or 1.0))) as response:
+        text = response.read().decode("utf-8", "replace")
+    parsed = _parse_json_text(text)
+    return parsed if isinstance(parsed, dict) else {"raw": text}
+
+
+def _launch_cdp_browser_session(
+    launcher_url: str,
+    *,
+    proxy: str | None,
+    page_url: str,
+    headless: bool,
+    locale: str,
+    timezone_id: str,
+    user_agent: str,
+    timeout_seconds: float,
+    log_fn: Callable[[str], None] = print,
+) -> dict[str, Any]:
+    base = str(launcher_url or "").strip()
+    if not base:
+        return {}
+    payload = {
+        "proxy": str(proxy or "").strip(),
+        "url": page_url,
+        "headless": bool(headless),
+        "locale": str(locale or FREEBEAT_BROWSER_LOCALE),
+        "timezone_id": str(timezone_id or FREEBEAT_BROWSER_TIMEZONE),
+        "user_agent": str(user_agent or "").strip(),
+        "timeout_seconds": max(10.0, float(timeout_seconds or FREEBEAT_BROWSER_TIMEOUT_SECONDS)),
+    }
+    result = _post_json(
+        _join_url(base, "/launch"),
+        payload,
+        timeout=min(FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS, max(5.0, float(timeout_seconds or 20))),
+    )
+    if not result.get("ok"):
+        raise RuntimeError(f"Freebeat CDP launcher failed: {result}")
+    cdp_url = str(result.get("cdp_url") or "").strip()
+    if not cdp_url:
+        raise RuntimeError(f"Freebeat CDP launcher did not return cdp_url: {result}")
+    safe_proxy = str(result.get("proxy") or proxy or "").strip()
+    if "@" in safe_proxy:
+        parsed = urlparse(safe_proxy)
+        if parsed.hostname:
+            safe_proxy = f"{parsed.scheme}://***@{parsed.hostname}{':' + str(parsed.port) if parsed.port else ''}"
+    log_fn(
+        "Freebeat CDP launcher started "
+        f"session={result.get('session_id') or '-'} cdp={cdp_url} proxy={safe_proxy or '-'}"
+    )
+    return result
+
+
+def _release_cdp_browser_session(
+    launcher_url: str,
+    session: dict[str, Any] | None,
+    *,
+    log_fn: Callable[[str], None] = print,
+) -> None:
+    if not launcher_url or not session:
+        return
+    session_id = str(session.get("session_id") or "").strip()
+    release_url = str(session.get("release_url") or "").strip() or _join_url(launcher_url, "/release")
+    if not session_id:
+        return
+    try:
+        result = _post_json(release_url, {"session_id": session_id}, timeout=8)
+        if result.get("ok"):
+            log_fn(f"Freebeat CDP launcher released session={session_id}")
+        else:
+            log_fn(f"Freebeat CDP launcher release returned: {result}")
+    except Exception as exc:
+        log_fn(f"Freebeat CDP launcher release failed session={session_id}: {exc}")
 
 
 def _first_locator(locator):
@@ -1048,6 +1136,7 @@ def send_email_verify_code_in_browser(
     browser_engine: str = FREEBEAT_BROWSER_ENGINE,
     browser_channel: str = "",
     browser_cdp_url: str = "",
+    browser_cdp_launcher_url: str = "",
     user_data_dir: str = "",
     stealth_enabled: bool = True,
     humanize: bool = True,
@@ -1068,6 +1157,8 @@ def send_email_verify_code_in_browser(
     response_record: dict[str, Any] = {}
     request_failures: list[dict[str, Any]] = []
     console_events: list[dict[str, str]] = []
+    cdp_launcher_url = str(browser_cdp_launcher_url or "").strip()
+    cdp_launcher_session: dict[str, Any] = {}
 
     playwright_context, resolved_browser_engine = _sync_playwright_context(browser_engine)
 
@@ -1087,6 +1178,19 @@ def send_email_verify_code_in_browser(
         }
         channel = str(browser_channel or "").strip()
         cdp_url = str(browser_cdp_url or "").strip()
+        if cdp_launcher_url:
+            cdp_launcher_session = _launch_cdp_browser_session(
+                cdp_launcher_url,
+                proxy=proxy,
+                page_url=page_urls[0],
+                headless=headless,
+                locale=locale,
+                timezone_id=timezone_id,
+                user_agent=user_agent,
+                timeout_seconds=timeout_seconds,
+                log_fn=log_fn,
+            )
+            cdp_url = str(cdp_launcher_session.get("cdp_url") or "").strip()
         if channel:
             launch_options["channel"] = channel
         proxy_options = _playwright_proxy(proxy)
@@ -1099,7 +1203,7 @@ def send_email_verify_code_in_browser(
             f"turnstile_click={'on' if turnstile_click_enabled else 'off'} "
             f"solver={'on' if turnstile_solver else 'off'} "
             f"headless={'on' if headless else 'off'} "
-            f"cdp={'on' if cdp_url else 'off'}"
+            f"cdp={'launcher' if cdp_launcher_url else ('on' if cdp_url else 'off')}"
         )
         context_options: dict[str, Any] = {
             "locale": str(locale or FREEBEAT_BROWSER_LOCALE),
@@ -1476,7 +1580,7 @@ def send_email_verify_code_in_browser(
                 raise RuntimeError(
                     "Freebeat browser send-code did not capture sendEmailVerifyCodeV2 request "
                     f"within {timeout_ms // 1000}s; engine={resolved_browser_engine} "
-                    f"channel={channel or 'default'} cdp={'on' if cdp_url else 'off'} "
+                    f"channel={channel or 'default'} cdp={'launcher' if cdp_launcher_url else ('on' if cdp_url else 'off')} "
                     f"stealth={'on' if stealth_enabled else 'off'} "
                     f"init_hooks={'off' if cdp_url else 'on'} "
                     f"humanize={'on' if humanize else 'off'} profile={'on' if str(user_data_dir or '').strip() else 'off'} "
@@ -1512,6 +1616,8 @@ def send_email_verify_code_in_browser(
                 "browser_engine": resolved_browser_engine,
                 "browser_channel": channel,
                 "browser_cdp_url": cdp_url,
+                "browser_cdp_launcher_url": cdp_launcher_url,
+                "browser_cdp_launcher_session_id": str(cdp_launcher_session.get("session_id") or ""),
                 "stealth_enabled": bool(stealth_enabled),
                 "humanize": bool(humanize),
                 "locale": context_options.get("locale"),
@@ -1533,3 +1639,4 @@ def send_email_verify_code_in_browser(
                     browser.close()
                 except Exception:
                     pass
+            _release_cdp_browser_session(cdp_launcher_url, cdp_launcher_session, log_fn=log_fn)

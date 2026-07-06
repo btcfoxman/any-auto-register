@@ -217,6 +217,9 @@ class FreebeatPlatform(BasePlatform):
                 browser_send_code_cdp_url=str(
                     _runtime_value(extra, "freebeat_send_code_browser_cdp_url", "") or ""
                 ),
+                browser_send_code_cdp_launcher_url=str(
+                    _runtime_value(extra, "freebeat_send_code_browser_cdp_launcher_url", "") or ""
+                ),
                 browser_send_code_user_data_dir=str(
                     _runtime_value(extra, "freebeat_send_code_browser_user_data_dir", "") or ""
                 ),
