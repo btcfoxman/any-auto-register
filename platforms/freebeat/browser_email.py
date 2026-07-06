@@ -1336,6 +1336,8 @@ def send_email_verify_code_in_browser(
             last_action: dict[str, Any] = {}
             attempted_urls: list[str] = []
             per_url_timeout = max(15.0, (timeout_ms / 1000) / max(1, len(page_urls)))
+            verification_retry_count = 0
+            max_verification_retries = 3
             for page_url in page_urls:
                 attempted_urls.append(page_url)
                 log_fn(f"Freebeat browser send-code open {page_url}")
@@ -1349,6 +1351,29 @@ def send_email_verify_code_in_browser(
                 start = time.monotonic()
                 while time.monotonic() - start < per_url_timeout:
                     if response_record:
+                        if (
+                            _is_send_code_verification_failed(response_record.get("body"))
+                            and verification_retry_count < max_verification_retries
+                        ):
+                            verification_retry_count += 1
+                            last_action["verification_failed_response"] = {
+                                "status": response_record.get("status"),
+                                "body": response_record.get("body"),
+                                "source": response_record.get("source", "page_request"),
+                                "retry": verification_retry_count,
+                            }
+                            response_record.clear()
+                            request_record.clear()
+                            log_fn(
+                                "Freebeat browser send-code verification failed; "
+                                f"retrying challenge {verification_retry_count}/{max_verification_retries}"
+                            )
+                            try:
+                                page.reload(wait_until="domcontentloaded", timeout=min(timeout_ms, 30_000))
+                            except Exception:
+                                _goto_with_retries(page, page_url, timeout=timeout_ms, log_fn=log_fn)
+                            page.wait_for_timeout(1800)
+                            continue
                         break
                     if not _is_freebeat_page_url(page.url):
                         last_action = {"stage": "external_origin", "page_url": page_url, "current_url": page.url}
@@ -1531,6 +1556,34 @@ def send_email_verify_code_in_browser(
                                 if key not in {"text"}
                             }
                             if fetch_result.get("ok"):
+                                text = str(fetch_result.get("text") or "")
+                                parsed_body = _parse_json_text(text)
+                                if (
+                                    _is_send_code_verification_failed(parsed_body)
+                                    and verification_retry_count < max_verification_retries
+                                ):
+                                    verification_retry_count += 1
+                                    last_action["browser_fetch_fallback"] = {
+                                        key: value
+                                        for key, value in dict(fetch_result or {}).items()
+                                        if key not in {"text"}
+                                    }
+                                    last_action["verification_failed_response"] = {
+                                        "status": int(fetch_result.get("status") or 0),
+                                        "body": parsed_body,
+                                        "source": "browser_fetch_fallback",
+                                        "retry": verification_retry_count,
+                                    }
+                                    log_fn(
+                                        "Freebeat browser fetch verification failed; "
+                                        f"retrying challenge {verification_retry_count}/{max_verification_retries}"
+                                    )
+                                    try:
+                                        page.reload(wait_until="domcontentloaded", timeout=min(timeout_ms, 30_000))
+                                    except Exception:
+                                        _goto_with_retries(page, page_url, timeout=timeout_ms, log_fn=log_fn)
+                                    page.wait_for_timeout(1800)
+                                    continue
                                 request_record.update(
                                     {
                                         "url": f"{FREEBEAT_BASE}{FREEBEAT_SEND_CODE_PATH}",
@@ -1543,12 +1596,11 @@ def send_email_verify_code_in_browser(
                                         "source": "browser_fetch_fallback",
                                     }
                                 )
-                                text = str(fetch_result.get("text") or "")
                                 response_record.update(
                                     {
                                         "url": f"{FREEBEAT_BASE}{FREEBEAT_SEND_CODE_PATH}",
                                         "status": int(fetch_result.get("status") or 0),
-                                        "body": _parse_json_text(text),
+                                        "body": parsed_body,
                                         "text": text,
                                         "source": "browser_fetch_fallback",
                                     }
