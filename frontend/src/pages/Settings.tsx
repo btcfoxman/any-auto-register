@@ -321,6 +321,14 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'freebeat_daily_sign_in_max_interval_seconds', label: '最大间隔秒数', placeholder: '7200' },
       ],
     }, {
+      section: '低额度停用',
+      desc: '账号创建超过指定小时且额度低于阈值时，自动标记过期并停止签到、保活和下游自动维护。',
+      items: [
+        { key: 'freebeat_retire_low_credit_enabled', label: '启用低额度停用', placeholder: 'true' },
+        { key: 'freebeat_retire_credit_threshold', label: '额度阈值（小于）', placeholder: '1' },
+        { key: 'freebeat_retire_after_hours', label: '账号创建超过小时', placeholder: '24' },
+      ],
+    }, {
       section: '注册后自动化',
       desc: 'Freebeat 邮箱验证码注册/登录完成后的自动领取动作。',
       items: [

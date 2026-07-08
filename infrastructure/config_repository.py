@@ -27,6 +27,8 @@ class ConfigRepository:
         "lingya_qq_publish_post_quota_delay",
         "freebeat_daily_sign_in_enabled", "freebeat_daily_sign_in_min_interval_seconds",
         "freebeat_daily_sign_in_max_interval_seconds", "freebeat_auto_daily_sign_in",
+        "freebeat_retire_low_credit_enabled", "freebeat_retire_credit_threshold",
+        "freebeat_retire_after_hours",
         "freebeat_auto_questionnaire",
         "freebeat_send_code_browser_enabled", "freebeat_send_code_browser_headless",
         "freebeat_send_code_browser_required", "freebeat_send_code_browser_timeout_seconds",

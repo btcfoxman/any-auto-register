@@ -6,11 +6,14 @@ from sqlmodel import Session
 
 from core.account_graph import load_account_graphs, patch_account_graph
 from core.db import AccountModel, engine
+from infrastructure.config_repository import ConfigRepository
 from services.freebeat_daily_signin import (
+    DEFAULT_RETIRE_CREDIT_THRESHOLD,
     DEFAULT_SIGN_IN_MAX_INTERVAL_SECONDS,
     DEFAULT_SIGN_IN_MIN_INTERVAL_SECONDS,
     FreebeatDailySignInWorker,
     _dynamic_interval_seconds,
+    _retire_settings,
 )
 
 
@@ -84,6 +87,21 @@ def test_freebeat_daily_signin_dynamic_interval_defaults(monkeypatch):
     }
 
 
+def test_freebeat_daily_signin_retire_settings_default_and_override():
+    assert _retire_settings({}) == (True, DEFAULT_RETIRE_CREDIT_THRESHOLD, 24)
+    assert _retire_settings({"freebeat_retire_credit_threshold": "300"}) == (True, 300, 24)
+
+
+def test_freebeat_retire_settings_are_configurable():
+    allowed = ConfigRepository().get_allowed_keys()
+
+    assert {
+        "freebeat_retire_low_credit_enabled",
+        "freebeat_retire_credit_threshold",
+        "freebeat_retire_after_hours",
+    }.issubset(allowed)
+
+
 def test_freebeat_daily_signin_targets_only_due_active_accounts():
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     eligible_id = _create_freebeat_account("eligible@example.com")
@@ -149,23 +167,22 @@ def test_freebeat_daily_signin_retires_old_low_credit_accounts(monkeypatch):
     low_id = _create_freebeat_account(
         "old-low-credit@example.com",
         created_at=old_created_at,
-        overview_updates={"total_credits": 299},
+        overview_updates={"total_credits": 0},
     )
     fresh_id = _create_freebeat_account(
         "fresh-low-credit@example.com",
         created_at=datetime.now(timezone.utc) - timedelta(hours=2),
-        overview_updates={"total_credits": 299},
+        overview_updates={"total_credits": 0},
     )
     enough_id = _create_freebeat_account(
         "old-enough-credit@example.com",
         created_at=old_created_at,
-        overview_updates={"total_credits": 300},
+        overview_updates={"total_credits": 1},
     )
 
     worker = FreebeatDailySignInWorker()
     monkeypatch.setattr(worker, "_config", lambda: {
         "freebeat_retire_low_credit_enabled": "true",
-        "freebeat_retire_credit_threshold": "300",
         "freebeat_retire_after_hours": "24",
     })
     monkeypatch.setattr(worker, "_sync_retired_remote_auto_maintenance", lambda account_id: None)
@@ -183,8 +200,8 @@ def test_freebeat_daily_signin_retires_old_low_credit_accounts(monkeypatch):
     assert graph["lifecycle_status"] == "expired"
     assert overview["freebeat_retired"] is True
     assert overview["freebeat_retire_reason"] == "low_credits_after_age"
-    assert overview["freebeat_retire_credit_balance"] == 299
-    assert overview["freebeat_retire_credit_threshold"] == 300
+    assert overview["freebeat_retire_credit_balance"] == 0
+    assert overview["freebeat_retire_credit_threshold"] == 1
     assert overview["freebeat_retire_after_hours"] == 24
     assert overview["freebeat_daily_sign_in_disabled"] is True
     assert overview["freebeat_keepalive_disabled"] is True
