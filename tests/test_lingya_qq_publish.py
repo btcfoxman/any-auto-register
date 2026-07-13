@@ -39,6 +39,18 @@ def _png_header(width: int, height: int) -> bytes:
     )
 
 
+def _mp4_with_duration(duration: int, timescale: int = 1000) -> bytes:
+    mvhd_payload = (
+        b"\x00\x00\x00\x00"
+        + (0).to_bytes(4, "big")
+        + (0).to_bytes(4, "big")
+        + timescale.to_bytes(4, "big")
+        + duration.to_bytes(4, "big")
+    )
+    mvhd = (len(mvhd_payload) + 8).to_bytes(4, "big") + b"mvhd" + mvhd_payload
+    return (len(mvhd) + 8).to_bytes(4, "big") + b"moov" + mvhd
+
+
 def test_publish_asset_retries_when_source_connection_is_aborted(monkeypatch):
     calls = []
 
@@ -114,6 +126,43 @@ def test_publish_asset_reads_intro_and_prompt_aliases(monkeypatch):
     assert asset.prompt == "scene prompt"
     assert asset.creation_process_text == "api creation process"
     assert asset.tag_infos == [{"id": "tag_2QCVIf1DjL", "title": "玄幻", "alias": ""}]
+
+
+def test_publish_asset_detects_and_rounds_up_mp4_duration(monkeypatch):
+    video = _mp4_with_duration(60_913)
+
+    def fake_get(url, timeout=5, proxies=None):
+        return FakeResponse(
+            {
+                "title": "duration title",
+                "video_base64": _b64(video),
+                "cover_base64": _b64(b"cover"),
+            }
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+
+    asset = fetch_lingya_qq_publish_asset("https://source.example/work")
+
+    assert asset.duration == 61
+
+
+def test_publish_asset_rounds_up_explicit_fractional_duration(monkeypatch):
+    def fake_get(url, timeout=5, proxies=None):
+        return FakeResponse(
+            {
+                "title": "duration title",
+                "duration": 60.1,
+                "video_base64": _b64(b"video"),
+                "cover_base64": _b64(b"cover"),
+            }
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+
+    asset = fetch_lingya_qq_publish_asset("https://source.example/work")
+
+    assert asset.duration == 61
 
 
 def test_publish_asset_json_source_ignores_content_defaults(monkeypatch):

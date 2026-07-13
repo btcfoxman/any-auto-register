@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -84,6 +85,62 @@ def _to_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _iter_mp4_boxes(data: bytes, start: int = 0, end: int | None = None):
+    limit = min(len(data), end if end is not None else len(data))
+    offset = max(start, 0)
+    while offset + 8 <= limit:
+        size = int.from_bytes(data[offset:offset + 4], "big")
+        box_type = data[offset + 4:offset + 8]
+        header_size = 8
+        if size == 1:
+            if offset + 16 > limit:
+                return
+            size = int.from_bytes(data[offset + 8:offset + 16], "big")
+            header_size = 16
+        elif size == 0:
+            size = limit - offset
+        if size < header_size or offset + size > limit:
+            return
+        yield box_type, offset + header_size, offset + size
+        offset += size
+
+
+def _mp4_duration_seconds(data: bytes) -> float | None:
+    for box_type, content_start, box_end in _iter_mp4_boxes(data):
+        if box_type != b"moov":
+            continue
+        for child_type, child_start, child_end in _iter_mp4_boxes(data, content_start, box_end):
+            if child_type != b"mvhd" or child_start + 20 > child_end:
+                continue
+            version = data[child_start]
+            if version == 0:
+                timescale_offset = child_start + 12
+                duration_offset = child_start + 16
+                duration_size = 4
+            elif version == 1:
+                timescale_offset = child_start + 20
+                duration_offset = child_start + 24
+                duration_size = 8
+            else:
+                continue
+            if duration_offset + duration_size > child_end:
+                continue
+            timescale = int.from_bytes(data[timescale_offset:timescale_offset + 4], "big")
+            duration = int.from_bytes(data[duration_offset:duration_offset + duration_size], "big")
+            if timescale > 0 and duration > 0:
+                return duration / timescale
+    return None
+
+
+def _video_duration(value: Any, video_bytes: bytes, default: int = 10) -> int:
+    try:
+        explicit = float(value)
+    except (TypeError, ValueError):
+        explicit = 0.0
+    duration = explicit if explicit > 0 else (_mp4_duration_seconds(video_bytes) or 0.0)
+    return max(int(math.ceil(duration)) if duration > 0 else int(default), 1)
 
 
 def _image_size_from_bytes(data: bytes) -> tuple[int, int] | None:
@@ -397,7 +454,7 @@ def fetch_lingya_qq_publish_asset(
             cover_bytes=cover_bytes,
             cover_filename=cover_filename,
             cover_content_type=cover_type or "image/jpeg",
-            duration=_to_int(defaults.get("duration"), 10),
+            duration=_video_duration(defaults.get("duration"), response.content),
             cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, _to_float(defaults.get("cover_ratio"), 0.75)),
             tag_infos=_tag_infos_from_payload({}, defaults),
             creation_process_text=_creation_process_text_from_payload({}, defaults),
@@ -442,7 +499,10 @@ def fetch_lingya_qq_publish_asset(
         cover_bytes=cover_bytes,
         cover_filename=cover_filename,
         cover_content_type=cover_content_type or "image/jpeg",
-        duration=max(_to_int(_pick(payload, ("duration", "duration_seconds", "durationSeconds")), 10), 1),
+        duration=_video_duration(
+            _pick(payload, ("duration", "duration_seconds", "durationSeconds")),
+            video_bytes,
+        ),
         cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, fallback_cover_ratio),
         tag_infos=_tag_infos_from_payload(payload, {}),
         creation_process_text=_creation_process_text_from_payload(payload, {}),
