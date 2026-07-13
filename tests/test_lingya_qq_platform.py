@@ -1747,9 +1747,9 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
                 "ret": 0,
                 "data": {
                     "transcoding_status": 1,
-                    "highlight_scene_status": 1,
+                    "highlight_scene_status": 3,
                     "sequence_frames_status": 1,
-                    "highlight_scene_frames_status": 1,
+                    "highlight_scene_frames_status": 3,
                 },
             }
 
@@ -1850,6 +1850,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     data = result["data"]
     assert data["last_publish_vid"] == "vid123"
     assert data["last_publish_status"] == "released"
+    assert data["last_publish_generation_statuses"] == [1, 3, 1, 3]
     assert data["profile_updated"] is True
     assert data["avatar"] == "https://filecdn.lumio.qq.com/image/cover.jpg"
     assert data["nick"] == "赵二果"
@@ -1878,7 +1879,7 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
         ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID)
     )
     assert ("video", "video.mp4", "vuid", b"video-bytes", DEFAULT_VIDEO_UPLOAD_SERVICE_ID) in events
-    assert ("highlight_scene_list", "vid123") in events
+    assert events.count(("highlight_scene_list", "vid123")) == 1
     assert ("upload_work", 2, "vid123", "publish title") in events
     assert ("upload_work", 1, "vid123", "publish title") in events
     final_payload = upload_payloads[-1]
@@ -1899,6 +1900,55 @@ def test_lingya_qq_publish_work_flow(monkeypatch):
     assert data["last_publish_initial_first_post_credit_granted"] is False
     assert data["last_publish_first_post_credit_granted"] is True
     assert data["last_publish_first_post_credit_text"] == "first post credit"
+
+
+def test_lingya_qq_wait_generation_keeps_all_success_fast_path():
+    class FakeClient:
+        def get_work_generation_status(self, vid: str):
+            assert vid == "vid-success"
+            return {
+                "ret": 0,
+                "data": {
+                    "transcoding_status": 1,
+                    "highlight_scene_status": 1,
+                    "sequence_frames_status": 1,
+                    "highlight_scene_frames_status": 1,
+                },
+            }
+
+        def get_highlight_scene_list(self, vid: str):
+            raise AssertionError("all-success status must not need an early highlight probe")
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+
+    result = platform._wait_work_generation(FakeClient(), "vid-success", poll_interval=1, timeout=0)
+
+    assert platform._work_generation_statuses(result) == [1, 1, 1, 1]
+    assert "_highlight_scene_list" not in result
+
+
+def test_lingya_qq_wait_generation_reports_terminal_highlight_without_segments():
+    class FakeClient:
+        def get_work_generation_status(self, vid: str):
+            assert vid == "vid-no-segments"
+            return {
+                "ret": 0,
+                "data": {
+                    "transcoding_status": 1,
+                    "highlight_scene_status": 3,
+                    "sequence_frames_status": 1,
+                    "highlight_scene_frames_status": 3,
+                },
+            }
+
+        def get_highlight_scene_list(self, vid: str):
+            assert vid == "vid-no-segments"
+            return {"ret": 0, "data": {"highlight_segments": []}}
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+
+    with pytest.raises(RuntimeError, match="terminal status without usable segments"):
+        platform._wait_work_generation(FakeClient(), "vid-no-segments", poll_interval=1, timeout=0)
 
 
 def test_lingya_qq_upload_work_retries_readframe_transient():

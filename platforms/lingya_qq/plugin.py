@@ -1186,9 +1186,9 @@ class LingYaQQPlatform(BasePlatform):
             },
         }
 
-    def _work_generation_statuses(self, payload: dict[str, Any]) -> list[int]:
+    def _work_generation_status_map(self, payload: dict[str, Any]) -> dict[str, int]:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-        statuses: list[int] = []
+        statuses: dict[str, int] = {}
         if not isinstance(data, dict):
             return statuses
         for key in (
@@ -1201,8 +1201,11 @@ class LingYaQQPlatform(BasePlatform):
             if isinstance(value, dict):
                 value = value.get("status")
             if value not in (None, ""):
-                statuses.append(_as_int(value, 0))
+                statuses[key] = _as_int(value, 0)
         return statuses
+
+    def _work_generation_statuses(self, payload: dict[str, Any]) -> list[int]:
+        return list(self._work_generation_status_map(payload).values())
 
     def _wait_work_generation(
         self,
@@ -1213,18 +1216,58 @@ class LingYaQQPlatform(BasePlatform):
         timeout: int,
         cancel_check=None,
     ) -> dict[str, Any]:
-        deadline = time.time() + max(timeout, 0)
+        started_at = time.time()
+        deadline = started_at + max(timeout, 0)
         last_payload: dict[str, Any] = {}
+        last_status_map: dict[str, int] | None = None
+        terminal_highlight_payload: dict[str, Any] | None = None
         while True:
             if callable(cancel_check) and cancel_check():
                 raise RuntimeError("LingYaQQ follow-up cancelled")
             last_payload = client.get_work_generation_status(vid)
-            statuses = self._work_generation_statuses(last_payload)
+            status_map = self._work_generation_status_map(last_payload)
+            statuses = list(status_map.values())
+            if status_map != last_status_map:
+                elapsed = max(0, int(time.time() - started_at))
+                self.log(f"LingYaQQ work generation status: vid={vid} elapsed={elapsed}s statuses={status_map}")
+                last_status_map = dict(status_map)
             if statuses and all(status == 1 for status in statuses):
                 return last_payload
             if any(status == 2 for status in statuses):
                 raise RuntimeError(f"LingYaQQ work generation failed: {last_payload}")
+
+            core_ready = (
+                status_map.get("transcoding_status") == 1
+                and status_map.get("sequence_frames_status") == 1
+            )
+            highlight_terminal = (
+                status_map.get("highlight_scene_status") in {1, 3}
+                and status_map.get("highlight_scene_frames_status") in {1, 3}
+                and 3 in {
+                    status_map.get("highlight_scene_status"),
+                    status_map.get("highlight_scene_frames_status"),
+                }
+            )
+            if core_ready and highlight_terminal:
+                try:
+                    highlight_payload = client.get_highlight_scene_list(vid)
+                    if self._first_highlight_segment(highlight_payload):
+                        result = dict(last_payload)
+                        result["_highlight_scene_list"] = highlight_payload
+                        self.log(
+                            "LingYaQQ work generation accepted terminal highlight status "
+                            f"after verifying segments: vid={vid} statuses={status_map}"
+                        )
+                        return result
+                    terminal_highlight_payload = highlight_payload
+                except Exception as exc:
+                    self.log(f"LingYaQQ highlight segment probe will retry: vid={vid} error={exc}")
             if time.time() >= deadline:
+                if terminal_highlight_payload is not None:
+                    raise RuntimeError(
+                        "LingYaQQ highlight generation reached terminal status without usable segments: "
+                        f"statuses={status_map}, highlight={terminal_highlight_payload}"
+                    )
                 raise TimeoutError(f"LingYaQQ work generation timed out: {last_payload}")
             self._sleep_with_cancel(min(max(poll_interval, 1), max(0, deadline - time.time())), cancel_check)
 
@@ -1743,8 +1786,12 @@ class LingYaQQPlatform(BasePlatform):
         )
         if callable(cancel_check) and cancel_check():
             raise RuntimeError("LingYaQQ follow-up cancelled")
-        self.log("LingYaQQ publish: fetching highlight scene list")
-        highlight_list = client.get_highlight_scene_list(vid)
+        highlight_list = generation.get("_highlight_scene_list")
+        if isinstance(highlight_list, dict):
+            self.log("LingYaQQ publish: using verified highlight scene list")
+        else:
+            self.log("LingYaQQ publish: fetching highlight scene list")
+            highlight_list = client.get_highlight_scene_list(vid)
         highlight_segment = self._first_highlight_segment(highlight_list)
         if not highlight_segment:
             highlight_data = highlight_list.get("data") if isinstance(highlight_list.get("data"), dict) else highlight_list
