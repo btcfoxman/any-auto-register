@@ -274,6 +274,7 @@ const ACTION_PARAM_DEFAULT_KEYS: Record<string, Record<string, string>> = {
     timeout: 'lingya_qq_publish_timeout',
     generation_timeout: 'lingya_qq_publish_generation_timeout',
     generation_poll_interval: 'lingya_qq_publish_generation_poll_interval',
+    highlight_fallback_delay: 'lingya_qq_publish_highlight_fallback_delay',
   },
 }
 

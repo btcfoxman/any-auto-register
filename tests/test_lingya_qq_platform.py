@@ -1951,6 +1951,47 @@ def test_lingya_qq_wait_generation_reports_terminal_highlight_without_segments()
         platform._wait_work_generation(FakeClient(), "vid-no-segments", poll_interval=1, timeout=0)
 
 
+def test_lingya_qq_wait_generation_falls_back_when_highlight_service_is_unavailable():
+    class FakeClient:
+        def get_work_generation_status(self, vid: str):
+            assert vid == "vid-fallback"
+            return {
+                "ret": 0,
+                "data": {
+                    "transcoding_status": 1,
+                    "highlight_scene_status": 3,
+                    "sequence_frames_status": 1,
+                    "highlight_scene_frames_status": 3,
+                },
+            }
+
+        def get_highlight_scene_list(self, vid: str):
+            assert vid == "vid-fallback"
+            raise RuntimeError('Get "0.json": unsupported protocol scheme ""')
+
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+
+    result = platform._wait_work_generation(
+        FakeClient(),
+        "vid-fallback",
+        poll_interval=1,
+        timeout=0,
+        highlight_fallback_delay=0,
+    )
+
+    assert platform._work_generation_statuses(result) == [1, 3, 1, 3]
+    assert result["_highlight_scene_unavailable"]["error"] == 'Get "0.json": unsupported protocol scheme ""'
+
+
+def test_lingya_qq_full_video_highlight_fallback_uses_asset_duration():
+    platform = LingYaQQPlatform(config=RegisterConfig(executor_type="manual_assisted"))
+
+    result = platform._full_video_highlight_list(61.25)
+
+    assert platform._highlight_segments(result) == [{"start_ms": 0, "end_ms": 61250}]
+    assert result["data"]["highlight_frames_file_data"] is None
+
+
 def test_lingya_qq_upload_work_retries_readframe_transient():
     calls = []
 

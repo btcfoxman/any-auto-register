@@ -695,6 +695,7 @@ class LingYaQQPlatform(BasePlatform):
                     {"key": "initial_delay", "label": "审核初始等待秒数", "type": "number"},
                     {"key": "poll_interval", "label": "审核轮询间隔秒数", "type": "number"},
                     {"key": "timeout", "label": "审核超时秒数", "type": "number"},
+                    {"key": "highlight_fallback_delay", "label": "高光不可用回退等待秒数", "type": "number"},
                     {"key": "force", "label": "已有作品时仍强制发布", "type": "text"},
                 ],
             }
@@ -1214,6 +1215,7 @@ class LingYaQQPlatform(BasePlatform):
         *,
         poll_interval: int,
         timeout: int,
+        highlight_fallback_delay: int = 30,
         cancel_check=None,
     ) -> dict[str, Any]:
         started_at = time.time()
@@ -1221,6 +1223,8 @@ class LingYaQQPlatform(BasePlatform):
         last_payload: dict[str, Any] = {}
         last_status_map: dict[str, int] | None = None
         terminal_highlight_payload: dict[str, Any] | None = None
+        terminal_highlight_error = ""
+        core_ready_at: float | None = None
         while True:
             if callable(cancel_check) and cancel_check():
                 raise RuntimeError("LingYaQQ follow-up cancelled")
@@ -1249,6 +1253,8 @@ class LingYaQQPlatform(BasePlatform):
                 }
             )
             if core_ready and highlight_terminal:
+                if core_ready_at is None:
+                    core_ready_at = time.time()
                 try:
                     highlight_payload = client.get_highlight_scene_list(vid)
                     if self._first_highlight_segment(highlight_payload):
@@ -1261,7 +1267,22 @@ class LingYaQQPlatform(BasePlatform):
                         return result
                     terminal_highlight_payload = highlight_payload
                 except Exception as exc:
+                    terminal_highlight_error = str(exc)
                     self.log(f"LingYaQQ highlight segment probe will retry: vid={vid} error={exc}")
+                if time.time() - core_ready_at >= max(highlight_fallback_delay, 0):
+                    result = dict(last_payload)
+                    result["_highlight_scene_unavailable"] = {
+                        "statuses": status_map,
+                        "payload": terminal_highlight_payload,
+                        "error": terminal_highlight_error,
+                    }
+                    self.log(
+                        "LingYaQQ highlight generation unavailable; using full-video segment fallback: "
+                        f"vid={vid} statuses={status_map}"
+                    )
+                    return result
+            else:
+                core_ready_at = None
             if time.time() >= deadline:
                 if terminal_highlight_payload is not None:
                     raise RuntimeError(
@@ -1299,6 +1320,16 @@ class LingYaQQPlatform(BasePlatform):
             return max(_as_int(default, 1), 1)
         end_ms = segments[-1]["end_ms"]
         return max(end_ms // 1000, 1)
+
+    def _full_video_highlight_list(self, duration: Any) -> dict[str, Any]:
+        duration_ms = max(int(round(_as_float(duration, 1.0) * 1000)), 1000)
+        return {
+            "ret": 0,
+            "data": {
+                "highlight_segments": [{"start_ms": 0, "end_ms": duration_ms}],
+                "highlight_frames_file_data": None,
+            },
+        }
 
     def _highlight_frame_cover(self, payload: dict[str, Any], vid: str) -> tuple[bytes, str, str] | None:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
@@ -1674,6 +1705,13 @@ class LingYaQQPlatform(BasePlatform):
             _first_value(params.get("generation_poll_interval"), self._runtime_value(source, params, "lingya_qq_publish_generation_poll_interval", 5)),
             5,
         )
+        highlight_fallback_delay = _as_int(
+            _first_value(
+                params.get("highlight_fallback_delay"),
+                self._runtime_value(source, params, "lingya_qq_publish_highlight_fallback_delay", 30),
+            ),
+            30,
+        )
         initial_delay = _as_int(
             _first_value(params.get("initial_delay"), self._runtime_value(source, params, "lingya_qq_publish_initial_delay", 600)),
             600,
@@ -1720,6 +1758,7 @@ class LingYaQQPlatform(BasePlatform):
             "lingya_qq_publish_timeout": publish_timeout,
             "lingya_qq_publish_generation_timeout": generation_timeout,
             "lingya_qq_publish_generation_poll_interval": generation_poll_interval,
+            "lingya_qq_publish_highlight_fallback_delay": highlight_fallback_delay,
             "lingya_qq_publish_credit_timeout": credit_timeout,
             "lingya_qq_publish_credit_poll_interval": credit_poll_interval,
             "lingya_qq_video_upload_service_id": upload_service_id,
@@ -1782,13 +1821,22 @@ class LingYaQQPlatform(BasePlatform):
             vid,
             poll_interval=generation_poll_interval,
             timeout=generation_timeout,
+            highlight_fallback_delay=highlight_fallback_delay,
             cancel_check=cancel_check,
         )
         if callable(cancel_check) and cancel_check():
             raise RuntimeError("LingYaQQ follow-up cancelled")
         highlight_list = generation.get("_highlight_scene_list")
+        highlight_unavailable = generation.get("_highlight_scene_unavailable")
         if isinstance(highlight_list, dict):
             self.log("LingYaQQ publish: using verified highlight scene list")
+        elif isinstance(highlight_unavailable, dict):
+            highlight_list = self._full_video_highlight_list(asset.duration)
+            duration_ms = self._first_highlight_segment(highlight_list)["end_ms"]
+            self.log(
+                "LingYaQQ publish: automatic highlight unavailable; "
+                f"using full-video segment 0-{duration_ms}ms"
+            )
         else:
             self.log("LingYaQQ publish: fetching highlight scene list")
             highlight_list = client.get_highlight_scene_list(vid)
