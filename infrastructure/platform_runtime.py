@@ -126,6 +126,25 @@ def _extract_action_url(data: dict[str, Any]) -> str:
     return ""
 
 
+def _merge_legacy_extra(
+    current_overview: dict[str, Any] | None,
+    summary_updates: dict[str, Any],
+) -> None:
+    legacy_updates = summary_updates.get("legacy_extra")
+    if not isinstance(legacy_updates, dict):
+        return
+
+    current_legacy = (
+        current_overview.get("legacy_extra")
+        if isinstance(current_overview, dict)
+        else None
+    )
+    if not isinstance(current_legacy, dict):
+        return
+
+    summary_updates["legacy_extra"] = {**current_legacy, **legacy_updates}
+
+
 def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
@@ -649,6 +668,11 @@ class PlatformRuntime:
                     overview = _build_account_overview(command.platform, data)
                     if overview:
                         summary_updates.update(overview)
+                        current_overview = account.extra.get("account_overview")
+                        _merge_legacy_extra(
+                            current_overview if isinstance(current_overview, dict) else None,
+                            summary_updates,
+                        )
                         needs_save = True
                 action_url = _extract_action_url(data)
                 if action_url and command.action_id in CASHIER_URL_ACTION_IDS:

@@ -5,7 +5,12 @@ import pytest
 from core.base_platform import Account, RegisterConfig
 from core.base_sms import SmsActivation
 from core.registry import get, load_all
-from infrastructure.platform_runtime import PERSISTED_ACTION_DATA_KEYS, STATEFUL_ACTION_IDS, _build_account_overview
+from infrastructure.platform_runtime import (
+    PERSISTED_ACTION_DATA_KEYS,
+    STATEFUL_ACTION_IDS,
+    _build_account_overview,
+    _merge_legacy_extra,
+)
 from platforms.lingya_qq.cookies import LINGYA_QQ_COOKIE_NAMES, build_lingya_qq_account_fields
 from platforms.lingya_qq.core import DEFAULT_VIDEO_UPLOAD_SERVICE_ID, DIRECT_UPLOAD_PROXIES, LingYaQQClient
 from platforms.lingya_qq.plugin import (
@@ -22,6 +27,30 @@ from platforms.lingya_qq.publish import LingYaQQPublishAsset
 def test_lingya_qq_is_registered():
     load_all()
     assert get("lingya_qq") is LingYaQQPlatform
+
+
+def test_platform_runtime_preserves_existing_legacy_extra_when_action_updates_it():
+    summary_updates = {
+        "legacy_extra": {
+            "lingya_qq_publish_source_timeout": 300,
+        }
+    }
+
+    _merge_legacy_extra(
+        {
+            "legacy_extra": {
+                "proxy_url": "socks5://account-proxy:20010",
+                "sms_provider": "haozhuma_api",
+            }
+        },
+        summary_updates,
+    )
+
+    assert summary_updates["legacy_extra"] == {
+        "proxy_url": "socks5://account-proxy:20010",
+        "sms_provider": "haozhuma_api",
+        "lingya_qq_publish_source_timeout": 300,
+    }
 
 
 def test_lingya_qq_resolves_uomsg_inline_token():
@@ -1226,9 +1255,11 @@ def test_lingya_qq_keepalive_can_skip_internal_lingya2api_sync(monkeypatch):
 
 def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkeypatch):
     events = []
+    proxies = []
 
     class FakeClient:
         def __init__(self, *, proxy=None, vdevice_guid=None, cookies=None, timeout=20, user_agent=None):
+            proxies.append(proxy)
             self.vdevice_guid = vdevice_guid or "device-old"
             self._cookies = dict(cookies or {})
             self._hello_calls = 0
@@ -1293,6 +1324,9 @@ def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkey
         extra={
             "cookies": "v_vusession=session-old; v_vurefresh=refresh-old; v_vuserid=vuid-old; vdevice_guid=device-old",
             "v_main_login": "wx",
+            "account_overview": {
+                "legacy_extra": {"proxy_url": "socks5://account-proxy:20010"},
+            },
         },
     )
 
@@ -1303,6 +1337,7 @@ def test_lingya_qq_keepalive_refreshes_and_retries_on_hello_session_error(monkey
     assert result["data"]["hello_token_ok"] is True
     assert result["data"]["v_vusession"] == "session-new"
     assert result["data"]["quota_balance"] == "8"
+    assert proxies == ["socks5://account-proxy:20010"]
     assert events[:3] == [("hello", 1), ("refresh", "wx"), ("hello", 2)]
     assert events.index(("quota",)) < events.index(("sync", False, "session-new"))
     assert any(event == ("sync", False, "session-new") for event in events)
