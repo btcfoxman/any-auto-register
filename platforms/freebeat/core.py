@@ -16,27 +16,38 @@ from core.base_platform import Account
 
 FREEBEAT_BASE = "https://freebeat.ai"
 FREEBEAT_UPLOAD_BASE = "https://api.freebeatfit.com"
-FREEBEAT_DEFAULT_FRONTEND_PATH = "/"
-FREEBEAT_EN_FRONTEND_PATH = "/"
+FREEBEAT_DEFAULT_FRONTEND_PATH = "/ai-video-generator"
+FREEBEAT_EN_FRONTEND_PATH = FREEBEAT_DEFAULT_FRONTEND_PATH
+FREEBEAT_ROOT_FRONTEND_PATH = "/"
 FREEBEAT_ZH_VIDEO_FRONTEND_PATH = "/zh/ai-video-generator"
 FREEBEAT_LEGACY_FRONTEND_PATH = "/tw"
 FREEBEAT_REGISTER_REFERER = f"{FREEBEAT_BASE}{FREEBEAT_DEFAULT_FRONTEND_PATH}"
 FREEBEAT_SEND_CODE_PATH = "/api/proxy/v1/user/com/sendEmailVerifyCodeV2"
 FREEBEAT_DEFAULT_VERIFY_SOURCE = "WEB_SHOPIFY_LOGIN"
-FREEBEAT_DEFAULT_NEXT_ACTION = "404332890f476afd4eb2bcd3390fcbdec519c94140"
-FREEBEAT_FALLBACK_NEXT_ACTIONS = ("40fc8fc4444d87d8d54a31ebf3953a579839f75c07",)
-FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE = (
+FREEBEAT_DEFAULT_NEXT_ACTION = "407a6b1d1fe3baa68ae8e8623af1ca43e66a5a5d21"
+FREEBEAT_FALLBACK_NEXT_ACTIONS = (
+    "404332890f476afd4eb2bcd3390fcbdec519c94140",
+    "40fc8fc4444d87d8d54a31ebf3953a579839f75c07",
+)
+FREEBEAT_ROOT_NEXT_ROUTER_STATE_TREE = (
     "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22en%22%2C%22d%22%5D%2C"
     "%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull"
     "%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
 )
+FREEBEAT_EN_VIDEO_NEXT_ROUTER_STATE_TREE = (
+    "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22en%22%2C%22d%22%5D"
+    "%2C%7B%22children%22%3A%5B%22(apps)%22%2C%7B%22children%22%3A%5B%22ai-video-generator%22"
+    "%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull"
+    "%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
+)
+FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE = FREEBEAT_EN_VIDEO_NEXT_ROUTER_STATE_TREE
 FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE = (
     "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22zh%22%2C%22d%22%5D"
     "%2C%7B%22children%22%3A%5B%22(apps)%22%2C%7B%22children%22%3A%5B%22ai-video-generator%22"
     "%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull"
     "%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
 )
-FREEBEAT_EN_NEXT_ROUTER_STATE_TREE = FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
+FREEBEAT_EN_NEXT_ROUTER_STATE_TREE = FREEBEAT_EN_VIDEO_NEXT_ROUTER_STATE_TREE
 FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE = (
     "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22tw%22%2C%22d%22%5D%2C"
     "%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull"
@@ -45,9 +56,9 @@ FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE = (
 FREEBEAT_ONBOARDING_CODE = "onboarding_v1"
 FREEBEAT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 )
-FREEBEAT_SEC_CH_UA = '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"'
+FREEBEAT_SEC_CH_UA = '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"'
 FREEBEAT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 FREEBEAT_ZH_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8"
 FREEBEAT_EN_ACCEPT_LANGUAGE = FREEBEAT_ACCEPT_LANGUAGE
@@ -222,6 +233,8 @@ def _router_state_for_frontend_path(path: str) -> str:
     normalized = _normalize_frontend_path(path)
     if normalized == FREEBEAT_EN_FRONTEND_PATH:
         return FREEBEAT_EN_NEXT_ROUTER_STATE_TREE
+    if normalized == FREEBEAT_ROOT_FRONTEND_PATH:
+        return FREEBEAT_ROOT_NEXT_ROUTER_STATE_TREE
     if normalized == FREEBEAT_ZH_VIDEO_FRONTEND_PATH:
         return FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE
     if normalized == FREEBEAT_LEGACY_FRONTEND_PATH:
@@ -529,6 +542,12 @@ class FreebeatClient:
         self._cookie_header = _merge_cookie_headers(self._cookie_header, cookie_header)
         return self._cookie_header
 
+    def update_deployment_id(self, deployment_id: Any) -> str:
+        value = str(deployment_id or "").strip()
+        if re.fullmatch(r"dpl_[A-Za-z0-9]+", value):
+            self._deployment_id = value
+        return self._deployment_id
+
     def auth_state(self) -> dict[str, Any]:
         cookie_header = self.cookie_header()
         return {
@@ -597,8 +616,11 @@ class FreebeatClient:
             )
             text = _response_text(response)
             match = re.search(r"\bdpl_[A-Za-z0-9]+", text)
-            if match and not self._deployment_id:
-                self._deployment_id = match.group(0)
+            if match:
+                discovered_deployment_id = match.group(0)
+                if self._deployment_id and self._deployment_id != discovered_deployment_id:
+                    self.log("Freebeat frontend deployment changed; using the current deployment id")
+                self.update_deployment_id(discovered_deployment_id)
             self.log(f"GET {_display_path(self.frontend_path)} warmup -> {response.status_code}")
         except Exception as exc:
             self.log(f"Freebeat frontend warmup failed: {exc}")
@@ -620,6 +642,8 @@ class FreebeatClient:
             content_type="application/json" if json_body is not None else "",
             token=token,
         )
+        if json_body is not None and base == FREEBEAT_BASE:
+            request_headers["origin"] = FREEBEAT_BASE
         if headers:
             request_headers.update(headers)
         data = _json_dumps(json_body) if json_body is not None else None
@@ -698,23 +722,32 @@ class FreebeatClient:
         body = _json_dumps([{"email": email, "code": code}])
         attempts = [(self.frontend_path, self.frontend_url, router_state, accept_language)]
         if self.frontend_path != FREEBEAT_LEGACY_FRONTEND_PATH and next_router_state_tree is None:
-            if self.frontend_path != FREEBEAT_ZH_VIDEO_FRONTEND_PATH:
-                attempts.append(
-                    (
-                        FREEBEAT_ZH_VIDEO_FRONTEND_PATH,
-                        self._url(FREEBEAT_ZH_VIDEO_FRONTEND_PATH),
-                        FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE,
-                        FREEBEAT_ZH_ACCEPT_LANGUAGE,
-                    )
-                )
-            attempts.append(
+            fallback_routes = (
+                (
+                    FREEBEAT_EN_FRONTEND_PATH,
+                    FREEBEAT_EN_NEXT_ROUTER_STATE_TREE,
+                    FREEBEAT_EN_ACCEPT_LANGUAGE,
+                ),
+                (
+                    FREEBEAT_ROOT_FRONTEND_PATH,
+                    FREEBEAT_ROOT_NEXT_ROUTER_STATE_TREE,
+                    FREEBEAT_EN_ACCEPT_LANGUAGE,
+                ),
+                (
+                    FREEBEAT_ZH_VIDEO_FRONTEND_PATH,
+                    FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE,
+                    FREEBEAT_ZH_ACCEPT_LANGUAGE,
+                ),
                 (
                     FREEBEAT_LEGACY_FRONTEND_PATH,
-                    self._url(FREEBEAT_LEGACY_FRONTEND_PATH),
                     FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE,
                     FREEBEAT_ACCEPT_LANGUAGE,
-                )
+                ),
             )
+            for path, state_tree, language in fallback_routes:
+                if path == self.frontend_path:
+                    continue
+                attempts.append((path, self._url(path), state_tree, language))
 
         response = None
         for action_index, action_id in enumerate(action_ids):
@@ -729,6 +762,13 @@ class FreebeatClient:
                     "referer": url,
                     "next-action": action_id,
                     "priority": "u=1, i",
+                    "sec-ch-ua": FREEBEAT_SEC_CH_UA,
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Windows"',
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-origin",
+                    "user-agent": FREEBEAT_USER_AGENT,
                 }
                 cookie_header = self.cookie_header()
                 if cookie_header:
@@ -741,11 +781,8 @@ class FreebeatClient:
                 self.log(f"POST {_display_path(path)} WebLogin -> {response.status_code}")
                 if response.status_code == 200:
                     break
-                if index == 0 and len(attempts) > 1 and _is_server_action_not_found(response):
-                    self.log("Freebeat WebLogin action not found on default path, retrying alternate route")
-                    continue
-                if index == 1 and len(attempts) > 2 and _is_server_action_not_found(response):
-                    self.log("Freebeat WebLogin action not found on English root path, retrying legacy /tw route")
+                if index + 1 < len(attempts) and _is_server_action_not_found(response):
+                    self.log("Freebeat WebLogin action not found on current path, retrying alternate route")
                     continue
                 break
             if response is not None and response.status_code == 200:

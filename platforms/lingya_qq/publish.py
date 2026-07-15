@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import math
 import mimetypes
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -42,8 +44,48 @@ COVER_URL_KEYS = (
     "thumbnailUrl",
 )
 COVER_LIST_KEYS = ("cover_urls", "coverUrls", "images")
-DEFAULT_CREATION_PROCESS_TEXT = "Seedance 2.0 全能参考"
-LEGACY_CREATION_PROCESS_TEXTS = {"sora2 tool", "sora 2 tool", "seedance 2.0 tool"}
+DEFAULT_CREATION_PROCESS_TEXT = ""
+LEGACY_DEFAULT_CREATION_PROCESS_TEXT = "Seedance 2.0 全能参考"
+LEGACY_CREATION_PROCESS_TEXTS = {
+    "sora2 tool",
+    "sora 2 tool",
+    "seedance 2.0 tool",
+    LEGACY_DEFAULT_CREATION_PROCESS_TEXT.lower(),
+}
+CREATION_PROCESS_VALUE_KEYS = (
+    "creation_process_text",
+    "creationProcessText",
+    "creation_process",
+    "creationProcess",
+    "process_text",
+    "processText",
+)
+CREATION_PROCESS_OPENINGS = (
+    "围绕{subject}展开整体构思",
+    "从{subject}的核心画面切入",
+    "以{subject}作为本次创作主线",
+    "本次内容从{subject}的视觉线索出发",
+    "先梳理{subject}最具表现力的情节",
+    "创作时重点提炼{subject}的叙事氛围",
+    "根据{subject}的主题方向组织画面",
+    "以{subject}的关键场景搭建开篇",
+)
+CREATION_PROCESS_METHODS = (
+    "结合{detail}安排镜头层次与节奏",
+    "围绕{detail}组织主要动作和环境细节",
+    "将{detail}转化为连贯的场景与镜头语言",
+    "通过{detail}强化画面的情绪递进",
+    "参考{detail}补充人物、环境和光影细节",
+    "依据{detail}确定主体关系与视觉重点",
+)
+CREATION_PROCESS_ENDINGS = (
+    "让首段分镜自然呈现主题重点",
+    "使开场信息清晰并保持叙事连贯",
+    "突出主要内容同时保留真实的场景质感",
+    "完成节奏明确、重点集中的开篇表达",
+    "让画面氛围与后续内容顺畅衔接",
+    "形成具有层次感且容易理解的首段内容",
+)
 
 
 @dataclass
@@ -61,6 +103,52 @@ class LingYaQQPublishAsset:
     cover_ratio: float = 0.75
     tag_infos: list[dict[str, Any]] = field(default_factory=list)
     creation_process_text: str = DEFAULT_CREATION_PROCESS_TEXT
+
+
+def _creation_process_excerpt(value: Any, *, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" ，。；;、\t\r\n")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip(" ，。；;、")
+
+
+def is_legacy_default_creation_process_text(value: Any) -> bool:
+    return str(value or "").strip().lower() in LEGACY_CREATION_PROCESS_TEXTS
+
+
+def build_creation_process_text(
+    *,
+    title: Any = "",
+    description: Any = "",
+    prompt: Any = "",
+    video_filename: Any = "",
+    duration: Any = 0,
+    explicit_text: Any = "",
+) -> str:
+    """Return explicit source text or a stable, content-specific generated fallback."""
+    explicit = str(explicit_text or "").strip()
+    if explicit:
+        return explicit
+
+    subject_text = _creation_process_excerpt(title, limit=36)
+    subject = f"“{subject_text}”" if subject_text else "作品主题"
+    detail_text = _creation_process_excerpt(prompt or description, limit=72)
+    if not detail_text or detail_text == subject_text:
+        detail_text = "主体动作、场景氛围与画面细节"
+
+    seed_parts = (
+        subject_text,
+        _creation_process_excerpt(description, limit=240),
+        _creation_process_excerpt(prompt, limit=240),
+        str(video_filename or "").strip(),
+        str(duration or "").strip(),
+    )
+    digest = hashlib.sha256("\x1f".join(seed_parts).encode("utf-8")).digest()
+    rng = random.Random(int.from_bytes(digest[:8], "big"))
+    opening = rng.choice(CREATION_PROCESS_OPENINGS).format(subject=subject)
+    method = rng.choice(CREATION_PROCESS_METHODS).format(detail=detail_text)
+    ending = rng.choice(CREATION_PROCESS_ENDINGS)
+    return f"{opening}，{method}，{ending}。"
 
 
 def _proxy_map(proxy: str | None) -> dict[str, str] | None:
@@ -350,29 +438,32 @@ def _prompt_from_payload(payload: Any, defaults: dict[str, Any], *, title: str =
     return prompt[:1200]
 
 
-def _creation_process_text_from_payload(payload: Any, defaults: dict[str, Any]) -> str:
-    value = _pick(
-        payload,
-        (
-            "creation_process_text",
-            "creationProcessText",
-            "creation_process",
-            "creationProcess",
-            "process_text",
-            "processText",
-        ),
+def _creation_process_text_from_payload(
+    payload: Any,
+    defaults: dict[str, Any],
+    *,
+    title: str,
+    description: str,
+    prompt: str,
+    video_filename: str,
+    duration: int,
+) -> str:
+    source_value = _pick(payload, CREATION_PROCESS_VALUE_KEYS)
+    default_value = _pick(defaults, CREATION_PROCESS_VALUE_KEYS)
+    explicit_text = source_value if source_value not in (None, "") else default_value
+    # A source-provided value is content and must remain byte-for-byte compatible,
+    # including older files that use the former fixed prefix. Only the old stored
+    # fallback/default is treated as absent for newly generated material.
+    if source_value in (None, "") and is_legacy_default_creation_process_text(explicit_text):
+        explicit_text = ""
+    return build_creation_process_text(
+        title=title,
+        description=description,
+        prompt=prompt,
+        video_filename=video_filename,
+        duration=duration,
+        explicit_text=explicit_text,
     )
-    text = str(
-        value
-        or defaults.get("creation_process_text")
-        or defaults.get("creationProcessText")
-        or defaults.get("creation_process")
-        or defaults.get("creationProcess")
-        or DEFAULT_CREATION_PROCESS_TEXT
-    ).strip()
-    if not text or text.lower() in LEGACY_CREATION_PROCESS_TEXTS:
-        return DEFAULT_CREATION_PROCESS_TEXT
-    return text
 
 
 def _tag_infos_from_value(value: Any) -> list[dict[str, str]]:
@@ -444,20 +535,32 @@ def fetch_lingya_qq_publish_asset(
             raise RuntimeError("LingYaQQ publish raw video source requires lingya_qq_publish_cover_url")
         cover_bytes, cover_filename, cover_type = _download_bytes(cover_url, timeout=timeout, proxy=proxy, retries=retries)
         filename = _filename_from_url(source_url, "video.mp4", content_type)
+        title = _title_from_payload({}, defaults)
+        description = str(defaults.get("description") or defaults.get("intro") or "")
+        prompt = _prompt_from_payload({}, defaults, title=title, description=description)
+        duration = _video_duration(defaults.get("duration"), response.content)
         return LingYaQQPublishAsset(
-            title=(title := _title_from_payload({}, defaults)),
-            description=(description := str(defaults.get("description") or defaults.get("intro") or "")),
-            prompt=_prompt_from_payload({}, defaults, title=title, description=description),
+            title=title,
+            description=description,
+            prompt=prompt,
             video_bytes=response.content,
             video_filename=filename,
             video_content_type=content_type or "video/mp4",
             cover_bytes=cover_bytes,
             cover_filename=cover_filename,
             cover_content_type=cover_type or "image/jpeg",
-            duration=_video_duration(defaults.get("duration"), response.content),
+            duration=duration,
             cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, _to_float(defaults.get("cover_ratio"), 0.75)),
             tag_infos=_tag_infos_from_payload({}, defaults),
-            creation_process_text=_creation_process_text_from_payload({}, defaults),
+            creation_process_text=_creation_process_text_from_payload(
+                {},
+                defaults,
+                title=title,
+                description=description,
+                prompt=prompt,
+                video_filename=filename,
+                duration=duration,
+            ),
         )
 
     video_base64 = _pick(payload, ("video_base64", "videoBase64", "video_data", "videoData"))
@@ -488,22 +591,32 @@ def fetch_lingya_qq_publish_asset(
 
     title = _title_from_payload(payload, {})
     description = str(_pick(payload, ("description", "intro", "desc", "summary")) or "")
+    prompt = _prompt_from_payload(payload, {}, title=title, description=description)
+    duration = _video_duration(
+        _pick(payload, ("duration", "duration_seconds", "durationSeconds")),
+        video_bytes,
+    )
     fallback_cover_ratio = _to_float(_pick(payload, ("cover_ratio", "coverRatio")), 0.75)
     return LingYaQQPublishAsset(
         title=title,
         description=description,
-        prompt=_prompt_from_payload(payload, {}, title=title, description=description),
+        prompt=prompt,
         video_bytes=video_bytes,
         video_filename=video_filename,
         video_content_type=video_content_type or "video/mp4",
         cover_bytes=cover_bytes,
         cover_filename=cover_filename,
         cover_content_type=cover_content_type or "image/jpeg",
-        duration=_video_duration(
-            _pick(payload, ("duration", "duration_seconds", "durationSeconds")),
-            video_bytes,
-        ),
+        duration=duration,
         cover_ratio=_cover_ratio_from_image_bytes(cover_bytes, fallback_cover_ratio),
         tag_infos=_tag_infos_from_payload(payload, {}),
-        creation_process_text=_creation_process_text_from_payload(payload, {}),
+        creation_process_text=_creation_process_text_from_payload(
+            payload,
+            {},
+            title=title,
+            description=description,
+            prompt=prompt,
+            video_filename=video_filename,
+            duration=duration,
+        ),
     )

@@ -4,7 +4,7 @@ import base64
 
 import requests
 
-from platforms.lingya_qq.publish import fetch_lingya_qq_publish_asset
+from platforms.lingya_qq.publish import build_creation_process_text, fetch_lingya_qq_publish_asset
 
 
 class FakeResponse:
@@ -194,7 +194,62 @@ def test_publish_asset_json_source_ignores_content_defaults(monkeypatch):
     assert asset.duration == 10
     assert asset.cover_ratio == 0.75
     assert asset.tag_infos == []
-    assert asset.creation_process_text == "Seedance 2.0 全能参考"
+    assert asset.creation_process_text == build_creation_process_text(
+        title="api title",
+        prompt="api title",
+        video_filename="video.mp4",
+        duration=10,
+    )
+    assert not asset.creation_process_text.startswith("Seedance 2.0 全能参考")
+
+
+def test_creation_process_fallback_is_stable_varied_and_preserves_explicit_text():
+    first = build_creation_process_text(
+        title="雨夜归途",
+        description="人物在雨夜穿过城市街道",
+        prompt="霓虹灯下的人物撑伞前行",
+        video_filename="rain.mp4",
+        duration=72,
+    )
+    repeated = build_creation_process_text(
+        title="雨夜归途",
+        description="人物在雨夜穿过城市街道",
+        prompt="霓虹灯下的人物撑伞前行",
+        video_filename="rain.mp4",
+        duration=72,
+    )
+    other = build_creation_process_text(
+        title="山谷晨光",
+        description="清晨薄雾覆盖山谷",
+        prompt="阳光越过山脊照亮树林",
+        video_filename="mountain.mp4",
+        duration=91,
+    )
+
+    assert first == repeated
+    assert first != other
+    assert not first.startswith("Seedance 2.0 全能参考")
+    assert build_creation_process_text(explicit_text="自定义创作说明") == "自定义创作说明"
+
+
+def test_publish_asset_preserves_legacy_source_creation_process_text(monkeypatch):
+    legacy_text = "Seedance 2.0 全能参考，以旧素材内容为创作核心。"
+
+    def fake_get(url, timeout=5, proxies=None):
+        return FakeResponse(
+            {
+                "title": "legacy title",
+                "creation_process_text": legacy_text,
+                "video_base64": _b64(b"video"),
+                "cover_base64": _b64(b"cover"),
+            }
+        )
+
+    monkeypatch.setattr("platforms.lingya_qq.publish.requests.get", fake_get)
+
+    asset = fetch_lingya_qq_publish_asset("https://source.example/work")
+
+    assert asset.creation_process_text == legacy_text
 
 
 def test_publish_asset_calculates_cover_ratio_from_cover_image(monkeypatch):

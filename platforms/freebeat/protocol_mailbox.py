@@ -173,6 +173,13 @@ class FreebeatProtocolMailboxWorker:
                 cookie_header = str(result.get("cookie_header") or "").strip()
                 if cookie_header and hasattr(self.client, "merge_cookie_header"):
                     self.client.merge_cookie_header(cookie_header)
+                deployment_id = str(result.get("deployment_id") or "").strip()
+                if deployment_id:
+                    update_deployment_id = getattr(self.client, "update_deployment_id", None)
+                    if callable(update_deployment_id):
+                        update_deployment_id(deployment_id)
+                    else:
+                        setattr(self.client, "_deployment_id", deployment_id)
                 token = str(result.get("turnstile_token") or "").strip()
                 self.log(f"Freebeat browser sent email code; turnstile_token={'yes' if token else 'unknown'}")
                 return result

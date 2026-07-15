@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import unquote
 
 import pytest
 from sqlmodel import Session
@@ -18,11 +19,12 @@ from platforms.freebeat.core import (
     FREEBEAT_DEFAULT_NEXT_ACTION,
     FREEBEAT_FALLBACK_NEXT_ACTIONS,
     FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE,
+    FREEBEAT_ROOT_NEXT_ROUTER_STATE_TREE,
     FreebeatClient,
     _total_credits_from_state,
     _extract_login_payload,
 )
-from platforms.freebeat.browser_email import _candidate_page_urls, _is_freebeat_page_url
+from platforms.freebeat.browser_email import _candidate_page_urls, _deployment_id_from_html, _is_freebeat_page_url
 from platforms.freebeat.plugin import FreebeatPlatform
 from platforms.freebeat.protocol_mailbox import FreebeatProtocolMailboxWorker
 
@@ -55,7 +57,39 @@ def test_freebeat_next_action_login_parser_accepts_rsc_prefix():
     assert parsed["data"]["userId"] == "user_456"
 
 
-def test_freebeat_verify_email_code_uses_english_root_action_route_by_default():
+def test_freebeat_latest_har_action_and_router_state_match_video_generator_flow():
+    assert FREEBEAT_DEFAULT_NEXT_ACTION == "407a6b1d1fe3baa68ae8e8623af1ca43e66a5a5d21"
+    assert json.loads(unquote(FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE)) == [
+        "",
+        {
+            "children": [
+                ["locale", "en", "d"],
+                {
+                    "children": [
+                        "(apps)",
+                        {
+                            "children": [
+                                "ai-video-generator",
+                                {"children": ["__PAGE__", {}, None, None]},
+                                None,
+                                None,
+                            ]
+                        },
+                        None,
+                        None,
+                    ]
+                },
+                None,
+                None,
+                True,
+            ]
+        },
+        None,
+        None,
+    ]
+
+
+def test_freebeat_verify_email_code_uses_latest_english_video_action_route_by_default():
     calls: list[dict] = []
 
     class Response:
@@ -78,14 +112,16 @@ def test_freebeat_verify_email_code_uses_english_root_action_route_by_default():
     result = client.verify_email_code("user@example.com", "123456")
 
     assert result["data"]["token"] == "tok_123"
-    assert calls[0]["url"] == "https://freebeat.ai/"
-    assert calls[0]["headers"]["referer"] == "https://freebeat.ai/"
+    assert calls[0]["url"] == "https://freebeat.ai/ai-video-generator"
+    assert calls[0]["headers"]["referer"] == "https://freebeat.ai/ai-video-generator"
     assert calls[0]["headers"]["accept-language"] == "en-US,en;q=0.9"
     assert calls[0]["headers"]["next-action"] == FREEBEAT_DEFAULT_NEXT_ACTION
     assert calls[0]["headers"]["cache-control"] == "no-cache"
     assert calls[0]["headers"]["pragma"] == "no-cache"
     assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
     assert calls[0]["headers"]["x-deployment-id"] == "dpl_test"
+    assert calls[0]["headers"]["origin"] == "https://freebeat.ai"
+    assert calls[0]["headers"]["sec-fetch-site"] == "same-origin"
     assert calls[0]["data"] == '[{"email":"user@example.com","code":"123456"}]'
 
 
@@ -142,10 +178,10 @@ def test_freebeat_verify_email_code_pairs_explicit_root_path_with_english_router
     assert result["data"]["token"] == "tok_123"
     assert calls[0]["url"] == "https://freebeat.ai/"
     assert calls[0]["headers"]["accept-language"] == "en-US,en;q=0.9"
-    assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_EN_NEXT_ROUTER_STATE_TREE
+    assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_ROOT_NEXT_ROUTER_STATE_TREE
 
 
-def test_freebeat_verify_email_code_falls_back_to_zh_video_generator_when_default_action_missing():
+def test_freebeat_verify_email_code_falls_back_to_english_root_when_video_route_action_missing():
     calls: list[dict] = []
 
     class Response404:
@@ -172,51 +208,18 @@ def test_freebeat_verify_email_code_falls_back_to_zh_video_generator_when_defaul
     result = client.verify_email_code("user@example.com", "123456")
 
     assert result["data"]["token"] == "tok_123"
-    assert [item["url"] for item in calls] == ["https://freebeat.ai/", "https://freebeat.ai/zh/ai-video-generator"]
+    assert [item["url"] for item in calls] == [
+        "https://freebeat.ai/ai-video-generator",
+        "https://freebeat.ai/",
+    ]
     assert calls[0]["headers"]["next-router-state-tree"] == FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE
-    assert calls[1]["headers"]["referer"] == "https://freebeat.ai/zh/ai-video-generator"
-    assert calls[1]["headers"]["accept-language"] == "zh-CN,zh;q=0.9,en;q=0.8"
-    assert calls[1]["headers"]["next-router-state-tree"] == FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE
+    assert calls[1]["headers"]["referer"] == "https://freebeat.ai/"
+    assert calls[1]["headers"]["accept-language"] == "en-US,en;q=0.9"
+    assert calls[1]["headers"]["next-router-state-tree"] == FREEBEAT_ROOT_NEXT_ROUTER_STATE_TREE
     assert calls[1]["data"] == '[{"email":"user@example.com","code":"123456"}]'
 
 
-def test_freebeat_verify_email_code_falls_back_to_legacy_tw_after_default_and_zh_video_miss():
-    calls: list[dict] = []
-
-    class Response404:
-        status_code = 404
-        text = "Server action not found."
-
-    class Response200:
-        status_code = 200
-        text = (
-            '2:"$Sreact.fragment"\n'
-            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
-            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
-        )
-
-    client = FreebeatClient(log_fn=lambda message: None, deployment_id="dpl_test")
-    client._warmup_frontend_session = lambda: None
-
-    def fake_post(url, **kwargs):
-        calls.append({"url": url, **kwargs})
-        return Response200() if len(calls) == 3 else Response404()
-
-    client.s.post = fake_post
-
-    result = client.verify_email_code("user@example.com", "123456")
-
-    assert result["data"]["token"] == "tok_123"
-    assert [item["url"] for item in calls] == [
-        "https://freebeat.ai/",
-        "https://freebeat.ai/zh/ai-video-generator",
-        "https://freebeat.ai/tw",
-    ]
-    assert calls[2]["headers"]["referer"] == "https://freebeat.ai/tw"
-    assert calls[2]["headers"]["next-router-state-tree"] == FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE
-
-
-def test_freebeat_verify_email_code_retries_fallback_action_after_all_routes_miss():
+def test_freebeat_verify_email_code_falls_back_to_legacy_tw_after_current_routes_miss():
     calls: list[dict] = []
 
     class Response404:
@@ -244,12 +247,51 @@ def test_freebeat_verify_email_code_retries_fallback_action_after_all_routes_mis
 
     assert result["data"]["token"] == "tok_123"
     assert [item["url"] for item in calls] == [
+        "https://freebeat.ai/ai-video-generator",
         "https://freebeat.ai/",
         "https://freebeat.ai/zh/ai-video-generator",
         "https://freebeat.ai/tw",
+    ]
+    assert calls[3]["headers"]["referer"] == "https://freebeat.ai/tw"
+    assert calls[3]["headers"]["next-router-state-tree"] == FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE
+
+
+def test_freebeat_verify_email_code_retries_fallback_action_after_all_routes_miss():
+    calls: list[dict] = []
+
+    class Response404:
+        status_code = 404
+        text = "Server action not found."
+
+    class Response200:
+        status_code = 200
+        text = (
+            '2:"$Sreact.fragment"\n'
+            '3:{"code":0,"msg":"","data":{"token":"tok_123","accessToken":"tok_123",'
+            '"deviceToken":"dev_123","userId":"user_123","expireTime":1781635058486}}\n'
+        )
+
+    client = FreebeatClient(log_fn=lambda message: None, deployment_id="dpl_test")
+    client._warmup_frontend_session = lambda: None
+
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response200() if len(calls) == 5 else Response404()
+
+    client.s.post = fake_post
+
+    result = client.verify_email_code("user@example.com", "123456")
+
+    assert result["data"]["token"] == "tok_123"
+    assert [item["url"] for item in calls] == [
+        "https://freebeat.ai/ai-video-generator",
         "https://freebeat.ai/",
+        "https://freebeat.ai/zh/ai-video-generator",
+        "https://freebeat.ai/tw",
+        "https://freebeat.ai/ai-video-generator",
     ]
     assert [item["headers"]["next-action"] for item in calls] == [
+        FREEBEAT_DEFAULT_NEXT_ACTION,
         FREEBEAT_DEFAULT_NEXT_ACTION,
         FREEBEAT_DEFAULT_NEXT_ACTION,
         FREEBEAT_DEFAULT_NEXT_ACTION,
@@ -324,7 +366,27 @@ def test_freebeat_api_retries_once_after_vercel_403():
     assert [item["kind"] for item in calls] == ["request", "warmup", "request"]
     assert calls[0]["headers"]["x-platform-type"] == "web"
     assert "x-platform-type" not in {key.lower(): value for key, value in calls[1]["headers"].items()}
-    assert "origin" not in {key.lower(): value for key, value in calls[0]["headers"].items()}
+    assert calls[0]["headers"]["origin"] == "https://freebeat.ai"
+
+
+def test_freebeat_warmup_refreshes_stale_deployment_id_from_current_frontend():
+    calls: list[dict] = []
+
+    class Response200:
+        status_code = 200
+        text = '<script src="/_next/static/dpl_current/chunk.js"></script> dpl_current'
+
+    client = FreebeatClient(log_fn=lambda message: None, deployment_id="dpl_stale")
+
+    def fake_get(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return Response200()
+
+    client.s.get = fake_get
+    client._warmup_frontend_session()
+
+    assert calls[0]["url"] == "https://freebeat.ai/ai-video-generator"
+    assert client._deployment_id == "dpl_current"
 
 
 def test_freebeat_send_code_includes_turnstile_token_when_provided():
@@ -357,6 +419,17 @@ def test_freebeat_send_code_includes_turnstile_token_when_provided():
         "verifySource": "WEB_SHOPIFY_LOGIN",
         "turnstileToken": "turnstile-token-123",
     }
+    assert calls[0]["headers"]["referer"] == "https://freebeat.ai/ai-video-generator"
+    assert calls[0]["headers"]["origin"] == "https://freebeat.ai"
+
+
+def test_freebeat_browser_send_code_uses_latest_video_generator_by_default():
+    assert _candidate_page_urls()[0] == "https://freebeat.ai/ai-video-generator"
+
+
+def test_freebeat_browser_extracts_current_deployment_id_for_protocol_login():
+    assert _deployment_id_from_html('<script src="/dpl_current/chunk.js"></script>') == "dpl_current"
+    assert _deployment_id_from_html("no deployment marker") == ""
 
 
 def test_freebeat_browser_send_code_tries_login_pages_after_root():
@@ -709,10 +782,15 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
     class FakeClient:
         def __init__(self, *args, **kwargs):
             self.cookies = ""
+            self.deployment_id = ""
 
         def merge_cookie_header(self, cookie_header):
             self.cookies = cookie_header
             calls.append(("merge_cookie", cookie_header))
+
+        def update_deployment_id(self, deployment_id):
+            self.deployment_id = deployment_id
+            calls.append(("deployment", deployment_id))
 
         def send_email_verify_code(self, email, *, verify_source):
             raise AssertionError("protocol send should not be used when browser send succeeds")
@@ -750,6 +828,7 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
             "ok": True,
             "browser_sent": True,
             "cookie_header": "fb_session=sess_123",
+            "deployment_id": "dpl_browser_current",
             "turnstile_token": "turnstile-token-123",
             "response": {"code": 0, "data": True},
         }
@@ -805,6 +884,7 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
     assert calls[0][1]["timezone_id"] == "Asia/Tokyo"
     assert calls[0][1]["user_agent"] == "native"
     assert ("merge_cookie", "fb_session=sess_123") in calls
+    assert ("deployment", "dpl_browser_current") in calls
     assert ("login_cookie", "fb_session=sess_123") in calls
 
 

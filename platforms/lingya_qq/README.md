@@ -63,7 +63,8 @@ Useful extra fields:
   failure fails the registration task
 - `lingya_qq_publish_source_url`: third-party GET API returning work material
 - `lingya_qq_publish_cover_url`: fallback cover URL for raw video sources
-- `lingya_qq_publish_creation_process_text`: defaults to `Seedance 2.0 全能参考`
+- `lingya_qq_publish_creation_process_text`: optional explicit creation-process text;
+  when omitted, a stable content-specific text is generated for each asset
 - `lingya_qq_publish_source_timeout`: defaults to `60`
 - `lingya_qq_publish_source_retries`: defaults to `3`
 - `lingya_qq_video_upload_service_id`: defaults to
@@ -80,8 +81,10 @@ The third-party publish source URL is fetched by direct connection. Account
 proxy settings are still used for Lingya account requests and uploads, but they
 are not applied to the external material source.
 When the source returns JSON, content fields are taken from that response only;
-stored fallback content settings are not applied. `creation_process_text` falls
-back to `Seedance 2.0 全能参考` when the source omits it. `lingya_qq_publish_cover_url`
+stored fallback content settings are not applied. `creation_process_text` is
+generated from the asset title, intro, prompt, filename, and duration when the
+source omits it. The generated wording is stable for retries of the same asset
+and varies across assets. `lingya_qq_publish_cover_url`
 is only used when the source itself returns raw video bytes.
 
 The publish source may return JSON such as:
@@ -91,7 +94,7 @@ The publish source may return JSON such as:
   "title": "example title",
   "intro": "example intro",
   "prompt": "first highlight scene prompt",
-  "creation_process_text": "Seedance 2.0 全能参考",
+  "creation_process_text": "围绕示例主题组织画面，并完成首段分镜。",
   "video_url": "https://example.com/video.mp4",
   "cover_url": "https://example.com/cover.jpg",
   "tag_infos": [{"id": "tag_2QCVIf1DjL", "title": "玄幻", "alias": ""}]

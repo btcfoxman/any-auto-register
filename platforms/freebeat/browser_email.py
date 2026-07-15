@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import time
 from typing import Any, Callable
 from urllib import request as urlrequest
@@ -26,11 +27,16 @@ FREEBEAT_BROWSER_LOCALE = "en-US"
 FREEBEAT_BROWSER_TIMEZONE = "America/New_York"
 FREEBEAT_BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
 )
 FREEBEAT_BROWSER_TIMEOUT_SECONDS = 120
 FREEBEAT_BROWSER_ENGINE = "playwright"
 FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS = 20
+
+
+def _deployment_id_from_html(value: Any) -> str:
+    match = re.search(r"\bdpl_[A-Za-z0-9]+", str(value or ""))
+    return match.group(0) if match else ""
 
 
 def _page_url(frontend_path: str = "") -> str:
@@ -1655,6 +1661,10 @@ def send_email_verify_code_in_browser(
             cookie_header = _cookies_to_header(cookies)
             request_body = request_record.get("body") if isinstance(request_record.get("body"), dict) else {}
             turnstile_state = page.evaluate("() => window.__freebeatTurnstile || {}")
+            try:
+                deployment_id = _deployment_id_from_html(page.content())
+            except Exception:
+                deployment_id = ""
             return {
                 "ok": True,
                 "browser_sent": True,
@@ -1667,6 +1677,7 @@ def send_email_verify_code_in_browser(
                 "cookies": cookies,
                 "turnstile_token": str(request_body.get("turnstileToken") or "").strip(),
                 "turnstile": turnstile_state,
+                "deployment_id": deployment_id,
                 "page_url": page.url,
                 "browser_engine": resolved_browser_engine,
                 "browser_channel": channel,

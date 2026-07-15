@@ -27,7 +27,12 @@ from platforms.lingya_qq.core import (
     normalize_area_code,
     normalize_lingya_phone,
 )
-from platforms.lingya_qq.publish import DEFAULT_CREATION_PROCESS_TEXT, fetch_lingya_qq_publish_asset
+from platforms.lingya_qq.publish import (
+    DEFAULT_CREATION_PROCESS_TEXT,
+    build_creation_process_text,
+    fetch_lingya_qq_publish_asset,
+    is_legacy_default_creation_process_text,
+)
 
 
 LINGYA_QQ_MAX_SMS_TIMEOUT_SECONDS = 300
@@ -164,8 +169,8 @@ def _first_value(*values: Any, default: Any = "") -> Any:
 
 def _creation_process_text(value: Any) -> str:
     text = str(value or "").strip()
-    if not text or text.lower() in LEGACY_CREATION_PROCESS_TEXTS:
-        return DEFAULT_CREATION_PROCESS_TEXT
+    if not text or text.lower() in LEGACY_CREATION_PROCESS_TEXTS or is_legacy_default_creation_process_text(text):
+        return ""
     return text
 
 
@@ -1559,7 +1564,14 @@ class LingYaQQPlatform(BasePlatform):
         segment = dict(highlight_segment or {})
         prompt = str(highlight_prompt or description or title or "").strip()
         scene_cover = str(highlight_cover_url or cover_url or "").strip()
-        process_text = _creation_process_text(creation_process_text)
+        process_text = build_creation_process_text(
+            title=title,
+            description=description,
+            prompt=prompt,
+            video_filename=file_name,
+            duration=duration,
+            explicit_text=_creation_process_text(creation_process_text),
+        )
         creation_tools = [
             {"id": "", "category": 1, "tools": []},
             {"id": "", "category": 2, "tools": []},
