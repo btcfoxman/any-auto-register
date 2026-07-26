@@ -6,6 +6,7 @@ import random
 import re
 import time
 from typing import Any, Callable
+from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import unquote, urlparse
 
@@ -22,16 +23,17 @@ from platforms.freebeat.core import (
 )
 
 
-FREEBEAT_BROWSER_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
-FREEBEAT_BROWSER_LOCALE = "en-US"
-FREEBEAT_BROWSER_TIMEZONE = "America/New_York"
+FREEBEAT_BROWSER_ACCEPT_LANGUAGE = "zh-HK,zh;q=0.9"
+FREEBEAT_BROWSER_LOCALE = "zh-HK"
+FREEBEAT_BROWSER_TIMEZONE = "Asia/Hong_Kong"
 FREEBEAT_BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 )
 FREEBEAT_BROWSER_TIMEOUT_SECONDS = 120
 FREEBEAT_BROWSER_ENGINE = "playwright"
 FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS = 20
+FREEBEAT_CDP_LAUNCHER_ATTEMPTS = 3
 
 
 def _deployment_id_from_html(value: Any) -> str:
@@ -140,10 +142,22 @@ def _post_json(url: str, payload: dict[str, Any], *, timeout: float) -> dict[str
         headers={"content-type": "application/json", "accept": "application/json"},
         method="POST",
     )
-    with urlrequest.urlopen(req, timeout=max(1.0, float(timeout or 1.0))) as response:
-        text = response.read().decode("utf-8", "replace")
+    status = 0
+    try:
+        with urlrequest.urlopen(req, timeout=max(1.0, float(timeout or 1.0))) as response:
+            status = int(getattr(response, "status", 0) or 0)
+            text = response.read().decode("utf-8", "replace")
+    except urlerror.HTTPError as exc:
+        status = int(getattr(exc, "code", 0) or 0)
+        try:
+            text = exc.read().decode("utf-8", "replace")
+        except Exception:
+            text = str(exc)
     parsed = _parse_json_text(text)
-    return parsed if isinstance(parsed, dict) else {"raw": text}
+    result = parsed if isinstance(parsed, dict) else {"raw": text}
+    if status:
+        result.setdefault("http_status", status)
+    return result
 
 
 def _launch_cdp_browser_session(
@@ -170,13 +184,33 @@ def _launch_cdp_browser_session(
         "user_agent": str(user_agent or "").strip(),
         "timeout_seconds": max(10.0, float(timeout_seconds or FREEBEAT_BROWSER_TIMEOUT_SECONDS)),
     }
-    result = _post_json(
-        _join_url(base, "/launch"),
-        payload,
-        timeout=min(FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS, max(5.0, float(timeout_seconds or 20))),
-    )
+    result: dict[str, Any] = {}
+    launch_url = _join_url(base, "/launch")
+    for attempt in range(1, FREEBEAT_CDP_LAUNCHER_ATTEMPTS + 1):
+        try:
+            result = _post_json(
+                launch_url,
+                payload,
+                timeout=min(FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS, max(5.0, float(timeout_seconds or 20))),
+            )
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            }
+        if result.get("ok"):
+            break
+        if attempt < FREEBEAT_CDP_LAUNCHER_ATTEMPTS:
+            log_fn(
+                "Freebeat CDP launcher attempt "
+                f"{attempt}/{FREEBEAT_CDP_LAUNCHER_ATTEMPTS} failed: {result}; retrying"
+            )
+            time.sleep(0.5 * attempt)
     if not result.get("ok"):
-        raise RuntimeError(f"Freebeat CDP launcher failed: {result}")
+        raise RuntimeError(
+            f"Freebeat CDP launcher failed after {FREEBEAT_CDP_LAUNCHER_ATTEMPTS} attempts: {result}"
+        )
     cdp_url = str(result.get("cdp_url") or "").strip()
     if not cdp_url:
         raise RuntimeError(f"Freebeat CDP launcher did not return cdp_url: {result}")
@@ -324,7 +358,23 @@ def _human_fill_locator(page, locator, text: str, *, timeout: int = 5000, humani
     page.keyboard.type(text, delay=random.randint(45, 105))
 
 
-def _install_stealth_evasions(page) -> None:
+def _install_stealth_evasions(
+    page,
+    *,
+    locale: str = FREEBEAT_BROWSER_LOCALE,
+    accept_language: str = FREEBEAT_BROWSER_ACCEPT_LANGUAGE,
+) -> None:
+    languages: list[str] = []
+    for value in (locale, *str(accept_language or "").split(",")):
+        language = str(value or "").split(";", 1)[0].strip()
+        if language and language != "*" and language not in languages:
+            languages.append(language)
+        base_language = language.split("-", 1)[0]
+        if base_language and base_language not in languages:
+            languages.append(base_language)
+    if not languages:
+        languages = [FREEBEAT_BROWSER_LOCALE, "zh"]
+    language_json = _json_dumps(languages)
     page.add_init_script(
         """
 (() => {
@@ -334,7 +384,7 @@ def _install_stealth_evasions(page) -> None:
     } catch (_) {}
   };
   defineGetter(Navigator.prototype, 'webdriver', () => undefined);
-  defineGetter(Navigator.prototype, 'languages', () => ['en-US', 'en']);
+  defineGetter(Navigator.prototype, 'languages', () => __FREEBEAT_LANGUAGES__);
   defineGetter(Navigator.prototype, 'hardwareConcurrency', () => 8);
   defineGetter(Navigator.prototype, 'deviceMemory', () => 8);
   defineGetter(Navigator.prototype, 'maxTouchPoints', () => 0);
@@ -396,7 +446,7 @@ def _install_stealth_evasions(page) -> None:
   if (!window.outerWidth) defineGetter(window, 'outerWidth', () => window.innerWidth);
   if (!window.outerHeight) defineGetter(window, 'outerHeight', () => window.innerHeight + 85);
 })();
-        """
+        """.replace("__FREEBEAT_LANGUAGES__", language_json)
     )
 
 
@@ -1165,6 +1215,7 @@ def send_email_verify_code_in_browser(
     console_events: list[dict[str, str]] = []
     cdp_launcher_url = str(browser_cdp_launcher_url or "").strip()
     cdp_launcher_session: dict[str, Any] = {}
+    cdp_launcher_error = ""
 
     playwright_context, resolved_browser_engine = _sync_playwright_context(browser_engine)
 
@@ -1176,7 +1227,7 @@ def send_email_verify_code_in_browser(
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
-                "--lang=en-US",
+                f"--lang={str(locale or FREEBEAT_BROWSER_LOCALE)}",
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--password-store=basic",
@@ -1185,21 +1236,32 @@ def send_email_verify_code_in_browser(
         channel = str(browser_channel or "").strip()
         cdp_url = str(browser_cdp_url or "").strip()
         effective_user_agent = str(user_agent or "").strip()
-        if cdp_launcher_url and effective_user_agent == FREEBEAT_BROWSER_USER_AGENT:
-            effective_user_agent = "native"
         if cdp_launcher_url:
-            cdp_launcher_session = _launch_cdp_browser_session(
-                cdp_launcher_url,
-                proxy=proxy,
-                page_url=page_urls[0],
-                headless=headless,
-                locale=locale,
-                timezone_id=timezone_id,
-                user_agent=effective_user_agent,
-                timeout_seconds=timeout_seconds,
-                log_fn=log_fn,
+            launcher_user_agent = (
+                "native"
+                if effective_user_agent == FREEBEAT_BROWSER_USER_AGENT
+                else effective_user_agent
             )
-            cdp_url = str(cdp_launcher_session.get("cdp_url") or "").strip()
+            try:
+                cdp_launcher_session = _launch_cdp_browser_session(
+                    cdp_launcher_url,
+                    proxy=proxy,
+                    page_url=page_urls[0],
+                    headless=headless,
+                    locale=locale,
+                    timezone_id=timezone_id,
+                    user_agent=launcher_user_agent,
+                    timeout_seconds=timeout_seconds,
+                    log_fn=log_fn,
+                )
+                cdp_url = str(cdp_launcher_session.get("cdp_url") or "").strip()
+            except Exception as exc:
+                cdp_launcher_error = str(exc)
+                fallback_mode = "configured CDP" if cdp_url else "local browser"
+                log_fn(
+                    "Freebeat CDP launcher unavailable; "
+                    f"falling back to {fallback_mode} with the same account proxy: {exc}"
+                )
         if channel:
             launch_options["channel"] = channel
         proxy_options = _playwright_proxy(proxy)
@@ -1212,7 +1274,7 @@ def send_email_verify_code_in_browser(
             f"turnstile_click={'on' if turnstile_click_enabled else 'off'} "
             f"solver={'on' if turnstile_solver else 'off'} "
             f"headless={'on' if headless else 'off'} "
-            f"cdp={'launcher' if cdp_launcher_url else ('on' if cdp_url else 'off')}"
+            f"cdp={'launcher' if cdp_launcher_session else ('on' if cdp_url else 'off')}"
         )
         context_options: dict[str, Any] = {
             "locale": str(locale or FREEBEAT_BROWSER_LOCALE),
@@ -1265,7 +1327,11 @@ def send_email_verify_code_in_browser(
             if cdp_url:
                 log_fn("Freebeat browser CDP mode skips init-script stealth/capture hooks")
             elif stealth_enabled:
-                _install_stealth_evasions(page)
+                _install_stealth_evasions(
+                    page,
+                    locale=locale,
+                    accept_language=accept_language,
+                )
             if not cdp_url:
                 _install_capture_hooks(page)
 
@@ -1641,7 +1707,9 @@ def send_email_verify_code_in_browser(
                 raise RuntimeError(
                     "Freebeat browser send-code did not capture sendEmailVerifyCodeV2 request "
                     f"within {timeout_ms // 1000}s; engine={resolved_browser_engine} "
-                    f"channel={channel or 'default'} cdp={'launcher' if cdp_launcher_url else ('on' if cdp_url else 'off')} "
+                    f"channel={channel or 'default'} "
+                    f"cdp={'launcher' if cdp_launcher_session else ('on' if cdp_url else 'off')} "
+                    f"launcher_error={cdp_launcher_error or '-'} "
                     f"stealth={'on' if stealth_enabled else 'off'} "
                     f"init_hooks={'off' if cdp_url else 'on'} "
                     f"humanize={'on' if humanize else 'off'} profile={'on' if str(user_data_dir or '').strip() else 'off'} "
@@ -1684,6 +1752,7 @@ def send_email_verify_code_in_browser(
                 "browser_cdp_url": cdp_url,
                 "browser_cdp_launcher_url": cdp_launcher_url,
                 "browser_cdp_launcher_session_id": str(cdp_launcher_session.get("session_id") or ""),
+                "browser_cdp_launcher_error": cdp_launcher_error,
                 "stealth_enabled": bool(stealth_enabled),
                 "humanize": bool(humanize),
                 "locale": context_options.get("locale"),

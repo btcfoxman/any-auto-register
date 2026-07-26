@@ -9,6 +9,11 @@ from core.base_platform import Account, AccountStatus, BasePlatform, RegisterCon
 from core.freebeat2api_sync import sync_account_to_freebeat2api
 from core.registration import OtpSpec, ProtocolMailboxAdapter, RegistrationResult
 from core.registry import register
+from platforms.freebeat.browser_email import (
+    FREEBEAT_BROWSER_ACCEPT_LANGUAGE,
+    FREEBEAT_BROWSER_LOCALE,
+    FREEBEAT_BROWSER_TIMEZONE,
+)
 from platforms.freebeat.core import (
     FREEBEAT_DEFAULT_VERIFY_SOURCE,
     FREEBEAT_ONBOARDING_CODE,
@@ -241,13 +246,28 @@ class FreebeatPlatform(BasePlatform):
                     30,
                 ),
                 browser_send_code_accept_language=str(
-                    _runtime_value(extra, "freebeat_send_code_browser_accept_language", "en-US,en;q=0.9")
-                    or "en-US,en;q=0.9"
+                    _runtime_value(
+                        extra,
+                        "freebeat_send_code_browser_accept_language",
+                        FREEBEAT_BROWSER_ACCEPT_LANGUAGE,
+                    )
+                    or FREEBEAT_BROWSER_ACCEPT_LANGUAGE
                 ),
-                browser_send_code_locale=str(_runtime_value(extra, "freebeat_send_code_browser_locale", "en-US") or "en-US"),
+                browser_send_code_locale=str(
+                    _runtime_value(
+                        extra,
+                        "freebeat_send_code_browser_locale",
+                        FREEBEAT_BROWSER_LOCALE,
+                    )
+                    or FREEBEAT_BROWSER_LOCALE
+                ),
                 browser_send_code_timezone=str(
-                    _runtime_value(extra, "freebeat_send_code_browser_timezone", "America/New_York")
-                    or "America/New_York"
+                    _runtime_value(
+                        extra,
+                        "freebeat_send_code_browser_timezone",
+                        FREEBEAT_BROWSER_TIMEZONE,
+                    )
+                    or FREEBEAT_BROWSER_TIMEZONE
                 ),
                 browser_send_code_user_agent=str(
                     _runtime_value(extra, "freebeat_send_code_browser_user_agent", "")

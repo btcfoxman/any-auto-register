@@ -180,6 +180,7 @@ class LauncherState:
         self.args = args
         self.sessions: dict[str, BrowserSession] = {}
         self.lock = threading.Lock()
+        self.launch_lock = threading.Lock()
         self.host_map = _parse_host_map(args.proxy_host_map)
         self.profile_root = Path(args.profile_root).expanduser()
         self.profile_root.mkdir(parents=True, exist_ok=True)
@@ -225,6 +226,7 @@ class LauncherState:
             "--no-default-browser-check",
             "--password-store=basic",
             "--disable-dev-shm-usage",
+            "--no-sandbox",
         ]
         if headless:
             cmd.append("--headless=new")
@@ -271,8 +273,18 @@ class LauncherState:
         )
         try:
             self._wait_ready(session, float(payload.get("timeout_seconds") or self.args.launch_timeout_seconds))
-        except Exception:
+        except Exception as exc:
+            log_tail = ""
+            try:
+                log_tail = (profile_dir / "chrome.log").read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )[-1200:].strip()
+            except Exception:
+                pass
             self._destroy(session)
+            if log_tail:
+                raise RuntimeError(f"{exc}; chrome_log={log_tail}") from exc
             raise
 
         with self.lock:
@@ -352,7 +364,9 @@ class LauncherHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path.startswith("/launch"):
             try:
-                result = self.state.launch(_read_json(self))
+                payload = _read_json(self)
+                with self.state.launch_lock:
+                    result = self.state.launch(payload)
                 print(
                     "launched session={session_id} cdp={cdp_url} proxy={proxy}".format(
                         session_id=result.get("session_id"),

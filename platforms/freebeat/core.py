@@ -16,16 +16,17 @@ from core.base_platform import Account
 
 FREEBEAT_BASE = "https://freebeat.ai"
 FREEBEAT_UPLOAD_BASE = "https://api.freebeatfit.com"
-FREEBEAT_DEFAULT_FRONTEND_PATH = "/ai-video-generator"
-FREEBEAT_EN_FRONTEND_PATH = FREEBEAT_DEFAULT_FRONTEND_PATH
+FREEBEAT_DEFAULT_FRONTEND_PATH = "/tw"
+FREEBEAT_EN_FRONTEND_PATH = "/ai-video-generator"
 FREEBEAT_ROOT_FRONTEND_PATH = "/"
 FREEBEAT_ZH_VIDEO_FRONTEND_PATH = "/zh/ai-video-generator"
-FREEBEAT_LEGACY_FRONTEND_PATH = "/tw"
+FREEBEAT_LEGACY_FRONTEND_PATH = FREEBEAT_DEFAULT_FRONTEND_PATH
 FREEBEAT_REGISTER_REFERER = f"{FREEBEAT_BASE}{FREEBEAT_DEFAULT_FRONTEND_PATH}"
 FREEBEAT_SEND_CODE_PATH = "/api/proxy/v1/user/com/sendEmailVerifyCodeV2"
 FREEBEAT_DEFAULT_VERIFY_SOURCE = "WEB_SHOPIFY_LOGIN"
-FREEBEAT_DEFAULT_NEXT_ACTION = "407a6b1d1fe3baa68ae8e8623af1ca43e66a5a5d21"
+FREEBEAT_DEFAULT_NEXT_ACTION = "40c1adaebe2a1e7c344df818336407ce0f9b109d10"
 FREEBEAT_FALLBACK_NEXT_ACTIONS = (
+    "407a6b1d1fe3baa68ae8e8623af1ca43e66a5a5d21",
     "404332890f476afd4eb2bcd3390fcbdec519c94140",
     "40fc8fc4444d87d8d54a31ebf3953a579839f75c07",
 )
@@ -40,7 +41,6 @@ FREEBEAT_EN_VIDEO_NEXT_ROUTER_STATE_TREE = (
     "%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull"
     "%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
 )
-FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE = FREEBEAT_EN_VIDEO_NEXT_ROUTER_STATE_TREE
 FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE = (
     "%5B%22%22%2C%7B%22children%22%3A%5B%5B%22locale%22%2C%22zh%22%2C%22d%22%5D"
     "%2C%7B%22children%22%3A%5B%22(apps)%22%2C%7B%22children%22%3A%5B%22ai-video-generator%22"
@@ -53,13 +53,15 @@ FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE = (
     "%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull"
     "%2Ctrue%5D%7D%2Cnull%2Cnull%5D"
 )
+FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE = FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE
 FREEBEAT_ONBOARDING_CODE = "onboarding_v1"
 FREEBEAT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 )
-FREEBEAT_SEC_CH_UA = '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"'
+FREEBEAT_SEC_CH_UA = '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"'
 FREEBEAT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
+FREEBEAT_TW_ACCEPT_LANGUAGE = "zh-HK,zh;q=0.9"
 FREEBEAT_ZH_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8"
 FREEBEAT_EN_ACCEPT_LANGUAGE = FREEBEAT_ACCEPT_LANGUAGE
 FREEBEAT_REWARD_REFRESH_ATTEMPTS = 4
@@ -244,6 +246,8 @@ def _router_state_for_frontend_path(path: str) -> str:
 
 def _accept_language_for_frontend_path(path: str) -> str:
     normalized = _normalize_frontend_path(path)
+    if normalized == FREEBEAT_LEGACY_FRONTEND_PATH:
+        return FREEBEAT_TW_ACCEPT_LANGUAGE
     if normalized == FREEBEAT_ZH_VIDEO_FRONTEND_PATH:
         return FREEBEAT_ZH_ACCEPT_LANGUAGE
     if normalized == FREEBEAT_EN_FRONTEND_PATH:
@@ -721,8 +725,13 @@ class FreebeatClient:
         accept_language = _accept_language_for_frontend_path(self.frontend_path)
         body = _json_dumps([{"email": email, "code": code}])
         attempts = [(self.frontend_path, self.frontend_url, router_state, accept_language)]
-        if self.frontend_path != FREEBEAT_LEGACY_FRONTEND_PATH and next_router_state_tree is None:
+        if next_router_state_tree is None:
             fallback_routes = (
+                (
+                    FREEBEAT_LEGACY_FRONTEND_PATH,
+                    FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE,
+                    FREEBEAT_TW_ACCEPT_LANGUAGE,
+                ),
                 (
                     FREEBEAT_EN_FRONTEND_PATH,
                     FREEBEAT_EN_NEXT_ROUTER_STATE_TREE,
@@ -737,11 +746,6 @@ class FreebeatClient:
                     FREEBEAT_ZH_VIDEO_FRONTEND_PATH,
                     FREEBEAT_ZH_VIDEO_NEXT_ROUTER_STATE_TREE,
                     FREEBEAT_ZH_ACCEPT_LANGUAGE,
-                ),
-                (
-                    FREEBEAT_LEGACY_FRONTEND_PATH,
-                    FREEBEAT_LEGACY_NEXT_ROUTER_STATE_TREE,
-                    FREEBEAT_ACCEPT_LANGUAGE,
                 ),
             )
             for path, state_tree, language in fallback_routes:
