@@ -164,6 +164,20 @@ jobs:
             "${GITHUB_WORKSPACE}/scripts/freebeat_cdp_launcher.py" \
             "${launcher_script}"
 
+          if ! command -v Xvfb > /dev/null; then
+            echo "Xvfb is missing; installing the display server required by headed Chrome"
+            if command -v apt-get > /dev/null && sudo -n true 2>/dev/null; then
+              sudo -n apt-get update
+              sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb
+            elif [ "$(id -u)" = "0" ] && command -v apt-get > /dev/null; then
+              apt-get update
+              env DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb
+            else
+              echo "::error::Xvfb is required for headed Chrome, and the runner cannot install it"
+              exit 1
+            fi
+          fi
+
           # Older deployments started the launcher outside systemd and without a
           # pidfile. Stop those exact Python launcher processes before binding 9321.
           systemctl --user stop freebeat-cdp-launcher.service 2>/dev/null || true
