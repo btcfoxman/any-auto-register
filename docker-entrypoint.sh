@@ -2,7 +2,10 @@
 set -e
 
 # 启动虚拟显示
-Xvfb :99 -screen 0 1280x800x24 -nolisten tcp &
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+rm -f /tmp/.X11-unix/X99 /tmp/.X99-lock
+Xvfb :99 -screen 0 1280x800x24 -nolisten tcp -ac &
 export DISPLAY=:99
 
 # 等待 Xvfb 就绪

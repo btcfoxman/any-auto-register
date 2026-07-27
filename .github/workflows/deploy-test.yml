@@ -138,6 +138,15 @@ jobs:
         run: |
           set -euo pipefail
           cd "${DEPLOY_PATH}"
+          cdp_override_dir="${DEPLOY_PATH}/host-tools/freebeat-cdp"
+          cdp_override="${cdp_override_dir}/docker-compose.override.yml"
+          mkdir -p "${cdp_override_dir}"
+          cat > "${cdp_override}" <<'EOF'
+          services:
+            app:
+              volumes:
+                - /tmp/.X11-unix:/tmp/.X11-unix
+          EOF
           if [ "${{ steps.pull_image.outputs.pulled }}" != "true" ]; then
             echo "docker compose pull failed after retries; loading image artifact"
             gzip -dc "/tmp/${IMAGE_TAR}" | docker load
@@ -146,7 +155,10 @@ jobs:
           IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" \
           IMAGE_NAME="${IMAGE_NAME}" \
           IMAGE_TAG="${IMAGE_TAG}" \
-          docker compose up -d "${DEPLOY_SERVICE}"
+          docker compose \
+            -f docker-compose.yml \
+            -f "${cdp_override}" \
+            up -d "${DEPLOY_SERVICE}"
           docker image prune -f
 
       - name: Install and restart headed Freebeat CDP launcher
@@ -164,18 +176,14 @@ jobs:
             "${GITHUB_WORKSPACE}/scripts/freebeat_cdp_launcher.py" \
             "${launcher_script}"
 
-          if ! command -v Xvfb > /dev/null; then
-            echo "Xvfb is missing; installing the display server required by headed Chrome"
-            if command -v apt-get > /dev/null && sudo -n true 2>/dev/null; then
-              sudo -n apt-get update
-              sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb
-            elif [ "$(id -u)" = "0" ] && command -v apt-get > /dev/null; then
-              apt-get update
-              env DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb
-            else
-              echo "::error::Xvfb is required for headed Chrome, and the runner cannot install it"
-              exit 1
-            fi
+          headed_display=:99
+          for _ in $(seq 1 30); do
+            [ -S /tmp/.X11-unix/X99 ] && break
+            sleep 1
+          done
+          if [ ! -S /tmp/.X11-unix/X99 ]; then
+            echo "::error::The application Xvfb display socket :99 did not become ready"
+            exit 1
           fi
 
           # Older deployments started the launcher outside systemd and without a
@@ -213,6 +221,7 @@ jobs:
           Environment=FREEBEAT_CDP_LAUNCHER_PUBLIC_HOST=172.18.0.1
           Environment=FREEBEAT_CDP_LAUNCHER_PORT=9321
           Environment=FREEBEAT_CDP_HEADED_DISPLAY_MODE=auto
+          Environment=DISPLAY=${headed_display}
           ExecStart=/usr/bin/env python3 ${launcher_script}
           Restart=always
           RestartSec=2
@@ -241,7 +250,7 @@ jobs:
             fi
             (
               unset RUNNER_TRACKING_ID
-              nohup /usr/bin/env python3 "${launcher_script}" \
+              DISPLAY="${headed_display}" nohup /usr/bin/env python3 "${launcher_script}" \
                 > "${log_file}" 2>&1 < /dev/null &
               echo "$!" > "${pid_file}"
             )
