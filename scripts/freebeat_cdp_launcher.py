@@ -69,6 +69,68 @@ def _find_free_port(host: str, start: int, end: int) -> int:
     raise RuntimeError(f"no free port in {host}:{start}-{end}")
 
 
+def _process_log_tail(path: Path, limit: int = 1600) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-limit:].strip()
+    except Exception:
+        return ""
+
+
+def _stop_process(proc: subprocess.Popen | None, *, timeout: float = 5.0) -> None:
+    if proc is None:
+        return
+    with contextlib.suppress(Exception):
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=timeout)
+
+
+def _x_display_socket(display_number: int) -> Path:
+    return Path(f"/tmp/.X11-unix/X{display_number}")
+
+
+def _display_number(value: str) -> int | None:
+    text = str(value or "").strip()
+    if not text.startswith(":"):
+        return None
+    number = text[1:].split(".", 1)[0]
+    try:
+        return int(number)
+    except ValueError:
+        return None
+
+
+def _system_display_usable(display: str, xauthority: str = "") -> bool:
+    if os.name == "nt":
+        return True
+    number = _display_number(display)
+    if number is None or not _x_display_socket(number).exists():
+        return False
+    xdpyinfo = shutil.which("xdpyinfo")
+    if not xdpyinfo:
+        return True
+    env = os.environ.copy()
+    env["DISPLAY"] = display
+    if xauthority:
+        env["XAUTHORITY"] = xauthority
+    try:
+        result = subprocess.run(
+            [xdpyinfo, "-display", display],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            timeout=3,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _parse_host_map(value: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for item in str(value or "").split(","):
@@ -173,6 +235,9 @@ class BrowserSession:
     created_at: float
     forwarder: _ForwardServer
     forward_thread: threading.Thread
+    display: str
+    display_mode: str
+    display_proc: subprocess.Popen | None
 
 
 class LauncherState:
@@ -184,6 +249,73 @@ class LauncherState:
         self.host_map = _parse_host_map(args.proxy_host_map)
         self.profile_root = Path(args.profile_root).expanduser()
         self.profile_root.mkdir(parents=True, exist_ok=True)
+
+    def _start_xvfb(self, profile_dir: Path) -> tuple[subprocess.Popen, str]:
+        configured = str(self.args.xvfb_binary or "").strip()
+        binary = shutil.which(configured) if configured else None
+        if not binary and configured and Path(configured).exists():
+            binary = configured
+        if not binary:
+            raise RuntimeError(
+                "headed Chrome requires a usable desktop or Xvfb; "
+                "install Xvfb or set FREEBEAT_CDP_HEADED_DISPLAY_MODE=system"
+            )
+        for number in range(self.args.xvfb_display_start, self.args.xvfb_display_end + 1):
+            socket_path = _x_display_socket(number)
+            if socket_path.exists():
+                continue
+            display = f":{number}"
+            log_path = profile_dir / "xvfb.log"
+            log_file = log_path.open("ab")
+            try:
+                proc = subprocess.Popen(
+                    [
+                        binary,
+                        display,
+                        "-screen",
+                        "0",
+                        str(self.args.xvfb_screen),
+                        "-nolisten",
+                        "tcp",
+                        "-ac",
+                        "-noreset",
+                    ],
+                    stdout=log_file,
+                    stderr=log_file,
+                    close_fds=True,
+                )
+            finally:
+                log_file.close()
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    break
+                if socket_path.exists():
+                    return proc, display
+                time.sleep(0.1)
+            _stop_process(proc)
+            log_tail = _process_log_tail(log_path)
+            if log_tail:
+                raise RuntimeError(f"Xvfb failed to start on {display}: {log_tail}")
+        raise RuntimeError(
+            "no free Xvfb display in "
+            f":{self.args.xvfb_display_start}-:{self.args.xvfb_display_end}"
+        )
+
+    def _prepare_headed_display(
+        self,
+        profile_dir: Path,
+    ) -> tuple[subprocess.Popen | None, str, str]:
+        mode = str(self.args.headed_display_mode or "auto").strip().lower()
+        display = str(self.args.display or "").strip()
+        if mode in {"auto", "system"} and _system_display_usable(display, self.args.xauthority):
+            return None, display, "system"
+        if mode == "system":
+            raise RuntimeError(
+                f"configured system DISPLAY {display or '<empty>'} is unavailable to the launcher service"
+            )
+        proc, virtual_display = self._start_xvfb(profile_dir)
+        return proc, virtual_display, "xvfb"
 
     def cleanup_expired(self) -> None:
         deadline = time.time() - max(60, int(self.args.ttl_seconds))
@@ -211,7 +343,26 @@ class LauncherState:
         user_agent = str(payload.get("user_agent") or "").strip()
         headless = _truthy(payload.get("headless"), False)
 
-        forwarder = _ForwardServer((self.args.listen_host, public_port), self.args.chrome_bind_host, chrome_port)
+        display_proc: subprocess.Popen | None = None
+        display = ""
+        display_mode = "headless"
+        if not headless:
+            try:
+                display_proc, display, display_mode = self._prepare_headed_display(profile_dir)
+            except Exception:
+                shutil.rmtree(profile_dir, ignore_errors=True)
+                raise
+
+        try:
+            forwarder = _ForwardServer(
+                (self.args.listen_host, public_port),
+                self.args.chrome_bind_host,
+                chrome_port,
+            )
+        except Exception:
+            _stop_process(display_proc)
+            shutil.rmtree(profile_dir, ignore_errors=True)
+            raise
         forward_thread = threading.Thread(target=forwarder.serve_forever, daemon=True)
         forward_thread.start()
 
@@ -227,9 +378,14 @@ class LauncherState:
             "--password-store=basic",
             "--disable-dev-shm-usage",
             "--no-sandbox",
+            "--window-size=1365,768",
+            "--window-position=0,0",
+            "--force-device-scale-factor=1",
         ]
         if headless:
             cmd.append("--headless=new")
+        elif display_mode == "xvfb":
+            cmd.append("--ozone-platform=x11")
         if proxy:
             cmd.append(f"--proxy-server={proxy}")
         if user_agent and user_agent.lower() != "native":
@@ -238,7 +394,7 @@ class LauncherState:
 
         env = os.environ.copy()
         for key, value in {
-            "DISPLAY": self.args.display,
+            "DISPLAY": display,
             "WAYLAND_DISPLAY": self.args.wayland_display,
             "XAUTHORITY": self.args.xauthority,
             "DBUS_SESSION_BUS_ADDRESS": self.args.dbus_session_bus_address,
@@ -246,6 +402,10 @@ class LauncherState:
         }.items():
             if value:
                 env[key] = value
+        if display_mode == "xvfb":
+            env.pop("WAYLAND_DISPLAY", None)
+            env.pop("XAUTHORITY", None)
+            env.pop("DBUS_SESSION_BUS_ADDRESS", None)
 
         log_file = (profile_dir / "chrome.log").open("ab")
         try:
@@ -254,6 +414,7 @@ class LauncherState:
             log_file.close()
             forwarder.shutdown()
             forwarder.server_close()
+            _stop_process(display_proc)
             shutil.rmtree(profile_dir, ignore_errors=True)
             raise
         log_file.close()
@@ -270,21 +431,23 @@ class LauncherState:
             created_at=time.time(),
             forwarder=forwarder,
             forward_thread=forward_thread,
+            display=display,
+            display_mode=display_mode,
+            display_proc=display_proc,
         )
         try:
             self._wait_ready(session, float(payload.get("timeout_seconds") or self.args.launch_timeout_seconds))
         except Exception as exc:
-            log_tail = ""
-            try:
-                log_tail = (profile_dir / "chrome.log").read_text(
-                    encoding="utf-8",
-                    errors="replace",
-                )[-1200:].strip()
-            except Exception:
-                pass
+            chrome_log_tail = _process_log_tail(profile_dir / "chrome.log")
+            xvfb_log_tail = _process_log_tail(profile_dir / "xvfb.log")
             self._destroy(session)
-            if log_tail:
-                raise RuntimeError(f"{exc}; chrome_log={log_tail}") from exc
+            diagnostics = []
+            if chrome_log_tail:
+                diagnostics.append(f"chrome_log={chrome_log_tail}")
+            if xvfb_log_tail:
+                diagnostics.append(f"xvfb_log={xvfb_log_tail}")
+            if diagnostics:
+                raise RuntimeError(f"{exc}; {'; '.join(diagnostics)}") from exc
             raise
 
         with self.lock:
@@ -295,6 +458,9 @@ class LauncherState:
             "cdp_url": cdp_url,
             "release_url": f"http://{self.args.public_host}:{self.args.port}/release",
             "proxy": proxy,
+            "headless": headless,
+            "display": display,
+            "display_mode": display_mode,
             "profile_dir": str(profile_dir),
             "chrome_port": chrome_port,
             "public_port": public_port,
@@ -324,18 +490,12 @@ class LauncherState:
         return {"ok": True, "released": True, "session_id": session_id}
 
     def _destroy(self, session: BrowserSession) -> None:
-        with contextlib.suppress(Exception):
-            if session.proc.poll() is None:
-                session.proc.terminate()
-                try:
-                    session.proc.wait(timeout=8)
-                except subprocess.TimeoutExpired:
-                    session.proc.kill()
-                    session.proc.wait(timeout=5)
+        _stop_process(session.proc, timeout=8)
         with contextlib.suppress(Exception):
             session.forwarder.shutdown()
         with contextlib.suppress(Exception):
             session.forwarder.server_close()
+        _stop_process(session.display_proc)
         shutil.rmtree(session.profile_dir, ignore_errors=True)
 
 
@@ -356,6 +516,10 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     "sessions": len(self.state.sessions),
                     "listen_host": self.state.args.listen_host,
                     "port": self.state.args.port,
+                    "launcher_version": 2,
+                    "headed_display_mode": self.state.args.headed_display_mode,
+                    "system_display": self.state.args.display,
+                    "xvfb_available": bool(shutil.which(self.state.args.xvfb_binary)),
                 },
             )
             return
@@ -405,6 +569,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ttl-seconds", type=int, default=int(os.getenv("FREEBEAT_CDP_TTL_SECONDS", "600")))
     parser.add_argument("--launch-timeout-seconds", type=float, default=float(os.getenv("FREEBEAT_CDP_LAUNCH_TIMEOUT_SECONDS", "30")))
     parser.add_argument("--display", default=os.getenv("DISPLAY", ":0"))
+    parser.add_argument(
+        "--headed-display-mode",
+        choices=("auto", "system", "xvfb"),
+        default=os.getenv("FREEBEAT_CDP_HEADED_DISPLAY_MODE", "auto"),
+    )
+    parser.add_argument("--xvfb-binary", default=os.getenv("FREEBEAT_CDP_XVFB_BINARY", "Xvfb"))
+    parser.add_argument(
+        "--xvfb-display-start",
+        type=int,
+        default=int(os.getenv("FREEBEAT_CDP_XVFB_DISPLAY_START", "100")),
+    )
+    parser.add_argument(
+        "--xvfb-display-end",
+        type=int,
+        default=int(os.getenv("FREEBEAT_CDP_XVFB_DISPLAY_END", "199")),
+    )
+    parser.add_argument(
+        "--xvfb-screen",
+        default=os.getenv("FREEBEAT_CDP_XVFB_SCREEN", "1365x768x24"),
+    )
     parser.add_argument("--wayland-display", default=os.getenv("WAYLAND_DISPLAY", "wayland-0"))
     parser.add_argument("--xauthority", default=os.getenv("XAUTHORITY", ""))
     parser.add_argument("--dbus-session-bus-address", default=os.getenv("DBUS_SESSION_BUS_ADDRESS", ""))

@@ -148,3 +148,107 @@ jobs:
           IMAGE_TAG="${IMAGE_TAG}" \
           docker compose up -d "${DEPLOY_SERVICE}"
           docker image prune -f
+
+      - name: Install and restart headed Freebeat CDP launcher
+        run: |
+          set -euo pipefail
+          launcher_dir="${DEPLOY_PATH}/host-tools/freebeat-cdp"
+          launcher_script="${launcher_dir}/freebeat_cdp_launcher.py"
+          service_dir="${HOME}/.config/systemd/user"
+          service_file="${service_dir}/freebeat-cdp-launcher.service"
+          log_file="${launcher_dir}/launcher.log"
+          pid_file="${launcher_dir}/launcher.pid"
+
+          mkdir -p "${launcher_dir}" "${service_dir}"
+          install -m 0755 \
+            "${GITHUB_WORKSPACE}/scripts/freebeat_cdp_launcher.py" \
+            "${launcher_script}"
+
+          cat > "${service_file}" <<EOF
+          [Unit]
+          Description=Freebeat headed Chrome CDP launcher
+          After=network-online.target docker.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          WorkingDirectory=${launcher_dir}
+          Environment=PYTHONUNBUFFERED=1
+          Environment=FREEBEAT_CDP_LAUNCHER_HOST=172.18.0.1
+          Environment=FREEBEAT_CDP_LAUNCHER_PUBLIC_HOST=172.18.0.1
+          Environment=FREEBEAT_CDP_LAUNCHER_PORT=9321
+          Environment=FREEBEAT_CDP_HEADED_DISPLAY_MODE=auto
+          ExecStart=/usr/bin/env python3 ${launcher_script}
+          Restart=always
+          RestartSec=2
+          TimeoutStopSec=20
+
+          [Install]
+          WantedBy=default.target
+          EOF
+
+          managed_by_systemd=false
+          if systemctl --user daemon-reload \
+            && systemctl --user enable freebeat-cdp-launcher.service \
+            && systemctl --user restart freebeat-cdp-launcher.service; then
+            managed_by_systemd=true
+          else
+            echo "::warning::user systemd unavailable; using supervised nohup fallback"
+            if [ -s "${pid_file}" ]; then
+              old_pid="$(cat "${pid_file}")"
+              if kill -0 "${old_pid}" 2>/dev/null; then
+                kill "${old_pid}"
+                for _ in $(seq 1 20); do
+                  kill -0 "${old_pid}" 2>/dev/null || break
+                  sleep 0.25
+                done
+              fi
+            fi
+            (
+              unset RUNNER_TRACKING_ID
+              nohup /usr/bin/env python3 "${launcher_script}" \
+                > "${log_file}" 2>&1 < /dev/null &
+              echo "$!" > "${pid_file}"
+            )
+          fi
+
+          health_url="http://172.18.0.1:9321/health"
+          for attempt in $(seq 1 30); do
+            health="$(curl -fsS --max-time 2 "${health_url}" || true)"
+            if echo "${health}" | grep -q '"launcher_version": 2'; then
+              echo "Freebeat CDP launcher ready: ${health}"
+              smoke="$(
+                curl -sS --max-time 45 \
+                  -H 'content-type: application/json' \
+                  -d '{"url":"about:blank","headless":false,"timeout_seconds":30}' \
+                  "http://172.18.0.1:9321/launch" \
+                  || true
+              )"
+              session_id="$(
+                SMOKE_RESPONSE="${smoke}" python3 -c \
+                  'import json, os; data=json.loads(os.environ.get("SMOKE_RESPONSE") or "{}"); print(data.get("session_id") if data.get("ok") and data.get("display_mode") in {"system", "xvfb"} else "")' \
+                  2>/dev/null \
+                  || true
+              )"
+              if [ -n "${session_id}" ]; then
+                curl -fsS --max-time 10 \
+                  -H 'content-type: application/json' \
+                  -d "{\"session_id\":\"${session_id}\"}" \
+                  "http://172.18.0.1:9321/release" > /dev/null
+                echo "Freebeat headed Chrome CDP smoke test passed"
+                exit 0
+              fi
+              echo "::error::Freebeat headed Chrome smoke test failed: ${smoke}"
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "${managed_by_systemd}" = "true" ]; then
+            systemctl --user status freebeat-cdp-launcher.service --no-pager || true
+            journalctl --user -u freebeat-cdp-launcher.service -n 100 --no-pager || true
+          else
+            tail -n 100 "${log_file}" || true
+          fi
+          echo "::error::Freebeat headed CDP launcher did not become ready"
+          exit 1

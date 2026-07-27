@@ -31,9 +31,8 @@ FREEBEAT_BROWSER_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 )
 FREEBEAT_BROWSER_TIMEOUT_SECONDS = 120
-FREEBEAT_BROWSER_ENGINE = "playwright"
+FREEBEAT_BROWSER_ENGINE = "auto"
 FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS = 20
-FREEBEAT_CDP_LAUNCHER_ATTEMPTS = 3
 
 
 def _deployment_id_from_html(value: Any) -> str:
@@ -49,12 +48,15 @@ def _page_url(frontend_path: str = "") -> str:
 
 
 def _candidate_page_urls(frontend_path: str = "") -> list[str]:
-    urls = [_page_url(frontend_path)]
-    for path in (
-        "/login?redirectTo=%2F",
-        "/tw/login?redirectTo=%2Ftw",
-    ):
-        urls.append(f"{FREEBEAT_BASE}{path}")
+    primary_url = _page_url(frontend_path)
+    primary_path = urlparse(primary_url).path or "/"
+    urls = [primary_url]
+    login_path = (
+        "/tw/login?redirectTo=%2Ftw"
+        if primary_path == "/tw" or primary_path.startswith("/tw/")
+        else "/login?redirectTo=%2F"
+    )
+    urls.append(f"{FREEBEAT_BASE}{login_path}")
     return list(dict.fromkeys(urls))
 
 
@@ -184,33 +186,19 @@ def _launch_cdp_browser_session(
         "user_agent": str(user_agent or "").strip(),
         "timeout_seconds": max(10.0, float(timeout_seconds or FREEBEAT_BROWSER_TIMEOUT_SECONDS)),
     }
-    result: dict[str, Any] = {}
     launch_url = _join_url(base, "/launch")
-    for attempt in range(1, FREEBEAT_CDP_LAUNCHER_ATTEMPTS + 1):
-        try:
-            result = _post_json(
-                launch_url,
-                payload,
-                timeout=min(FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS, max(5.0, float(timeout_seconds or 20))),
-            )
-        except Exception as exc:
-            result = {
-                "ok": False,
-                "error": str(exc),
-                "error_type": type(exc).__name__,
-            }
-        if result.get("ok"):
-            break
-        if attempt < FREEBEAT_CDP_LAUNCHER_ATTEMPTS:
-            log_fn(
-                "Freebeat CDP launcher attempt "
-                f"{attempt}/{FREEBEAT_CDP_LAUNCHER_ATTEMPTS} failed: {result}; retrying"
-            )
-            time.sleep(0.5 * attempt)
-    if not result.get("ok"):
-        raise RuntimeError(
-            f"Freebeat CDP launcher failed after {FREEBEAT_CDP_LAUNCHER_ATTEMPTS} attempts: {result}"
+    try:
+        result = _post_json(
+            launch_url,
+            payload,
+            timeout=min(FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS, max(5.0, float(timeout_seconds or 20))),
         )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Freebeat headed CDP launcher request failed: {type(exc).__name__}: {exc}"
+        ) from exc
+    if not result.get("ok"):
+        raise RuntimeError(f"Freebeat headed CDP launcher failed: {result}")
     cdp_url = str(result.get("cdp_url") or "").strip()
     if not cdp_url:
         raise RuntimeError(f"Freebeat CDP launcher did not return cdp_url: {result}")
@@ -551,7 +539,16 @@ def _click_matching(page, patterns: list[str], reject_patterns: list[str] | None
 def _click_login_entry(page, *, humanize: bool = True) -> dict[str, Any]:
     if not _is_freebeat_page_url(page.url):
         return {"ok": False, "external": True, "url": page.url}
-    for text in ("Login", "Log in", "Sign in"):
+    for text in (
+        "Login",
+        "Log in",
+        "Sign in",
+        "登入",
+        "登錄",
+        "登录",
+        "註冊",
+        "注册",
+    ):
         try:
             locator = _first_locator(page.get_by_text(text, exact=True))
             if locator.count() <= 0 or not locator.is_visible(timeout=1000):
@@ -581,7 +578,12 @@ def _click_login_entry(page, *, humanize: bool = True) -> dict[str, Any]:
     if (joined.includes('google') || joined.includes('oauth') || joined.includes('apple') || joined.includes('facebook')) {
       continue;
     }
-    if (/^login$/i.test(text) || /^log\\s*in$/i.test(text) || /^sign\\s*in$/i.test(text)) {
+    if (
+      /^login$/i.test(text)
+      || /^log\\s*in$/i.test(text)
+      || /^sign\\s*in$/i.test(text)
+      || /^(登入|登錄|登录|註冊|注册)$/.test(text)
+    ) {
       el.click();
       return { ok: true, text: text.slice(0, 120), tag: el.tagName };
     }
@@ -1215,7 +1217,6 @@ def send_email_verify_code_in_browser(
     console_events: list[dict[str, str]] = []
     cdp_launcher_url = str(browser_cdp_launcher_url or "").strip()
     cdp_launcher_session: dict[str, Any] = {}
-    cdp_launcher_error = ""
 
     playwright_context, resolved_browser_engine = _sync_playwright_context(browser_engine)
 
@@ -1242,26 +1243,18 @@ def send_email_verify_code_in_browser(
                 if effective_user_agent == FREEBEAT_BROWSER_USER_AGENT
                 else effective_user_agent
             )
-            try:
-                cdp_launcher_session = _launch_cdp_browser_session(
-                    cdp_launcher_url,
-                    proxy=proxy,
-                    page_url=page_urls[0],
-                    headless=headless,
-                    locale=locale,
-                    timezone_id=timezone_id,
-                    user_agent=launcher_user_agent,
-                    timeout_seconds=timeout_seconds,
-                    log_fn=log_fn,
-                )
-                cdp_url = str(cdp_launcher_session.get("cdp_url") or "").strip()
-            except Exception as exc:
-                cdp_launcher_error = str(exc)
-                fallback_mode = "configured CDP" if cdp_url else "local browser"
-                log_fn(
-                    "Freebeat CDP launcher unavailable; "
-                    f"falling back to {fallback_mode} with the same account proxy: {exc}"
-                )
+            cdp_launcher_session = _launch_cdp_browser_session(
+                cdp_launcher_url,
+                proxy=proxy,
+                page_url=page_urls[0],
+                headless=headless,
+                locale=locale,
+                timezone_id=timezone_id,
+                user_agent=launcher_user_agent,
+                timeout_seconds=timeout_seconds,
+                log_fn=log_fn,
+            )
+            cdp_url = str(cdp_launcher_session.get("cdp_url") or "").strip()
         if channel:
             launch_options["channel"] = channel
         proxy_options = _playwright_proxy(proxy)
@@ -1395,7 +1388,16 @@ def send_email_verify_code_in_browser(
             page.on("response", on_response)
             page.on("requestfailed", on_request_failed)
             page.on("console", on_console)
-            open_patterns = ["log\\s*in", "login", "sign\\s*in"]
+            open_patterns = [
+                "log\\s*in",
+                "login",
+                "sign\\s*in",
+                "登入",
+                "登錄",
+                "登录",
+                "註冊",
+                "注册",
+            ]
             open_reject_patterns = ["google", "accounts\\.google", "oauth", "apple", "facebook"]
             send_patterns = [
                 "send",
@@ -1421,6 +1423,7 @@ def send_email_verify_code_in_browser(
                 page.wait_for_timeout(1500)
 
                 start = time.monotonic()
+                no_login_entry_count = 0
                 while time.monotonic() - start < per_url_timeout:
                     if response_record:
                         if (
@@ -1460,6 +1463,7 @@ def send_email_verify_code_in_browser(
                         _wait_after_navigation(page)
                         continue
                     if filled.get("ok"):
+                        no_login_entry_count = 0
                         try:
                             clicked = _click_email_submit(page, humanize=humanize)
                             if not clicked.get("ok"):
@@ -1471,6 +1475,8 @@ def send_email_verify_code_in_browser(
                             _wait_after_navigation(page)
                             continue
                         last_action = {"filled": filled, "clicked": clicked, "page_url": page_url}
+                        if clicked.get("ok"):
+                            no_login_entry_count = 0
                         if not clicked.get("ok"):
                             try:
                                 page.keyboard.press("Enter")
@@ -1570,6 +1576,7 @@ def send_email_verify_code_in_browser(
                                                 log_fn("Freebeat Turnstile solver returned token")
                                         except Exception as exc:
                                             solver_info["error"] = str(exc)
+                                            last_action["terminal_turnstile_failure"] = True
                                             log_fn(f"Freebeat Turnstile solver failed: {exc}")
                                         last_action["turnstile_solver"] = solver_info
                                 try:
@@ -1602,6 +1609,8 @@ def send_email_verify_code_in_browser(
                             if response_record:
                                 break
                             if last_action.get("cf_verification_failed"):
+                                break
+                            if last_action.get("terminal_turnstile_failure"):
                                 break
                             try:
                                 fetch_result = _send_code_fetch_from_page(
@@ -1680,6 +1689,8 @@ def send_email_verify_code_in_browser(
                                 break
                     if last_action.get("cf_verification_failed"):
                         break
+                    if last_action.get("terminal_turnstile_failure"):
+                        break
                     else:
                         try:
                             clicked = _click_login_entry(page, humanize=humanize)
@@ -1692,10 +1703,20 @@ def send_email_verify_code_in_browser(
                             _wait_after_navigation(page)
                             continue
                         last_action = {"filled": filled, "clicked": clicked, "page_url": page_url}
+                        if clicked.get("ok"):
+                            no_login_entry_count = 0
+                        else:
+                            no_login_entry_count += 1
+                            last_action["no_login_entry_count"] = no_login_entry_count
+                            if no_login_entry_count >= 3:
+                                last_action["stage"] = "login_entry_not_found"
+                                break
                     page.wait_for_timeout(2500)
                 if response_record:
                     break
                 if last_action.get("cf_verification_failed"):
+                    break
+                if last_action.get("terminal_turnstile_failure"):
                     break
 
             if not response_record:
@@ -1709,7 +1730,6 @@ def send_email_verify_code_in_browser(
                     f"within {timeout_ms // 1000}s; engine={resolved_browser_engine} "
                     f"channel={channel or 'default'} "
                     f"cdp={'launcher' if cdp_launcher_session else ('on' if cdp_url else 'off')} "
-                    f"launcher_error={cdp_launcher_error or '-'} "
                     f"stealth={'on' if stealth_enabled else 'off'} "
                     f"init_hooks={'off' if cdp_url else 'on'} "
                     f"humanize={'on' if humanize else 'off'} profile={'on' if str(user_data_dir or '').strip() else 'off'} "
@@ -1752,7 +1772,6 @@ def send_email_verify_code_in_browser(
                 "browser_cdp_url": cdp_url,
                 "browser_cdp_launcher_url": cdp_launcher_url,
                 "browser_cdp_launcher_session_id": str(cdp_launcher_session.get("session_id") or ""),
-                "browser_cdp_launcher_error": cdp_launcher_error,
                 "stealth_enabled": bool(stealth_enabled),
                 "humanize": bool(humanize),
                 "locale": context_options.get("locale"),

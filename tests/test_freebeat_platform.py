@@ -418,7 +418,10 @@ def test_freebeat_send_code_includes_turnstile_token_when_provided():
 
 
 def test_freebeat_browser_send_code_uses_latest_tw_page_by_default():
-    assert _candidate_page_urls()[0] == "https://freebeat.ai/tw"
+    assert _candidate_page_urls() == [
+        "https://freebeat.ai/tw",
+        "https://freebeat.ai/tw/login?redirectTo=%2Ftw",
+    ]
 
 
 def test_freebeat_browser_extracts_current_deployment_id_for_protocol_login():
@@ -430,7 +433,6 @@ def test_freebeat_browser_send_code_tries_login_pages_after_root():
     assert _candidate_page_urls("/") == [
         "https://freebeat.ai/",
         "https://freebeat.ai/login?redirectTo=%2F",
-        "https://freebeat.ai/tw/login?redirectTo=%2Ftw",
     ]
 
 
@@ -455,41 +457,30 @@ def test_freebeat_cdp_launcher_http_error_keeps_json_diagnostics(monkeypatch):
     }
 
 
-def test_freebeat_cdp_launcher_retries_transient_500(monkeypatch):
+def test_freebeat_cdp_launcher_fails_once_with_server_diagnostics(monkeypatch):
     calls: list[dict] = []
-    responses = [
-        {"ok": False, "error": "chrome exited", "http_status": 500},
-        {"ok": False, "error": "port busy", "http_status": 500},
-        {
-            "ok": True,
-            "session_id": "session-1",
-            "cdp_url": "http://launcher.test:9520",
-            "proxy": "socks5://xray:20004",
-        },
-    ]
 
     def fake_post_json(url, payload, *, timeout):
         calls.append({"url": url, "payload": payload, "timeout": timeout})
-        return responses[len(calls) - 1]
+        return {"ok": False, "error": "chrome exited", "chrome_log": "display unavailable", "http_status": 500}
 
     monkeypatch.setattr("platforms.freebeat.browser_email._post_json", fake_post_json)
-    monkeypatch.setattr("platforms.freebeat.browser_email.time.sleep", lambda seconds: None)
 
-    result = _launch_cdp_browser_session(
-        "http://launcher.test",
-        proxy="socks5://xray:20004",
-        page_url="https://freebeat.ai/tw",
-        headless=True,
-        locale="zh-HK",
-        timezone_id="Asia/Hong_Kong",
-        user_agent="native",
-        timeout_seconds=30,
-        log_fn=lambda message: None,
-    )
+    with pytest.raises(RuntimeError, match="display unavailable"):
+        _launch_cdp_browser_session(
+            "http://launcher.test",
+            proxy="socks5://xray:20004",
+            page_url="https://freebeat.ai/tw",
+            headless=False,
+            locale="zh-HK",
+            timezone_id="Asia/Hong_Kong",
+            user_agent="native",
+            timeout_seconds=30,
+            log_fn=lambda message: None,
+        )
 
-    assert result["session_id"] == "session-1"
-    assert len(calls) == 3
-    assert all(call["url"] == "http://launcher.test/launch" for call in calls)
+    assert len(calls) == 1
+    assert calls[0]["payload"]["headless"] is False
 
 
 def test_freebeat_browser_send_code_rejects_external_oauth_urls():

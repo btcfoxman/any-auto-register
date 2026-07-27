@@ -216,7 +216,7 @@ class FreebeatPlatform(BasePlatform):
                     False,
                 ),
                 browser_send_code_engine=str(
-                    _runtime_value(extra, "freebeat_send_code_browser_engine", "playwright") or "playwright"
+                    _runtime_value(extra, "freebeat_send_code_browser_engine", "auto") or "auto"
                 ),
                 browser_send_code_channel=str(_runtime_value(extra, "freebeat_send_code_browser_channel", "") or ""),
                 browser_send_code_cdp_url=str(

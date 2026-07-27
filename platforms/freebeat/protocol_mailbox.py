@@ -96,7 +96,7 @@ class FreebeatProtocolMailboxWorker:
         browser_send_code_headless: bool = True,
         browser_send_code_required: bool = False,
         browser_send_code_allow_protocol_fallback: bool = False,
-        browser_send_code_engine: str = "playwright",
+        browser_send_code_engine: str = "auto",
         browser_send_code_channel: str = "",
         browser_send_code_cdp_url: str = "",
         browser_send_code_cdp_launcher_url: str = "",
@@ -129,7 +129,7 @@ class FreebeatProtocolMailboxWorker:
         self.browser_send_code_headless = bool(browser_send_code_headless)
         self.browser_send_code_required = bool(browser_send_code_required)
         self.browser_send_code_allow_protocol_fallback = bool(browser_send_code_allow_protocol_fallback)
-        self.browser_send_code_engine = str(browser_send_code_engine or "playwright").strip() or "playwright"
+        self.browser_send_code_engine = str(browser_send_code_engine or "auto").strip() or "auto"
         self.browser_send_code_channel = str(browser_send_code_channel or "").strip()
         self.browser_send_code_cdp_url = str(browser_send_code_cdp_url or "").strip()
         self.browser_send_code_cdp_launcher_url = str(browser_send_code_cdp_launcher_url or "").strip()
