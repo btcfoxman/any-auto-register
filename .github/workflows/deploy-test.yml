@@ -164,6 +164,27 @@ jobs:
             "${GITHUB_WORKSPACE}/scripts/freebeat_cdp_launcher.py" \
             "${launcher_script}"
 
+          # Older deployments started the launcher outside systemd and without a
+          # pidfile. Stop those exact Python launcher processes before binding 9321.
+          systemctl --user stop freebeat-cdp-launcher.service 2>/dev/null || true
+          mapfile -t old_launcher_pids < <(
+            pgrep -f '[f]reebeat_cdp_launcher\.py' || true
+          )
+          for old_pid in "${old_launcher_pids[@]}"; do
+            kill "${old_pid}" 2>/dev/null || true
+          done
+          for _ in $(seq 1 20); do
+            pgrep -f '[f]reebeat_cdp_launcher\.py' > /dev/null || break
+            sleep 0.25
+          done
+          mapfile -t remaining_launcher_pids < <(
+            pgrep -f '[f]reebeat_cdp_launcher\.py' || true
+          )
+          for old_pid in "${remaining_launcher_pids[@]}"; do
+            kill -9 "${old_pid}" 2>/dev/null || true
+          done
+          rm -f "${pid_file}"
+
           cat > "${service_file}" <<EOF
           [Unit]
           Description=Freebeat headed Chrome CDP launcher
