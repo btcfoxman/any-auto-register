@@ -21,6 +21,7 @@ PLATFORM_TOKEN_KEY_PRIORITY: dict[str, list[str]] = {
     "freebeat": ["access_token", "accessToken", "legacy_token", "device_token", "deviceToken"],
     "quickframe": ["access_token", "accessToken", "quickframe_access_token", "legacy_token"],
     "imgs_weryai": ["access_token", "authorization", "accessToken", "legacy_token"],
+    "higg": ["clerk_jwt", "token", "legacy_token"],
 }
 
 

@@ -78,6 +78,10 @@ PERSISTED_ACTION_DATA_KEYS = {
     "quickframe_login_state",
     "quickframe_login_identifier_url",
     "quickframe_challenge_url",
+    "clerk_jwt",
+    "session_id",
+    "datadome",
+    "folder_id",
     *LINGYA_QQ_COOKIE_NAMES,
 }
 
@@ -89,6 +93,7 @@ STATEFUL_ACTION_IDS = {
     "relogin_sms",
     "keepalive_sync",
     "sync_lingya2api",
+    "sync_higg2api",
     "sync_freebeat2api",
     "sync_quickframe2api",
     "sync_imgs2api",
@@ -412,6 +417,34 @@ def _build_account_overview(platform: str, data: dict[str, Any]) -> dict[str, An
         elif data.get("quickframe_keepalive_disabled") is False:
             fixed_chips.append("自动保活已恢复")
         overview["chips"].extend(fixed_chips)
+
+    if platform == "higg":
+        for key in (
+            "generation_ready",
+            "workspace_id",
+            "folder_id",
+            "credits_balance",
+            "total_credits",
+            "free_generations",
+            "higg2api_synced",
+            "higg_keepalive_disabled",
+            "higg_keepalive_disabled_reason",
+            "higg2api_enable_auto_maintenance",
+            "check_warning",
+            "check_error",
+        ):
+            if key in data:
+                overview[key] = data.get(key)
+        if data.get("credits_balance") not in (None, ""):
+            overview["chips"].append(f"积分 {data.get('credits_balance')}")
+        if data.get("free_generations") not in (None, ""):
+            overview["chips"].append(f"免费次数 {data.get('free_generations')}")
+        if data.get("generation_ready") is False:
+            overview["chips"].append("风控状态待更新")
+        if data.get("higg_keepalive_disabled") is True:
+            overview["chips"].append("自动维护已停止")
+        elif data.get("higg_keepalive_disabled") is False:
+            overview["chips"].append("自动维护已恢复")
 
     if platform == "imgs_weryai":
         for key in (

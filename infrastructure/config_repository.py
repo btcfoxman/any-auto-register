@@ -13,6 +13,8 @@ class ConfigRepository:
         "team_manager_url", "team_manager_key",
         "any2api_url", "any2api_password",
         "lingya2api_url", "lingya2api_api_key", "lingya2api_max_concurrency",
+        "higg2api_url", "higg2api_api_key", "higg2api_max_concurrency",
+        "higg2api_enable_auto_maintenance",
         "lingya_qq_keepalive_enabled", "lingya_qq_heartbeat_interval_seconds", "lingya_qq_balance_interval_seconds",
         "lingya_qq_keepalive_concurrency",
         "lingya_qq_keepalive_retire_enabled", "lingya_qq_keepalive_retire_quota_threshold",

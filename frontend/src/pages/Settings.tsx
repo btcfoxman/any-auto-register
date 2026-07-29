@@ -312,6 +312,19 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
     }],
   },
   {
+    id: 'higg', label: 'Higgsfield', icon: Shield,
+    sections: [{
+      section: 'Higg2API',
+      desc: '同步 Clerk 会话、DataDome 状态、额度和免费次数到单一 Higgsfield 上游服务。',
+      items: [
+        { key: 'higg2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8790' },
+        { key: 'higg2api_api_key', label: '接口密钥', placeholder: 'sk-test-api-key', secret: true },
+        { key: 'higg2api_max_concurrency', label: '账号最大并发', placeholder: '1' },
+        { key: 'higg2api_enable_auto_maintenance', label: '启用远端会话维护', placeholder: 'true' },
+      ],
+    }],
+  },
+  {
     id: 'freebeat', label: 'Freebeat', icon: Shield,
     sections: [{
       section: '自动签到',
