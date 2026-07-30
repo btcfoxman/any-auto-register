@@ -8,17 +8,19 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
 
-import requests
+from curl_cffi import requests
 
 
-HIGG_APP_URL = "https://higgsfield.ai/academy/courses/cinema-studio-pro/set-up-your-project"
+HIGG_APP_URL = "https://higgsfield.ai/ai/video?model=seedance_2_0"
 HIGG_REFERER = "https://higgsfield.ai/"
 CLERK_BASE_URL = "https://clerk.higgsfield.ai/v1/client"
 FNF_BASE_URL = "https://fnf-api-gw.higgsfield.ai/fnf"
+FNF_ACADEMY_BASE_URL = "https://fnf-api-gw.higgsfield.ai/fnf-academy/api/v1"
 CLERK_API_VERSION = "2026-05-12"
 CLERK_JS_VERSION = "6.25.10"
 CLERK_TURNSTILE_SITE_KEY = "0x4AAAAAAAFV93qQdS0ycilX"
 HIGG_SURFACE = "academy:cinema-studio-pro"
+SEEDANCE_ACADEMY_LESSON_ID = "e3e3fe19-7fd5-515e-ac86-e03f05e19297"
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
@@ -118,10 +120,11 @@ def cookie_value(cookie_header: str, name: str) -> str:
 
 
 def session_cookie_value(session: requests.Session, name: str) -> str:
+    cookie_jar = getattr(session.cookies, "jar", session.cookies)
     return next(
         (
             str(cookie.value or "")
-            for cookie in session.cookies
+            for cookie in cookie_jar
             if cookie.name == name and cookie.value
         ),
         "",
@@ -192,8 +195,7 @@ class HiggClient:
         self.sec_ch_ua_platform = _text(sec_ch_ua_platform) or DEFAULT_SEC_CH_UA_PLATFORM
         self.timeout = max(int(timeout or 30), 5)
         self.log = log_fn or (lambda _message: None)
-        self.session = requests.Session()
-        self.session.trust_env = False
+        self.session = requests.Session(impersonate="chrome")
         if self.proxy:
             self.session.proxies.update({"http": self.proxy, "https": self.proxy})
         self.session.headers.update(
@@ -226,6 +228,23 @@ class HiggClient:
         )
 
     def _load_cookies(self, cookies: Any) -> None:
+        if isinstance(cookies, list):
+            for item in cookies:
+                if not isinstance(item, dict):
+                    continue
+                name = _text(item.get("name"))
+                value = _text(item.get("value"))
+                if not name or not value:
+                    continue
+                kwargs: dict[str, Any] = {}
+                domain = _text(item.get("domain"))
+                path = _text(item.get("path"))
+                if domain:
+                    kwargs["domain"] = domain
+                if path:
+                    kwargs["path"] = path
+                self.session.cookies.set(name, value, **kwargs)
+            return
         header = cookie_header_from_any(cookies)
         for pair in header.split(";"):
             name, separator, value = pair.strip().partition("=")
@@ -233,10 +252,48 @@ class HiggClient:
                 self.session.cookies.set(name, value)
 
     def cookie_header(self) -> str:
-        return "; ".join(
-            f"{cookie.name}={cookie.value}"
-            for cookie in self.session.cookies
-            if cookie.name and cookie.value
+        values: dict[str, str] = {}
+        cookie_jar = getattr(self.session.cookies, "jar", self.session.cookies)
+        for cookie in cookie_jar:
+            if cookie.name and cookie.value:
+                values[str(cookie.name)] = str(cookie.value)
+        return "; ".join(f"{name}={value}" for name, value in values.items())
+
+    def browser_cookies(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        cookie_jar = getattr(self.session.cookies, "jar", self.session.cookies)
+        for cookie in cookie_jar:
+            if not cookie.name or not cookie.value:
+                continue
+            record: dict[str, Any] = {
+                "name": str(cookie.name),
+                "value": str(cookie.value),
+                "domain": str(cookie.domain or ".higgsfield.ai"),
+                "path": str(cookie.path or "/"),
+                "secure": bool(cookie.secure),
+            }
+            expires = getattr(cookie, "expires", None)
+            if isinstance(expires, (int, float)) and expires > 0:
+                record["expires"] = float(expires)
+            result.append(record)
+        return result
+
+    def apply_browser_context(self, context: dict[str, Any]) -> None:
+        self._load_cookies(context.get("cookies") or context.get("cookie_header"))
+        self.token = _text(context.get("clerk_jwt") or context.get("token")) or self.token
+        claims = decode_jwt_claims(self.token)
+        self.session_id = _text(claims.get("sid")) or self.session_id
+        self.workspace_id = _text(claims.get("workspace_id")) or self.workspace_id
+        self.datadome = _text(context.get("datadome")) or session_cookie_value(self.session, "datadome")
+        self.user_agent = _text(context.get("user_agent")) or self.user_agent
+        self.sec_ch_ua = _text(context.get("sec_ch_ua")) or self.sec_ch_ua
+        self.sec_ch_ua_platform = _text(context.get("sec_ch_ua_platform")) or self.sec_ch_ua_platform
+        self.session.headers.update(
+            {
+                "User-Agent": self.user_agent,
+                "sec-ch-ua": self.sec_ch_ua,
+                "sec-ch-ua-platform": self.sec_ch_ua_platform,
+            }
         )
 
     def _clerk_url(self, path: str) -> str:
@@ -383,6 +440,51 @@ class HiggClient:
             raise HiggError(_json_error(payload, f"Higgsfield HTTP {response.status_code}"))
         return payload
 
+    def academy_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        retry_auth: bool = True,
+    ) -> Any:
+        if not self.token:
+            raise HiggError("Missing Clerk JWT")
+        response = self.session.request(
+            method,
+            f"{FNF_ACADEMY_BASE_URL}{path}",
+            json=json_body,
+            headers=self._fnf_headers(),
+            timeout=self.timeout,
+        )
+        if response.status_code == 401 and retry_auth:
+            self.refresh_token()
+            return self.academy_request(
+                method,
+                path,
+                json_body=json_body,
+                retry_auth=False,
+            )
+        content_type = _text(response.headers.get("content-type")).lower()
+        if response.status_code == 403 and "json" not in content_type:
+            raise HiggRiskBlocked(
+                "Higgsfield Academy context was blocked by DataDome or Cloudflare"
+            )
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise HiggError(
+                f"Higgsfield Academy returned non-JSON HTTP {response.status_code}"
+            ) from exc
+        if response.status_code >= 400:
+            raise HiggError(
+                _json_error(
+                    payload,
+                    f"Higgsfield Academy HTTP {response.status_code}",
+                )
+            )
+        return payload
+
     def ensure_workspace(self) -> str:
         claims = decode_jwt_claims(self.token)
         self.workspace_id = _text(claims.get("workspace_id")) or self.workspace_id
@@ -409,9 +511,92 @@ class HiggClient:
         )
         return value if isinstance(value, dict) else {}
 
+    def get_user_settings(self) -> dict[str, Any]:
+        value = self.fnf_request("GET", "/user/settings")
+        return value if isinstance(value, dict) else {}
+
+    def ensure_upload_agreements(self, *, require_audio: bool = False) -> dict[str, Any]:
+        settings = self.get_user_settings()
+        if settings.get("character_sheets_consent") is not True:
+            value = self.fnf_request(
+                "POST",
+                "/user/settings/character-sheets-consent",
+                json_body={"character_sheets_consent": True},
+            )
+            if isinstance(value, dict):
+                settings = value
+        if require_audio and settings.get("audio_consent") is not True:
+            value = self.fnf_request(
+                "POST",
+                "/user/settings/audio-consent",
+                json_body={"audio_consent": True},
+            )
+            if isinstance(value, dict):
+                settings = value
+        if settings.get("character_sheets_consent") is not True:
+            raise HiggError("Higgsfield media upload agreement was not confirmed")
+        if require_audio and settings.get("audio_consent") is not True:
+            raise HiggError("Higgsfield audio upload agreement was not confirmed")
+        return settings
+
+    def ensure_seedance_onboarding(self) -> dict[str, Any]:
+        quiz_state = self.fnf_request("GET", "/v2/quizzes/user")
+        quiz = (
+            quiz_state.get("quiz")
+            if isinstance(quiz_state, dict)
+            and isinstance(quiz_state.get("quiz"), dict)
+            else {}
+        )
+        if not quiz.get("completed_at"):
+            quiz_id = _text(quiz.get("id"))
+            if not quiz_id:
+                created = self.fnf_request("POST", "/v2/quizzes")
+                quiz_id = _text(created.get("id")) if isinstance(created, dict) else ""
+            if not quiz_id:
+                raise HiggError("Higgsfield onboarding quiz returned no ID")
+            self.fnf_request(
+                "PUT",
+                f"/v2/quizzes/{quiz_id}",
+                json_body={
+                    "flow_type": "personal",
+                    "quiz_version": "quiz_v2_1",
+                    "usage_plan": "viral-content",
+                    "experience": "advanced",
+                    "flagship_features": ["shorts-studio", "cinema-studio"],
+                    "creation_goals": ["video-gen"],
+                    "features": ["shorts-studio", "cinema-studio", "video-gen"],
+                    "source": "google",
+                    "source_detail": None,
+                    "source_other_text": None,
+                    "frustration": "confusing",
+                },
+            )
+            quiz_state = self.fnf_request(
+                "POST",
+                f"/v2/quizzes/{quiz_id}/complete",
+            )
+        self.academy_request(
+            "GET",
+            "/courses/cinema-studio-pro?lang=en",
+        )
+        project = self.academy_request(
+            "POST",
+            "/surfaces/cinema-studio/onboarding-project?lang=en",
+            json_body={"workspace_id": None},
+        )
+        self.academy_request(
+            "GET",
+            f"/lessons/{SEEDANCE_ACADEMY_LESSON_ID}?lang=en",
+        )
+        return {
+            "quiz": quiz_state,
+            "project": project,
+        }
+
     def fetch_account_state(self) -> dict[str, Any]:
         self.refresh_token()
         self.ensure_workspace()
+        user_settings = self.get_user_settings()
         wallet = self.get_wallet()
         free_gens = self.get_free_generations()
         surface_items = free_gens.get("surface_items") if isinstance(free_gens.get("surface_items"), dict) else {}
@@ -427,9 +612,13 @@ class HiggClient:
         claims = decode_jwt_claims(self.token)
         balance = wallet.get("credits_balance")
         free_count = seedance.get("counter")
+        upload_agreement_confirmed = (
+            user_settings.get("character_sheets_consent") is True
+        )
         return {
             "valid": bool(self.token and self.session_id),
-            "generation_ready": True,
+            "generation_ready": upload_agreement_confirmed,
+            "upload_agreement_confirmed": upload_agreement_confirmed,
             "email": _text(claims.get("email")),
             "user_id": _text(claims.get("sub")),
             "session_id": self.session_id,
@@ -445,6 +634,7 @@ class HiggClient:
             "credits_balance": balance,
             "total_credits": wallet.get("total_credits"),
             "free_generations": free_count,
+            "user_settings": user_settings,
             "wallet": wallet,
             "free_gens": free_gens,
             "checked_at": int(time.time()),

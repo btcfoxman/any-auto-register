@@ -1239,8 +1239,13 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             f"HeroSMS 模式: 成功目标 {target_success}，失败自动补尝试，"
             f"号码仍可复用时最多额外成功 {hero_extra_max} 个"
         )
-    if use_proxy_pool and not proxy and concurrency > 1:
-        logger.log(f"代理池均衡: {concurrency} 并发优先分配不同代理，代理失败时再切换出口重试")
+    if use_proxy_pool and proxy:
+        logger.log("已填写固定代理，固定代理优先于代理池")
+    elif use_proxy_pool:
+        logger.log(
+            "代理池模式已启用"
+            + (f"，{concurrency} 并发优先分配不同代理" if concurrency > 1 else "")
+        )
 
     try:
         get(platform_name)
@@ -1287,7 +1292,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
             account = platform.register(email=email, password=password)
             if resolved_proxy:
                 account_extra = dict(account.extra or {})
-                account_extra["proxy_url"] = resolved_proxy
+                account_extra.setdefault("proxy_url", resolved_proxy)
                 account.extra = account_extra
             existing_account_id = _existing_account_id(account.platform, account.email)
             save_account(account)
@@ -1402,7 +1407,12 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                     if resolved_proxy:
                         attempted_proxies.add(resolved_proxy)
                     else:
-                        if attempted_proxies and not proxy_direct_fallback:
+                        if not attempted_proxies:
+                            last_error = (
+                                "已启用代理池，但没有获取到可用代理；"
+                                "请先在代理池添加并启用代理，或检查动态代理 provider"
+                            )
+                        if not proxy_direct_fallback:
                             break
                         resolved_proxy = None
             else:
@@ -1419,7 +1429,7 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 account = platform.register(email=email, password=password)
                 if resolved_proxy:
                     account_extra = dict(account.extra or {})
-                    account_extra["proxy_url"] = resolved_proxy
+                    account_extra.setdefault("proxy_url", resolved_proxy)
                     account.extra = account_extra
                 existing_account_id = _existing_account_id(account.platform, account.email)
                 save_account(account)

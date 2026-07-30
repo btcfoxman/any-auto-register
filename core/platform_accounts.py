@@ -80,6 +80,9 @@ def build_platform_extra(model: AccountModel, graph: dict[str, Any] | None = Non
     extra: dict[str, Any] = {}
     overview = graph.get("overview")
     if isinstance(overview, dict) and overview:
+        legacy_extra = overview.get("legacy_extra")
+        if isinstance(legacy_extra, dict):
+            extra.update(legacy_extra)
         extra["account_overview"] = overview
         for key in ("cashier_url", "region", "trial_end_time"):
             if overview.get(key) not in (None, ""):

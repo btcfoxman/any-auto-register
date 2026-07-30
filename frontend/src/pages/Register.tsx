@@ -16,6 +16,7 @@ const DEFAULT_FORM: Record<string, any> = {
   email: '',
   password: '',
   count: 1,
+  concurrency: 1,
   proxy: '',
   use_proxy_pool: false,
   executor_type: '',
@@ -285,6 +286,7 @@ export default function Register() {
         email: form.email || null,
         password: form.password || null,
         count: form.count,
+        concurrency: form.concurrency,
         proxy: form.proxy || null,
         use_proxy_pool: Boolean(form.use_proxy_pool),
         executor_type: form.executor_type,
@@ -404,8 +406,9 @@ export default function Register() {
             <CardHeader><CardTitle>基本配置</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <Select label="平台" k="platform" options={platformOptions} />
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <Input label="批量数量" k="count" type="number" />
+                <Input label="并发数" k="concurrency" type="number" />
                 <Input label="代理 (可选)" k="proxy" placeholder="http://user:pass@host:port" />
               </div>
               <Checkbox

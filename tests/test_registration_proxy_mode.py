@@ -116,6 +116,73 @@ def test_register_task_can_use_proxy_pool_and_persists_resolved_proxy(monkeypatc
     assert ("success", "http://user:pass@1.2.3.4:8080") in events
 
 
+def test_register_task_preserves_platform_actual_proxy(monkeypatch):
+    saved: list[Account] = []
+    resolved: list[str | None] = []
+    _patch_register_task_common(monkeypatch, saved, resolved)
+    monkeypatch.setattr(
+        "core.proxy_pool.proxy_pool.get_next",
+        lambda region="": "socks5://127.0.0.1:20001",
+    )
+
+    class FakePlatform:
+        def register(self, email=None, password=None):
+            return Account(
+                platform="higg",
+                email="higg@example.com",
+                password="",
+                status=AccountStatus.REGISTERED,
+                extra={"proxy_url": "socks5://127.0.0.1:20013"},
+            )
+
+    monkeypatch.setattr(
+        tasks,
+        "_build_platform_instance",
+        lambda *args, **kwargs: FakePlatform(),
+    )
+
+    logger = _Logger()
+    tasks._execute_register_task(
+        {
+            "platform": "higg",
+            "count": 1,
+            "concurrency": 1,
+            "executor_type": "protocol",
+            "use_proxy_pool": True,
+            "extra": {"identity_provider": "manual_phone"},
+        },
+        logger,
+    )
+
+    assert logger.finished == tasks.TASK_STATUS_SUCCEEDED
+    assert saved[0].extra["proxy_url"] == "socks5://127.0.0.1:20013"
+
+
+def test_register_task_fails_when_selected_proxy_pool_is_empty(monkeypatch):
+    saved: list[Account] = []
+    resolved: list[str | None] = []
+    _patch_register_task_common(monkeypatch, saved, resolved)
+    monkeypatch.setattr("core.proxy_pool.proxy_pool.get_next", lambda region="": None)
+
+    logger = _Logger()
+    tasks._execute_register_task(
+        {
+            "platform": "higg",
+            "count": 1,
+            "concurrency": 1,
+            "executor_type": "protocol",
+            "use_proxy_pool": True,
+            "extra": {"identity_provider": "manual_phone"},
+        },
+        logger,
+    )
+
+    assert logger.finished == tasks.TASK_STATUS_FAILED
+    assert resolved == []
+    assert saved == []
+    assert any("没有获取到可用代理" in message for message in logger.messages)
+
+
 def test_register_task_normalizes_socks_proxy_alias(monkeypatch):
     saved: list[Account] = []
     resolved: list[str | None] = []

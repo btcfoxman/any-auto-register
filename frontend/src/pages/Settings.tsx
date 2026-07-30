@@ -314,12 +314,30 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
   {
     id: 'higg', label: 'Higgsfield', icon: Shield,
     sections: [{
+      section: '浏览器风控上下文',
+      desc: '优先启动正式版 Chrome 独立 profile，并使用原生 CDP 完成注册；普通 Chrome 失败时可回退 BitBrowser。',
+      items: [
+        { key: 'higg_browser_enabled', label: '启用浏览器风控会话', placeholder: 'true' },
+        { key: 'higg_browser_required', label: '注册必须完成浏览器验证', placeholder: 'true' },
+        { key: 'higg_browser_mode', label: '首选浏览器模式', placeholder: 'native_chrome' },
+        { key: 'higg_browser_fallback_mode', label: '失败回退模式', placeholder: 'bitbrowser' },
+        { key: 'higg_chrome_executable', label: 'Chrome 程序路径（自动检测）', placeholder: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' },
+        { key: 'higg_chrome_user_data_root', label: 'Chrome Profile 根目录', placeholder: 'data\\higg-chrome-profiles' },
+        { key: 'higg_chrome_proxy_ports', label: 'Chrome 代理端口列表', placeholder: '20001,20002,...,20020' },
+        { key: 'higg_chrome_cdp_base_port', label: 'Chrome CDP 基础端口', placeholder: '19200' },
+        { key: 'higg_bitbrowser_api_url', label: 'BitBrowser API 地址', placeholder: 'http://127.0.0.1:54345' },
+        { key: 'higg_bitbrowser_profile_ids', label: 'Profile ID 列表（逗号分隔）', placeholder: 'profile-id-1,profile-id-2' },
+        { key: 'higg_bitbrowser_close_after_use', label: '任务结束关闭 Profile', placeholder: 'true' },
+        { key: 'higg_bitbrowser_clear_site_data', label: '注册前清理 Higg 站点数据', placeholder: 'true' },
+        { key: 'higg_browser_timeout_seconds', label: '浏览器超时秒数', placeholder: '120' },
+      ],
+    }, {
       section: 'Higg2API',
       desc: '同步 Clerk 会话、DataDome 状态、额度和免费次数到单一 Higgsfield 上游服务。',
       items: [
-        { key: 'higg2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8790' },
+        { key: 'higg2api_url', label: '接口地址', placeholder: 'http://127.0.0.1:8791' },
         { key: 'higg2api_api_key', label: '接口密钥', placeholder: 'sk-test-api-key', secret: true },
-        { key: 'higg2api_max_concurrency', label: '账号最大并发', placeholder: '1' },
+        { key: 'higg2api_max_concurrency', label: '账号最大并发（固定）', fixedValue: '1', disabled: true },
         { key: 'higg2api_enable_auto_maintenance', label: '启用远端会话维护', placeholder: 'true' },
       ],
     }],
@@ -444,7 +462,8 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
 ]
 
 function Field({ field, form, setForm, showSecret, setShowSecret, selectOptions }: any) {
-  const { key, label, placeholder, secret } = field
+  const { key, label, placeholder, secret, disabled, fixedValue } = field
+  const value = fixedValue ?? form[key] ?? ''
   const options = (field.options && field.options.length > 0)
     ? field.options
     : ((selectOptions && selectOptions.length > 0) ? selectOptions : null)
@@ -454,9 +473,10 @@ function Field({ field, form, setForm, showSecret, setShowSecret, selectOptions 
       <div className="col-span-2 relative">
         {options ? (
           <select
-            value={form[key] || options[0].value}
+            value={value || options[0].value}
             onChange={e => setForm((f: any) => ({ ...f, [key]: e.target.value }))}
-            className="control-surface appearance-none"
+            disabled={disabled}
+            className="control-surface appearance-none disabled:cursor-not-allowed disabled:opacity-70"
           >
             {options.map((o: any) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
@@ -464,10 +484,11 @@ function Field({ field, form, setForm, showSecret, setShowSecret, selectOptions 
           <>
             <input
               type={secret && !showSecret[key] ? 'password' : 'text'}
-              value={form[key] || ''}
+              value={value}
               onChange={e => setForm((f: any) => ({ ...f, [key]: e.target.value }))}
               placeholder={placeholder}
-              className="control-surface pr-10"
+              disabled={disabled}
+              className="control-surface pr-10 disabled:cursor-not-allowed disabled:opacity-70"
             />
             {secret && (
               <button

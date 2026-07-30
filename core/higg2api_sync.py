@@ -32,7 +32,7 @@ def _as_int(value: Any, default: int) -> int:
 
 
 def _clamp_concurrency(value: Any, default: int = 1) -> int:
-    return min(max(_as_int(value, default), 1), 10)
+    return 1
 
 
 class Higg2ApiClient:
@@ -205,4 +205,3 @@ def sync_account_to_higg2api(
     except Exception as exc:
         log(f"  [Higg2API] sync failed: {exc}")
         return False
-

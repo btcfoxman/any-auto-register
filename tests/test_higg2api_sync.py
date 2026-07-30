@@ -50,7 +50,7 @@ def test_build_higg2api_payload_preserves_generation_context():
     assert payload["proxy_url"] == "http://proxy.example:8080"
     assert payload["last_balance"] == 86
     assert payload["free_generations"] == 2
-    assert payload["max_concurrency"] == 3
+    assert payload["max_concurrency"] == 1
     assert payload["enable_auto_maintenance"] is True
 
 

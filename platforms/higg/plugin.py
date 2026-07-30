@@ -18,6 +18,78 @@ def _truthy(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _runtime_value(extra: dict[str, Any], key: str, default: Any = "") -> Any:
+    if extra.get(key) not in (None, ""):
+        return extra.get(key)
+    try:
+        from core.config_store import config_store
+
+        return config_store.get(key, default)
+    except Exception:
+        return default
+
+
+def _runtime_float(extra: dict[str, Any], key: str, default: float) -> float:
+    try:
+        return float(_runtime_value(extra, key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _browser_options(extra: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "browser_mode": str(
+            _runtime_value(extra, "higg_browser_mode", "native_chrome")
+            or "native_chrome"
+        ).strip(),
+        "browser_fallback_mode": str(
+            _runtime_value(extra, "higg_browser_fallback_mode", "bitbrowser")
+            or ""
+        ).strip(),
+        "chrome_executable": str(
+            _runtime_value(extra, "higg_chrome_executable", "") or ""
+        ).strip(),
+        "chrome_user_data_root": str(
+            _runtime_value(extra, "higg_chrome_user_data_root", "") or ""
+        ).strip(),
+        "chrome_proxy_ports": _runtime_value(
+            extra,
+            "higg_chrome_proxy_ports",
+            ",".join(str(port) for port in range(20001, 20021)),
+        ),
+        "chrome_cdp_base_port": int(
+            _runtime_float(extra, "higg_chrome_cdp_base_port", 19200)
+        ),
+        "bitbrowser_api_url": str(
+            _runtime_value(
+                extra,
+                "higg_bitbrowser_api_url",
+                "http://127.0.0.1:54345",
+            )
+            or "http://127.0.0.1:54345"
+        ).strip(),
+        "bitbrowser_profile_ids": _runtime_value(
+            extra,
+            "higg_bitbrowser_profile_ids",
+            (
+                "7a046e29b9964f41b0d023956c8d62e5,"
+                "4c417fd9e5fa4cf085fac3e4eb02f7dd,"
+                "9e567805001c493fb7bae305332d1c2a,"
+                "c100ade220ea4ef5b8f37cdfb035539e"
+            ),
+        ),
+        "close_after_use": _truthy(
+            _runtime_value(extra, "higg_bitbrowser_close_after_use", True),
+            True,
+        ),
+        "clear_site_data": _truthy(
+            _runtime_value(extra, "higg_bitbrowser_clear_site_data", True),
+            True,
+        ),
+        "timeout_seconds": _runtime_float(extra, "higg_browser_timeout_seconds", 120),
+    }
+
+
 def _account_with_extra(account: Account, extra: dict[str, Any]) -> Account:
     return Account(
         platform=account.platform,
@@ -78,6 +150,15 @@ class HiggPlatform(BasePlatform):
                 user_agent=str(extra.get("user_agent") or ""),
                 sec_ch_ua=str(extra.get("sec_ch_ua") or ""),
                 sec_ch_ua_platform=str(extra.get("sec_ch_ua_platform") or ""),
+                browser_enabled=_truthy(
+                    _runtime_value(extra, "higg_browser_enabled", True),
+                    True,
+                ),
+                browser_required=_truthy(
+                    _runtime_value(extra, "higg_browser_required", True),
+                    True,
+                ),
+                browser_options=_browser_options(extra),
             )
 
         return ProtocolMailboxAdapter(
@@ -103,8 +184,47 @@ class HiggPlatform(BasePlatform):
 
     def _load_state(self, account: Account) -> dict[str, Any]:
         client = self._client(account)
-        state = client.fetch_account_state()
-        state["proxy_url"] = extract_higg_account_context(account).get("proxy_url", "")
+        try:
+            state = client.fetch_account_state()
+        except HiggRiskBlocked:
+            extra = dict(account.extra or {})
+            if not _truthy(_runtime_value(extra, "higg_browser_enabled", True), True):
+                raise
+            from platforms.higg.browser_context import HiggBrowserSession
+
+            self.log("Higgsfield: DataDome blocked protocol refresh, rebuilding browser risk context")
+            browser = HiggBrowserSession(
+                proxy=client.proxy or None,
+                log_fn=self.log,
+                **_browser_options(extra),
+            )
+            try:
+                browser.start()
+                context = browser.bootstrap_authenticated(
+                    cookies=client.browser_cookies(),
+                    token=client.token,
+                )
+                client.apply_browser_context(context)
+                state = client.fetch_account_state()
+                state.update(
+                    {
+                        key: context.get(key)
+                        for key in (
+                            "browser_profile_id",
+                            "browser_webdriver",
+                            "proxy_url",
+                            "risk_probe",
+                        )
+                        if context.get(key) is not None
+                    }
+                )
+                state["risk_context_refreshed"] = True
+            finally:
+                browser.close()
+        state.setdefault(
+            "proxy_url",
+            extract_higg_account_context(account).get("proxy_url", ""),
+        )
         return state
 
     def check_valid(self, account: Account) -> bool:
@@ -233,4 +353,3 @@ class HiggPlatform(BasePlatform):
         if action_id == "resume_keepalive":
             return self._maintenance_preference(account, disabled=False)
         return super().execute_action(action_id, account, params)
-

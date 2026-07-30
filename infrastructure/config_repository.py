@@ -15,6 +15,13 @@ class ConfigRepository:
         "lingya2api_url", "lingya2api_api_key", "lingya2api_max_concurrency",
         "higg2api_url", "higg2api_api_key", "higg2api_max_concurrency",
         "higg2api_enable_auto_maintenance",
+        "higg_browser_enabled", "higg_browser_required",
+        "higg_browser_mode", "higg_browser_fallback_mode",
+        "higg_chrome_executable", "higg_chrome_user_data_root",
+        "higg_chrome_proxy_ports", "higg_chrome_cdp_base_port",
+        "higg_bitbrowser_api_url", "higg_bitbrowser_profile_ids",
+        "higg_bitbrowser_close_after_use", "higg_bitbrowser_clear_site_data",
+        "higg_browser_timeout_seconds",
         "lingya_qq_keepalive_enabled", "lingya_qq_heartbeat_interval_seconds", "lingya_qq_balance_interval_seconds",
         "lingya_qq_keepalive_concurrency",
         "lingya_qq_keepalive_retire_enabled", "lingya_qq_keepalive_retire_quota_threshold",
@@ -66,14 +73,19 @@ class ConfigRepository:
     def get_flat(self) -> dict[str, str]:
         data = config_store.get_all()
         allowed = self.get_allowed_keys()
-        return {
+        result = {
             key: str(value or "")
             for key, value in data.items()
             if key in allowed
         }
+        if "higg2api_max_concurrency" in result:
+            result["higg2api_max_concurrency"] = "1"
+        return result
 
     def update_flat(self, data: dict[str, str]) -> list[str]:
         allowed = self.get_allowed_keys()
         safe = {key: value for key, value in data.items() if key in allowed}
+        if "higg2api_max_concurrency" in safe:
+            safe["higg2api_max_concurrency"] = "1"
         config_store.set_many(safe)
         return list(safe.keys())
