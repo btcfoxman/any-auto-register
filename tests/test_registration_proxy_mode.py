@@ -327,6 +327,90 @@ def test_register_task_balances_proxy_pool_across_parallel_workers(monkeypatch):
     assert set(resolved) == set(proxies)
 
 
+def test_higg_register_switches_proxy_after_captcha_risk(monkeypatch):
+    saved: list[Account] = []
+    resolved: list[str | None] = []
+    events: list[tuple[str, str]] = []
+    _patch_register_task_common(monkeypatch, saved, resolved)
+
+    proxies = iter(
+        [
+            "socks5://xray:20101",
+            "socks5://xray:20102",
+        ]
+    )
+    monkeypatch.setattr(
+        "core.proxy_pool.proxy_pool.get_next",
+        lambda region="": next(proxies),
+    )
+    monkeypatch.setattr(
+        "core.proxy_pool.proxy_pool.report_success",
+        lambda url: events.append(("success", url)),
+    )
+    monkeypatch.setattr(
+        "core.proxy_pool.proxy_pool.report_fail",
+        lambda url: events.append(("fail", url)),
+    )
+
+    class FakePlatform:
+        def __init__(self, resolved_proxy: str | None):
+            self.resolved_proxy = resolved_proxy
+
+        def register(self, email=None, password=None):
+            if self.resolved_proxy == "socks5://xray:20101":
+                raise RuntimeError(
+                    "Higgsfield browser Clerk signup HTTP 400: "
+                    "{'errors':[{'code':'captcha_invalid'}]}"
+                )
+            return Account(
+                platform="higg",
+                email="higg-risk@example.com",
+                password="",
+                user_id="user-higg",
+                token="session",
+                status=AccountStatus.REGISTERED,
+                extra={"cookies": "__client=client; datadome=dd"},
+            )
+
+    def fake_build_platform_instance(
+        platform_name,
+        payload,
+        logger,
+        resolved_proxy=None,
+        shared_mailbox=None,
+    ):
+        resolved.append(resolved_proxy)
+        return FakePlatform(resolved_proxy)
+
+    monkeypatch.setattr(tasks, "_build_platform_instance", fake_build_platform_instance)
+
+    logger = _Logger()
+    tasks._execute_register_task(
+        {
+            "platform": "higg",
+            "count": 1,
+            "concurrency": 1,
+            "executor_type": "protocol",
+            "use_proxy_pool": True,
+            "proxy_retry_attempts": 2,
+            "extra": {
+                "identity_provider": "manual_phone",
+                "higg_proxy_reuse_cooldown_seconds": 120,
+            },
+        },
+        logger,
+    )
+
+    assert logger.finished == tasks.TASK_STATUS_SUCCEEDED
+    assert resolved == [
+        "socks5://xray:20101",
+        "socks5://xray:20102",
+    ]
+    assert ("fail", "socks5://xray:20101") in events
+    assert ("success", "socks5://xray:20102") in events
+    assert any("Higgsfield 风控拒绝" in message for message in logger.messages)
+
+
 def test_freebeat_register_falls_back_direct_after_proxy_network_failure(monkeypatch):
     saved: list[Account] = []
     resolved: list[str | None] = []

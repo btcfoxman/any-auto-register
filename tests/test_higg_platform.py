@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from core.base_platform import Account, RegisterConfig
 from core.db import AccountModel
 from core.platform_accounts import build_platform_extra
@@ -325,6 +327,47 @@ def test_higg_protocol_registration_completes_clerk_chain(monkeypatch):
     assert "initialize_seedance" in calls
     assert "confirm_upload_agreement" in calls
     assert calls[-1] == "browser_close"
+
+
+def test_higg_browser_risk_skips_same_proxy_fallback():
+    modes: list[str] = []
+
+    class RiskBrowser:
+        proxy_url = "socks5://xray:20011"
+
+        def __init__(self, **kwargs):
+            modes.append(kwargs["browser_mode"])
+
+        def start(self):
+            return self
+
+        def create_signup(self, **kwargs):
+            raise RuntimeError(
+                "Higgsfield Turnstile retry budget exhausted for current proxy"
+            )
+
+        def close(self):
+            return None
+
+    worker = HiggProtocolMailboxWorker(
+        proxy="socks5://xray:20011",
+        browser_enabled=True,
+        browser_required=True,
+        browser_options={
+            "browser_mode": "native_chrome",
+            "browser_fallback_mode": "bitbrowser",
+        },
+        browser_session_factory=RiskBrowser,
+    )
+
+    with pytest.raises(RuntimeError, match="all configured browser modes failed"):
+        worker.run(
+            email="risk@example.com",
+            password="password",
+            otp_callback=lambda: "123456",
+        )
+
+    assert modes == ["native_chrome"]
 
 
 def test_higg_client_applies_browser_fingerprint_and_datadome():

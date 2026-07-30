@@ -11,6 +11,21 @@ from platforms.higg.core import (
 )
 
 
+def _is_browser_risk_error(error: Any) -> bool:
+    text = str(error or "").strip().lower()
+    return any(
+        marker in text
+        for marker in (
+            "captcha_invalid",
+            "error loading captcha",
+            "turnstile",
+            "cloudflare",
+            "datadome",
+            "risk context",
+        )
+    )
+
+
 class HiggProtocolMailboxWorker:
     def __init__(
         self,
@@ -117,6 +132,12 @@ class HiggProtocolMailboxWorker:
                         )
                         browser.close()
                         browser = None
+                        if _is_browser_risk_error(exc):
+                            self.log(
+                                "Higgsfield: current proxy exhausted its browser challenge budget; "
+                                "skip same-proxy browser fallback"
+                            )
+                            break
                 if not signup:
                     browser_error = "; ".join(errors)
                     if self.browser_required:

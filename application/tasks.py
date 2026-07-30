@@ -1108,6 +1108,24 @@ def _looks_like_proxy_network_error(error: Any) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _looks_like_higg_risk_error(error: Any) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "captcha_invalid",
+            "error loading captcha",
+            "captcha failed to load",
+            "turnstile",
+            "cloudflare",
+            "datadome",
+            "risk context",
+        )
+    )
+
+
 def _preflight_platform_proxy(platform_name: str, proxy: str | None, logger: "TaskLogger") -> None:
     if not proxy or platform_name != "freebeat":
         return
@@ -1224,15 +1242,21 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     max_success = count + hero_extra_max if herosms_enabled and hero_reuse_to_max else count
     progress_total = max_success if herosms_enabled else count
     proxy_retry_attempts = max(_int_config(payload.get("proxy_retry_attempts") or extra.get("proxy_retry_attempts"), 4), 1)
+    proxy_reuse_cooldown_seconds = max(
+        _int_config(
+            payload.get("proxy_reuse_cooldown_seconds")
+            or extra.get("proxy_reuse_cooldown_seconds")
+            or extra.get("higg_proxy_reuse_cooldown_seconds"),
+            120 if platform_name == "higg" else 0,
+        ),
+        0,
+    )
     proxy_direct_fallback_value = payload.get("proxy_direct_fallback")
     if proxy_direct_fallback_value in (None, ""):
         proxy_direct_fallback_value = extra.get("proxy_direct_fallback")
     if proxy_direct_fallback_value in (None, ""):
         proxy_direct_fallback_value = extra.get("freebeat_proxy_direct_fallback")
     proxy_direct_fallback = _bool_config(proxy_direct_fallback_value, platform_name == "freebeat")
-    proxy_leases: dict[str, int] = {}
-    proxy_lease_lock = threading.Lock()
-
     logger.set_progress(0, progress_total)
     if herosms_enabled:
         logger.log(
@@ -1345,35 +1369,20 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     def _reserve_pooled_proxy(exclude: set[str]) -> str | None:
         if not use_proxy_pool:
             return None
-        seen = set(exclude)
-        fallback: str | None = None
         max_draws = max(proxy_retry_attempts * max(concurrency, 1) * 2, 8)
-        for _ in range(max_draws):
-            candidate = _normalize_proxy_url(proxy_pool.get_next())
-            if not candidate or candidate in seen:
-                continue
-            seen.add(candidate)
-            if fallback is None:
-                fallback = candidate
-            with proxy_lease_lock:
-                if proxy_leases.get(candidate, 0) <= 0:
-                    proxy_leases[candidate] = 1
-                    return candidate
-        if fallback:
-            with proxy_lease_lock:
-                proxy_leases[fallback] = proxy_leases.get(fallback, 0) + 1
-            return fallback
-        return None
+        return _normalize_proxy_url(
+            proxy_pool.acquire(
+                exclude=exclude,
+                cooldown_seconds=proxy_reuse_cooldown_seconds,
+                max_draws=max_draws,
+                wait_timeout=5 if platform_name == "higg" else 0,
+            )
+        ) or None
 
     def _release_pooled_proxy(resolved_proxy: str | None) -> None:
         if not resolved_proxy or proxy or not use_proxy_pool:
             return
-        with proxy_lease_lock:
-            remaining = proxy_leases.get(resolved_proxy, 0) - 1
-            if remaining > 0:
-                proxy_leases[resolved_proxy] = remaining
-            else:
-                proxy_leases.pop(resolved_proxy, None)
+        proxy_pool.release(resolved_proxy)
 
     def _candidate_attempts() -> list[str | None]:
         if proxy:
@@ -1478,8 +1487,13 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                 can_retry_proxy = bool(resolved_proxy and use_proxy_pool and attempt < proxy_retry_attempts)
                 can_retry_direct = bool(resolved_proxy and proxy_direct_fallback)
                 can_retry_fixed = bool(attempts)
-                if (can_retry_proxy or can_retry_direct or can_retry_fixed) and _looks_like_proxy_network_error(error):
-                    logger.log(f"代理连接失败，切换出口重试: {error}", level="warning")
+                network_error = _looks_like_proxy_network_error(error)
+                higg_risk_error = platform_name == "higg" and _looks_like_higg_risk_error(error)
+                if (can_retry_proxy or can_retry_direct or can_retry_fixed) and (
+                    network_error or higg_risk_error
+                ):
+                    reason = "Higgsfield 风控拒绝" if higg_risk_error else "代理连接失败"
+                    logger.log(f"{reason}，释放当前代理并切换新出口重试: {error}", level="warning")
                     continue
                 logger.record_error(error)
                 logger.log(f"✗ 注册失败: {error}", level="error")

@@ -199,6 +199,8 @@ class _NativeCdpPage:
         self.next_id = 0
         self.clerk_responses: list[dict[str, Any]] = []
         self.fnf_statuses: list[dict[str, Any]] = []
+        self.turnstile_session_urls: set[str] = set()
+        self.turnstile_proof_responses = 0
         for method in ("Page.enable", "Runtime.enable", "Network.enable", "DOM.enable"):
             self.command(method)
 
@@ -275,6 +277,12 @@ class _NativeCdpPage:
         }
         if CLERK_SIGNUP_MARKER in url:
             self.clerk_responses.append(record)
+        parsed = urlparse(url)
+        if parsed.netloc.endswith("challenges.cloudflare.com"):
+            if "/turnstile/f/" in parsed.path:
+                self.turnstile_session_urls.add(url)
+            if "/challenge-platform/" in parsed.path and "/fo/" in parsed.path:
+                self.turnstile_proof_responses += 1
         if FNF_MARKER in url:
             path = urlparse(url).path
             query = urlparse(url).query
@@ -455,6 +463,8 @@ class HiggBitBrowserSession:
         close_after_use: bool = True,
         clear_site_data: bool = True,
         timeout_seconds: float = 120,
+        turnstile_max_sessions: int = 2,
+        turnstile_max_proof_responses: int = 8,
         **_ignored: Any,
     ):
         self.preferred_proxy = str(proxy or "").strip()
@@ -467,6 +477,11 @@ class HiggBitBrowserSession:
         self.close_after_use = bool(close_after_use)
         self.clear_site_data = bool(clear_site_data)
         self.timeout_seconds = max(float(timeout_seconds or 120), 30)
+        self.turnstile_max_sessions = max(int(turnstile_max_sessions or 2), 1)
+        self.turnstile_max_proof_responses = max(
+            int(turnstile_max_proof_responses or 8),
+            3,
+        )
         self.profile_id = ""
         self._page: _NativeCdpPage | None = None
         self._leased = False
@@ -610,6 +625,15 @@ class HiggBitBrowserSession:
                     )
                 self.log("Higgsfield: native Clerk UI submitted signup")
                 return payload
+            if (
+                len(self._page.turnstile_session_urls) >= self.turnstile_max_sessions
+                or self._page.turnstile_proof_responses >= self.turnstile_max_proof_responses
+            ):
+                raise RuntimeError(
+                    "Higgsfield Turnstile retry budget exhausted for current proxy "
+                    f"(sessions={len(self._page.turnstile_session_urls)}, "
+                    f"proofs={self._page.turnstile_proof_responses})"
+                )
             if not clicked:
                 clicked = self._page.click_turnstile_if_visible()
                 if clicked:
@@ -803,6 +827,8 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
         close_after_use: bool = True,
         clear_site_data: bool = True,
         timeout_seconds: float = 120,
+        turnstile_max_sessions: int = 2,
+        turnstile_max_proof_responses: int = 8,
         **_ignored: Any,
     ):
         super().__init__(
@@ -811,6 +837,8 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
             close_after_use=close_after_use,
             clear_site_data=clear_site_data,
             timeout_seconds=timeout_seconds,
+            turnstile_max_sessions=turnstile_max_sessions,
+            turnstile_max_proof_responses=turnstile_max_proof_responses,
         )
         self.chrome_executable = find_chrome_executable(chrome_executable)
         root = str(chrome_user_data_root or "").strip()

@@ -36,6 +36,13 @@ def _runtime_float(extra: dict[str, Any], key: str, default: float) -> float:
         return float(default)
 
 
+def _runtime_int(extra: dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(_runtime_value(extra, key, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _browser_options(extra: dict[str, Any]) -> dict[str, Any]:
     return {
         "browser_mode": str(
@@ -87,6 +94,14 @@ def _browser_options(extra: dict[str, Any]) -> dict[str, Any]:
             True,
         ),
         "timeout_seconds": _runtime_float(extra, "higg_browser_timeout_seconds", 120),
+        "turnstile_max_sessions": max(
+            _runtime_int(extra, "higg_turnstile_max_sessions", 2),
+            1,
+        ),
+        "turnstile_max_proof_responses": max(
+            _runtime_int(extra, "higg_turnstile_max_proof_responses", 8),
+            3,
+        ),
     }
 
 

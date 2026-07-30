@@ -330,6 +330,9 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'higg_bitbrowser_close_after_use', label: '任务结束关闭 Profile', placeholder: 'true' },
         { key: 'higg_bitbrowser_clear_site_data', label: '注册前清理 Higg 站点数据', placeholder: 'true' },
         { key: 'higg_browser_timeout_seconds', label: '浏览器超时秒数', placeholder: '120' },
+        { key: 'higg_proxy_reuse_cooldown_seconds', label: '代理出口复用冷却秒数', placeholder: '120' },
+        { key: 'higg_turnstile_max_sessions', label: '单出口 Turnstile 会话上限', placeholder: '2' },
+        { key: 'higg_turnstile_max_proof_responses', label: '单出口验证请求上限', placeholder: '8' },
       ],
     }, {
       section: 'Higg2API',

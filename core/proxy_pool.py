@@ -1,5 +1,5 @@
 """代理池 - 从数据库读取代理，支持轮询和按区域选取"""
-from typing import Optional
+from typing import Iterable, Optional
 from sqlmodel import Session, select
 from .db import ProxyModel, engine
 import time, threading, random
@@ -10,6 +10,9 @@ class ProxyPool:
     def __init__(self):
         self._index = 0
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._leases: dict[str, int] = {}
+        self._last_assigned: dict[str, float] = {}
 
     def get_next(self, region: str = "") -> Optional[str]:
         """获取下一个可用代理。
@@ -43,6 +46,70 @@ class ProxyPool:
                 idx = self._index % len(proxies)
                 self._index += 1
             return proxies[idx].url
+
+    def acquire(
+        self,
+        region: str = "",
+        *,
+        exclude: Iterable[str] | None = None,
+        cooldown_seconds: float = 0,
+        max_draws: int = 16,
+        wait_timeout: float = 0,
+    ) -> Optional[str]:
+        """Lease a broadly distributed proxy without duplicating active workers."""
+        excluded = {str(item or "").strip() for item in (exclude or []) if str(item or "").strip()}
+        deadline = time.monotonic() + max(float(wait_timeout or 0), 0)
+        while True:
+            cooling_candidates: list[str] = []
+            seen: set[str] = set()
+            for _ in range(max(int(max_draws or 1), 1)):
+                candidate = str(self.get_next(region) or "").strip()
+                if not candidate or candidate in excluded or candidate in seen:
+                    continue
+                seen.add(candidate)
+                now = time.monotonic()
+                with self._condition:
+                    if self._leases.get(candidate, 0) > 0:
+                        continue
+                    if now - self._last_assigned.get(candidate, 0) >= max(
+                        float(cooldown_seconds or 0),
+                        0,
+                    ):
+                        self._leases[candidate] = 1
+                        self._last_assigned[candidate] = now
+                        return candidate
+                    cooling_candidates.append(candidate)
+            now = time.monotonic()
+            with self._condition:
+                available = [
+                    candidate
+                    for candidate in cooling_candidates
+                    if self._leases.get(candidate, 0) <= 0
+                ]
+                if available:
+                    selected = min(
+                        available,
+                        key=lambda candidate: self._last_assigned.get(candidate, 0),
+                    )
+                    self._leases[selected] = 1
+                    self._last_assigned[selected] = now
+                    return selected
+                remaining = deadline - now
+                if remaining <= 0:
+                    return None
+                self._condition.wait(timeout=min(remaining, 1))
+
+    def release(self, url: str) -> None:
+        proxy = str(url or "").strip()
+        if not proxy:
+            return
+        with self._condition:
+            remaining = self._leases.get(proxy, 0) - 1
+            if remaining > 0:
+                self._leases[proxy] = remaining
+            else:
+                self._leases.pop(proxy, None)
+            self._condition.notify_all()
 
     def report_success(self, url: str) -> None:
         with Session(engine) as s:
