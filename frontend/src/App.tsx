@@ -181,6 +181,7 @@ function Sidebar({
                 { label: '验证服务', hash: 'captcha' },
                 { label: '接码服务', hash: 'sms' },
                 { label: 'LingYaQQ', hash: 'lingya_qq' },
+                { label: 'Higgsfield', hash: 'higg' },
                 { label: 'Freebeat', hash: 'freebeat' },
                 { label: 'QuickFrame', hash: 'quickframe' },
                 { label: 'ImgsWeryai', hash: 'imgs_weryai' },

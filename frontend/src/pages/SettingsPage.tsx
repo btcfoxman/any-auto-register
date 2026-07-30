@@ -367,8 +367,8 @@ export default function SettingsPage({
   const [searchParams] = useSearchParams()
   const tab = searchParams.get('tab') || 'general'
 
-  // Config center sub-tabs: register, mailbox, captcha, sms, lingya_qq, freebeat, quickframe, imgs_weryai, chatgpt
-  const configTabs = ['register', 'mailbox', 'captcha', 'sms', 'lingya_qq', 'freebeat', 'quickframe', 'imgs_weryai', 'chatgpt']
+  // Config center sub-tabs render the shared Settings form.
+  const configTabs = ['register', 'mailbox', 'captcha', 'sms', 'lingya_qq', 'higg', 'freebeat', 'quickframe', 'imgs_weryai', 'chatgpt']
   const isConfigTab = configTabs.includes(tab)
 
   // Page title mapping
@@ -379,6 +379,7 @@ export default function SettingsPage({
     captcha: '验证服务',
     sms: '接码服务',
     lingya_qq: 'LingYaQQ',
+    higg: 'Higgsfield',
     freebeat: 'Freebeat',
     imgs_weryai: 'ImgsWeryai',
     proxies: '代理资源',
