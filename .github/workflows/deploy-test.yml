@@ -190,12 +190,12 @@ jobs:
           )
           assert chrome == "/usr/bin/chromium", chrome
 
-          for port in (20001, 20011, 20020):
+          for port in (20001, 20020, 20039):
               with socket.create_connection(("xray", port), timeout=2):
                   pass
 
           browser = HiggChromeBrowserSession(
-              proxy="socks5://xray:20011",
+              proxy="socks5://xray:20039",
               chrome_executable=chrome,
               chrome_proxy_ports=config_store.get(
                   "higg_chrome_proxy_ports",
@@ -204,7 +204,7 @@ jobs:
           )
           profiles = browser._chrome_profiles()
           assert len(profiles) == 1
-          assert _proxy_url(profiles[0]) == "socks5://xray:20011"
+          assert _proxy_url(profiles[0]) == "socks5://xray:20039"
 
           required = config_store.get("higg_browser_required", "true").strip().lower()
           enabled = config_store.get("higg_browser_enabled", "true").strip().lower()
@@ -214,7 +214,7 @@ jobs:
           print(
               "Higgsfield browser runtime ready:",
               f"chrome={chrome}",
-              "proxy=socks5://xray:20011",
+              "dynamic_proxy=socks5://xray:20039",
               f"enabled={enabled}",
               f"required={required}",
           )

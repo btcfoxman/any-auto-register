@@ -18,6 +18,7 @@ from platforms.higg.browser_context import (
     HiggBitBrowserSession,
     HiggBrowserSession,
     HiggChromeBrowserSession,
+    _LocalPortLeases,
     _ProfileLeases,
     _proxy_url,
     parse_profile_ids,
@@ -141,7 +142,7 @@ def test_higg_native_chrome_preserves_assigned_server_proxy(monkeypatch):
         lambda _value: "/usr/bin/chromium",
     )
     browser = HiggChromeBrowserSession(
-        proxy="socks5://xray:20011",
+        proxy="socks5://xray:20039",
         chrome_proxy_ports="20001,20011,20020",
     )
 
@@ -149,8 +150,112 @@ def test_higg_native_chrome_preserves_assigned_server_proxy(monkeypatch):
 
     assert len(profiles) == 1
     assert profiles[0]["host"] == "xray"
-    assert profiles[0]["port"] == 20011
-    assert _proxy_url(profiles[0]) == "socks5://xray:20011"
+    assert profiles[0]["port"] == 20039
+    assert _proxy_url(profiles[0]) == "socks5://xray:20039"
+
+
+def test_higg_native_chrome_leases_distinct_available_cdp_ports():
+    leases = _LocalPortLeases()
+
+    first = leases.acquire(24000, timeout=1)
+    second = leases.acquire(24000, timeout=1)
+
+    assert first != second
+    assert 24000 < first < 25024
+    assert 24000 < second < 25024
+
+    leases.release(first)
+    leases.release(second)
+
+
+def test_higg_native_chrome_uses_and_cleans_isolated_session_profile(
+    monkeypatch,
+    tmp_path,
+):
+    commands = []
+
+    class FakeProcess:
+        pid = 999999
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    class FakePage:
+        def __init__(self, endpoint, timeout):
+            self.endpoint = endpoint
+
+        def clear_higg_data(self):
+            return None
+
+        def navigate(self, url):
+            return None
+
+        def close(self):
+            return None
+
+    def popen(command, **kwargs):
+        commands.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        "platforms.higg.browser_context.find_chrome_executable",
+        lambda _value: "/usr/bin/chromium",
+    )
+    monkeypatch.setattr("platforms.higg.browser_context.subprocess.Popen", popen)
+    monkeypatch.setattr("platforms.higg.browser_context._NativeCdpPage", FakePage)
+    monkeypatch.setattr(
+        HiggChromeBrowserSession,
+        "_wait_for_cdp",
+        lambda self, port: f"127.0.0.1:{port}",
+    )
+    monkeypatch.setattr(
+        HiggChromeBrowserSession,
+        "snapshot",
+        lambda self: {"browser_webdriver": False},
+    )
+    monkeypatch.setattr("platforms.higg.browser_context.time.sleep", lambda _value: None)
+
+    browser = HiggChromeBrowserSession(
+        proxy="socks5://xray:20039",
+        chrome_proxy_ports="20001,20020",
+        chrome_user_data_root=str(tmp_path),
+    )
+    browser.start()
+    profile_path = browser._user_data_dir
+
+    assert profile_path is not None
+    assert profile_path.parent.name == "proxy-20039"
+    assert profile_path.name.startswith("session-")
+    assert any(
+        item.startswith(f"--user-data-dir={profile_path}")
+        for item in commands[0]
+    )
+
+    browser.close()
+
+    assert not profile_path.exists()
+    assert browser._cdp_port == 0
+
+
+def test_higg_server_browser_mode_has_no_implicit_bitbrowser_fallback():
+    worker = HiggProtocolMailboxWorker(
+        proxy="socks5://xray:20039",
+        browser_enabled=True,
+        browser_required=True,
+        browser_options={"browser_mode": "native_chrome"},
+    )
+
+    assert worker._browser_modes() == ["native_chrome"]
 
 
 def test_higg_browser_required_always_enables_browser_flow():

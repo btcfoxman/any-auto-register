@@ -50,7 +50,7 @@ def _browser_options(extra: dict[str, Any]) -> dict[str, Any]:
             or "native_chrome"
         ).strip(),
         "browser_fallback_mode": str(
-            _runtime_value(extra, "higg_browser_fallback_mode", "bitbrowser")
+            _runtime_value(extra, "higg_browser_fallback_mode", "")
             or ""
         ).strip(),
         "chrome_executable": str(

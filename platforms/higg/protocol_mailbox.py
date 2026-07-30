@@ -96,7 +96,7 @@ class HiggProtocolMailboxWorker:
         ).strip()
         fallback_value = self.browser_options.get("browser_fallback_mode")
         fallback = str(
-            "bitbrowser" if fallback_value is None else fallback_value
+            "" if fallback_value is None else fallback_value
         ).strip()
         return list(dict.fromkeys(item for item in (primary, fallback) if item))
 

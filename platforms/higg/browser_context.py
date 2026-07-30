@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import signal
+import socket
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -176,6 +180,46 @@ class _ProfileLeases:
 
 _PROFILE_LEASES = _ProfileLeases()
 _CHROME_PROFILE_LEASES = _ProfileLeases()
+
+
+class _LocalPortLeases:
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.leased: set[int] = set()
+
+    @staticmethod
+    def _available(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            try:
+                listener.bind(("127.0.0.1", int(port)))
+            except OSError:
+                return False
+        return True
+
+    def acquire(self, base_port: int, *, timeout: float = 30) -> int:
+        base = min(max(int(base_port or DEFAULT_CHROME_CDP_BASE_PORT), 1024), 64511)
+        deadline = time.monotonic() + max(float(timeout or 30), 1)
+        with self.condition:
+            while True:
+                for port in range(base + 1, min(base + 1024, 65535)):
+                    if port in self.leased or not self._available(port):
+                        continue
+                    self.leased.add(port)
+                    return port
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"No free Higgsfield Chrome CDP port after {base}"
+                    )
+                self.condition.wait(timeout=min(remaining, 1))
+
+    def release(self, port: int) -> None:
+        with self.condition:
+            self.leased.discard(int(port or 0))
+            self.condition.notify_all()
+
+
+_CHROME_CDP_PORT_LEASES = _LocalPortLeases()
 
 
 class _NativeCdpPage:
@@ -850,14 +894,14 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
         )
         self.chrome_cdp_base_port = max(int(chrome_cdp_base_port or 19200), 1024)
         self._process: subprocess.Popen | None = None
+        self._cdp_port = 0
+        self._user_data_dir: Path | None = None
+        self._chrome_log_path: Path | None = None
+        self._chrome_log_file: Any = None
 
     def _chrome_profiles(self) -> list[dict[str, Any]]:
         preferred = urlparse(self.preferred_proxy)
         if preferred.hostname and preferred.port:
-            if preferred.port not in self.chrome_proxy_ports:
-                raise RuntimeError(
-                    f"Assigned proxy port {preferred.port} is not in higg_chrome_proxy_ports"
-                )
             proxy_type = preferred.scheme.lower()
             if proxy_type in {"socks", "socks5h"}:
                 proxy_type = "socks5"
@@ -881,14 +925,36 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
             for port in self.chrome_proxy_ports
         ]
 
+    def _chrome_log_tail(self) -> str:
+        if self._chrome_log_file is not None:
+            try:
+                self._chrome_log_file.flush()
+            except Exception:
+                pass
+        if not self._chrome_log_path or not self._chrome_log_path.is_file():
+            return ""
+        try:
+            value = self._chrome_log_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )[-1600:].strip()
+        except Exception:
+            return ""
+        if self.proxy_url:
+            value = value.replace(self.proxy_url, "[proxy]")
+        return " ".join(value.splitlines())
+
     def _wait_for_cdp(self, port: int) -> str:
         endpoint = f"127.0.0.1:{port}"
         deadline = time.monotonic() + min(self.timeout_seconds, 60)
         last_error = ""
         while time.monotonic() < deadline:
             if self._process is not None and self._process.poll() is not None:
+                log_tail = self._chrome_log_tail()
                 raise RuntimeError(
-                    f"Google Chrome exited before CDP became ready ({self._process.returncode})"
+                    f"Google Chrome exited before CDP became ready "
+                    f"({self._process.returncode})"
+                    + (f": {log_tail}" if log_tail else "")
                 )
             try:
                 response = requests.get(f"http://{endpoint}/json/version", timeout=1)
@@ -897,7 +963,11 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
             except Exception as exc:
                 last_error = str(exc)
                 time.sleep(0.25)
-        raise TimeoutError(f"Google Chrome CDP did not start on {endpoint}: {last_error}")
+        log_tail = self._chrome_log_tail()
+        raise TimeoutError(
+            f"Google Chrome CDP did not start on {endpoint}: {last_error}"
+            + (f"; Chrome log: {log_tail}" if log_tail else "")
+        )
 
     def start(self) -> "HiggChromeBrowserSession":
         if self._page is not None:
@@ -910,34 +980,42 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
         self.profile_id = str(profile.get("id") or "")
         self.proxy_url = _proxy_url(profile)
         self._leased = True
-        proxy_port = int(profile["port"])
-        proxy_index = self.chrome_proxy_ports.index(proxy_port)
-        cdp_port = self.chrome_cdp_base_port + proxy_index + 1
-        user_data_dir = self.chrome_user_data_root / f"proxy-{proxy_port}"
-        user_data_dir.mkdir(parents=True, exist_ok=True)
-        command = [
-            self.chrome_executable,
-            f"--user-data-dir={user_data_dir}",
-            "--profile-directory=Default",
-            f"--proxy-server={self.proxy_url}",
-            f"--remote-debugging-port={cdp_port}",
-            "--remote-allow-origins=*",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-background-mode",
-            HIGG_APP_URL,
-        ]
-        if os.name != "nt":
-            command[1:1] = ["--no-sandbox", "--disable-dev-shm-usage"]
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
+            proxy_port = int(profile["port"])
+            self._cdp_port = _CHROME_CDP_PORT_LEASES.acquire(
+                self.chrome_cdp_base_port,
+                timeout=min(self.timeout_seconds, 30),
+            )
+            proxy_root = self.chrome_user_data_root / f"proxy-{proxy_port}"
+            proxy_root.mkdir(parents=True, exist_ok=True)
+            self._user_data_dir = Path(
+                tempfile.mkdtemp(prefix="session-", dir=str(proxy_root))
+            )
+            self._chrome_log_path = self._user_data_dir / "chrome.log"
+            self._chrome_log_file = self._chrome_log_path.open("ab")
+            command = [
+                self.chrome_executable,
+                f"--user-data-dir={self._user_data_dir}",
+                "--profile-directory=Default",
+                f"--proxy-server={self.proxy_url}",
+                f"--remote-debugging-port={self._cdp_port}",
+                "--remote-allow-origins=*",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-background-mode",
+                HIGG_APP_URL,
+            ]
+            if os.name != "nt":
+                command[1:1] = ["--no-sandbox", "--disable-dev-shm-usage"]
+            creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             self._process = subprocess.Popen(
                 command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=self._chrome_log_file,
+                stderr=subprocess.STDOUT,
                 creationflags=creation_flags,
+                start_new_session=os.name != "nt",
             )
-            endpoint = self._wait_for_cdp(cdp_port)
+            endpoint = self._wait_for_cdp(self._cdp_port)
             self._page = _NativeCdpPage(endpoint, self.timeout_seconds)
             if self.clear_site_data:
                 self._page.clear_higg_data()
@@ -947,7 +1025,7 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
             self.log(
                 "Higgsfield: native Chrome session ready "
                 f"profile={self.profile_id} proxy={self.proxy_url} "
-                f"cdp={cdp_port} webdriver={snapshot.get('browser_webdriver')}"
+                f"cdp={self._cdp_port} webdriver={snapshot.get('browser_webdriver')}"
             )
             return self
         except Exception:
@@ -958,20 +1036,39 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
         if self._page is not None:
             self._page.close()
             self._page = None
-        if self._process is not None and self.close_after_use:
+        if self._process is not None:
             try:
-                self._process.terminate()
+                if os.name != "nt":
+                    os.killpg(self._process.pid, signal.SIGTERM)
+                else:
+                    self._process.terminate()
                 self._process.wait(timeout=10)
             except Exception:
                 try:
-                    self._process.kill()
+                    if os.name != "nt":
+                        os.killpg(self._process.pid, signal.SIGKILL)
+                    else:
+                        self._process.kill()
                     self._process.wait(timeout=5)
                 except Exception:
                     pass
         self._process = None
+        if self._chrome_log_file is not None:
+            try:
+                self._chrome_log_file.close()
+            except Exception:
+                pass
+            self._chrome_log_file = None
+        if self._cdp_port:
+            _CHROME_CDP_PORT_LEASES.release(self._cdp_port)
+            self._cdp_port = 0
         if self._leased:
             _CHROME_PROFILE_LEASES.release(self.profile_id)
             self._leased = False
+        if self._user_data_dir is not None:
+            shutil.rmtree(self._user_data_dir, ignore_errors=True)
+            self._user_data_dir = None
+        self._chrome_log_path = None
         self.profile_id = ""
 
 
