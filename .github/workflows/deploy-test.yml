@@ -165,7 +165,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          docker exec -i "${DEPLOY_SERVICE}" python - <<'PY'
+          cd "${DEPLOY_PATH}"
+          cdp_override="${DEPLOY_PATH}/host-tools/freebeat-cdp/docker-compose.override.yml"
+          container_id="$(
+            docker compose \
+              -f docker-compose.yml \
+              -f "${cdp_override}" \
+              ps -q "${DEPLOY_SERVICE}"
+          )"
+          test -n "${container_id}"
+
+          docker exec -i "${container_id}" python - <<'PY'
           import socket
 
           from core.config_store import config_store
