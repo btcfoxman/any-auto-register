@@ -161,6 +161,55 @@ jobs:
             up -d "${DEPLOY_SERVICE}"
           docker image prune -f
 
+      - name: Verify Higgsfield browser runtime
+        run: |
+          set -euo pipefail
+
+          docker exec -i "${DEPLOY_SERVICE}" python - <<'PY'
+          import socket
+
+          from core.config_store import config_store
+          from platforms.higg.browser_context import (
+              HiggChromeBrowserSession,
+              _proxy_url,
+              find_chrome_executable,
+          )
+
+          chrome = find_chrome_executable(
+              config_store.get("higg_chrome_executable", "")
+          )
+          assert chrome == "/usr/bin/chromium", chrome
+
+          for port in (20001, 20011, 20020):
+              with socket.create_connection(("xray", port), timeout=2):
+                  pass
+
+          browser = HiggChromeBrowserSession(
+              proxy="socks5://xray:20011",
+              chrome_executable=chrome,
+              chrome_proxy_ports=config_store.get(
+                  "higg_chrome_proxy_ports",
+                  ",".join(str(port) for port in range(20001, 20021)),
+              ),
+          )
+          profiles = browser._chrome_profiles()
+          assert len(profiles) == 1
+          assert _proxy_url(profiles[0]) == "socks5://xray:20011"
+
+          required = config_store.get("higg_browser_required", "true").strip().lower()
+          enabled = config_store.get("higg_browser_enabled", "true").strip().lower()
+          assert required not in {"0", "false", "no", "off"} or enabled not in {
+              "0", "false", "no", "off"
+          }
+          print(
+              "Higgsfield browser runtime ready:",
+              f"chrome={chrome}",
+              "proxy=socks5://xray:20011",
+              f"enabled={enabled}",
+              f"required={required}",
+          )
+          PY
+
       - name: Install and restart headed Freebeat CDP launcher
         run: |
           set -euo pipefail

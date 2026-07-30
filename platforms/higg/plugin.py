@@ -142,6 +142,14 @@ class HiggPlatform(BasePlatform):
             from platforms.higg.protocol_mailbox import HiggProtocolMailboxWorker
 
             extra = dict(ctx.extra or {})
+            browser_required = _truthy(
+                _runtime_value(extra, "higg_browser_required", True),
+                True,
+            )
+            browser_enabled = _truthy(
+                _runtime_value(extra, "higg_browser_enabled", True),
+                True,
+            ) or browser_required
             return HiggProtocolMailboxWorker(
                 proxy=ctx.proxy,
                 log_fn=ctx.log,
@@ -150,14 +158,8 @@ class HiggPlatform(BasePlatform):
                 user_agent=str(extra.get("user_agent") or ""),
                 sec_ch_ua=str(extra.get("sec_ch_ua") or ""),
                 sec_ch_ua_platform=str(extra.get("sec_ch_ua_platform") or ""),
-                browser_enabled=_truthy(
-                    _runtime_value(extra, "higg_browser_enabled", True),
-                    True,
-                ),
-                browser_required=_truthy(
-                    _runtime_value(extra, "higg_browser_required", True),
-                    True,
-                ),
+                browser_enabled=browser_enabled,
+                browser_required=browser_required,
                 browser_options=_browser_options(extra),
             )
 

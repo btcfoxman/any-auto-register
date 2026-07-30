@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, quote_plus, urlparse
 
 import requests
 import websocket
@@ -75,6 +75,10 @@ def find_chrome_executable(value: str = "") -> str:
             Path(os.environ.get("LOCALAPPDATA", ""))
             / "Google/Chrome/Application/chrome.exe"
         ),
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
     ]
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
@@ -90,7 +94,15 @@ def _proxy_url(profile: dict[str, Any]) -> str:
         return ""
     if proxy_type == "socks":
         proxy_type = "socks5"
-    return f"{proxy_type}://{host}:{port}"
+    username = str(profile.get("username") or "").strip()
+    password = str(profile.get("password") or "").strip()
+    auth = ""
+    if username:
+        auth = quote_plus(username)
+        if password:
+            auth += f":{quote_plus(password)}"
+        auth += "@"
+    return f"{proxy_type}://{auth}{host}:{port}"
 
 
 def _proxy_identity(value: Any) -> tuple[str, int] | None:
@@ -812,6 +824,25 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
         self._process: subprocess.Popen | None = None
 
     def _chrome_profiles(self) -> list[dict[str, Any]]:
+        preferred = urlparse(self.preferred_proxy)
+        if preferred.hostname and preferred.port:
+            if preferred.port not in self.chrome_proxy_ports:
+                raise RuntimeError(
+                    f"Assigned proxy port {preferred.port} is not in higg_chrome_proxy_ports"
+                )
+            proxy_type = preferred.scheme.lower()
+            if proxy_type in {"socks", "socks5h"}:
+                proxy_type = "socks5"
+            return [
+                {
+                    "id": f"chrome-proxy-{preferred.hostname}-{preferred.port}",
+                    "proxyType": proxy_type or "socks5",
+                    "host": preferred.hostname,
+                    "port": preferred.port,
+                    "username": preferred.username or "",
+                    "password": preferred.password or "",
+                }
+            ]
         return [
             {
                 "id": f"chrome-proxy-{port}",
@@ -868,6 +899,8 @@ class HiggChromeBrowserSession(HiggBitBrowserSession):
             "--disable-background-mode",
             HIGG_APP_URL,
         ]
+        if os.name != "nt":
+            command[1:1] = ["--no-sandbox", "--disable-dev-shm-usage"]
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             self._process = subprocess.Popen(

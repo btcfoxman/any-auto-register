@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from core.base_platform import Account, RegisterConfig
 from core.db import AccountModel
 from core.platform_accounts import build_platform_extra
@@ -15,6 +17,7 @@ from platforms.higg.browser_context import (
     HiggBrowserSession,
     HiggChromeBrowserSession,
     _ProfileLeases,
+    _proxy_url,
     parse_profile_ids,
     parse_proxy_ports,
 )
@@ -128,6 +131,44 @@ def test_higg_browser_factory_selects_native_chrome_before_bitbrowser():
     assert isinstance(chrome, HiggChromeBrowserSession)
     assert isinstance(bitbrowser, HiggBitBrowserSession)
     assert parse_proxy_ports("20001, 20002\n20001") == [20001, 20002]
+
+
+def test_higg_native_chrome_preserves_assigned_server_proxy(monkeypatch):
+    monkeypatch.setattr(
+        "platforms.higg.browser_context.find_chrome_executable",
+        lambda _value: "/usr/bin/chromium",
+    )
+    browser = HiggChromeBrowserSession(
+        proxy="socks5://xray:20011",
+        chrome_proxy_ports="20001,20011,20020",
+    )
+
+    profiles = browser._chrome_profiles()
+
+    assert len(profiles) == 1
+    assert profiles[0]["host"] == "xray"
+    assert profiles[0]["port"] == 20011
+    assert _proxy_url(profiles[0]) == "socks5://xray:20011"
+
+
+def test_higg_browser_required_always_enables_browser_flow():
+    platform = HiggPlatform(config=RegisterConfig(executor_type="protocol"))
+    adapter = platform.build_protocol_mailbox_adapter()
+    worker = adapter.worker_builder(
+        SimpleNamespace(
+            extra={
+                "higg_browser_enabled": "false",
+                "higg_browser_required": "true",
+            },
+            proxy="socks5://xray:20011",
+            log=lambda _message: None,
+            platform=platform,
+        ),
+        None,
+    )
+
+    assert worker.browser_enabled is True
+    assert worker.browser_required is True
 
 
 def test_higg_profile_leases_balance_concurrent_workers_without_duplicates():
