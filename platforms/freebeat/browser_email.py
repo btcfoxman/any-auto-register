@@ -16,6 +16,7 @@ from platforms.freebeat.core import (
     FREEBEAT_DEFAULT_VERIFY_SOURCE,
     FREEBEAT_SEND_CODE_PATH,
     _cookie_header_from_any,
+    _extract_login_action_id,
     _is_send_code_already_sent,
     _json_dumps,
     _normalize_frontend_path,
@@ -780,7 +781,54 @@ def _is_transient_navigation_error(exc: Exception) -> bool:
         "execution context was destroyed" in message
         or "most likely because of a navigation" in message
         or "navigation" in message and "interrupted" in message
+        or "target page, context or browser has been closed" in message
+        or "target closed" in message
+        or "page has been closed" in message
     )
+
+
+def _page_is_closed(page: Any) -> bool:
+    if page is None:
+        return True
+    checker = getattr(page, "is_closed", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return True
+
+
+def _live_context_page(context: Any, preferred: Any = None, *, create: bool = True):
+    if preferred is not None and not _page_is_closed(preferred):
+        return preferred
+    try:
+        pages = list(getattr(context, "pages", []) or [])
+    except Exception:
+        pages = []
+    for candidate in reversed(pages):
+        if _page_is_closed(candidate):
+            continue
+        try:
+            if _is_freebeat_page_url(candidate.url):
+                return candidate
+        except Exception:
+            pass
+    for candidate in reversed(pages):
+        if not _page_is_closed(candidate):
+            return candidate
+    if create:
+        return context.new_page()
+    return None
+
+
+def _safe_page_url(page: Any) -> str:
+    if _page_is_closed(page):
+        return ""
+    try:
+        return str(page.url or "")
+    except Exception:
+        return ""
 
 
 def _is_retryable_network_error(exc: Exception) -> bool:
@@ -1213,6 +1261,7 @@ def send_email_verify_code_in_browser(
     timeout_ms = max(10_000, int(float(timeout_seconds or FREEBEAT_BROWSER_TIMEOUT_SECONDS) * 1000))
     request_record: dict[str, Any] = {}
     response_record: dict[str, Any] = {}
+    next_action_record: dict[str, str] = {}
     request_failures: list[dict[str, Any]] = []
     console_events: list[dict[str, str]] = []
     cdp_launcher_url = str(browser_cdp_launcher_url or "").strip()
@@ -1316,8 +1365,10 @@ def send_email_verify_code_in_browser(
                 close_context = True
                 close_browser = True
             context.set_default_timeout(timeout_ms)
-            page = context.new_page()
+            page = _live_context_page(context, create=True) if cdp_url else context.new_page()
             if cdp_url:
+                close_page = False
+                log_fn("Freebeat browser CDP mode reuses the launcher page and monitors the whole browser context")
                 log_fn("Freebeat browser CDP mode skips init-script stealth/capture hooks")
             elif stealth_enabled:
                 _install_stealth_evasions(
@@ -1333,16 +1384,27 @@ def send_email_verify_code_in_browser(
                     return
                 body_text = request.post_data or ""
                 body = _parse_json_text(body_text)
+                try:
+                    headers = dict(request.all_headers())
+                except Exception:
+                    headers = dict(request.headers)
                 request_record.update(
                     {
                         "url": request.url,
                         "method": request.method,
                         "body": body,
-                        "headers": dict(request.headers),
+                        "headers": headers,
                     }
                 )
 
             def on_response(response) -> None:
+                if "/_next/static/chunks/" in response.url:
+                    try:
+                        action_id = _extract_login_action_id(response.text())
+                    except Exception:
+                        action_id = ""
+                    if action_id:
+                        next_action_record["id"] = action_id
                 if FREEBEAT_SEND_CODE_PATH not in response.url:
                     return
                 text = ""
@@ -1384,10 +1446,19 @@ def send_email_verify_code_in_browser(
                 console_events.append({"type": str(getattr(message, "type", "") or ""), "text": text[:300]})
                 del console_events[:-8]
 
-            page.on("request", on_request)
-            page.on("response", on_response)
-            page.on("requestfailed", on_request_failed)
-            page.on("console", on_console)
+            context.on("request", on_request)
+            context.on("response", on_response)
+            context.on("requestfailed", on_request_failed)
+
+            def attach_console_listener(target_page) -> None:
+                try:
+                    target_page.on("console", on_console)
+                except Exception:
+                    pass
+
+            for existing_page in list(getattr(context, "pages", []) or []):
+                attach_console_listener(existing_page)
+            context.on("page", attach_console_listener)
             open_patterns = [
                 "log\\s*in",
                 "login",
@@ -1413,14 +1484,21 @@ def send_email_verify_code_in_browser(
             verification_retry_count = 0
             max_verification_retries = 3
             for page_url in page_urls:
+                page = _live_context_page(context, page, create=True)
                 attempted_urls.append(page_url)
                 log_fn(f"Freebeat browser send-code open {page_url}")
-                _goto_with_retries(page, page_url, timeout=timeout_ms, log_fn=log_fn)
+                try:
+                    _goto_with_retries(page, page_url, timeout=timeout_ms, log_fn=log_fn)
+                except Exception as exc:
+                    if not _is_transient_navigation_error(exc):
+                        raise
+                    page = _live_context_page(context, None, create=True)
+                    _goto_with_retries(page, page_url, timeout=timeout_ms, log_fn=log_fn)
                 try:
                     page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 15_000))
                 except Exception:
                     pass
-                page.wait_for_timeout(1500)
+                time.sleep(1.5)
 
                 start = time.monotonic()
                 no_login_entry_count = 0
@@ -1444,14 +1522,18 @@ def send_email_verify_code_in_browser(
                                 f"retrying challenge {verification_retry_count}/{max_verification_retries}"
                             )
                             try:
+                                page = _live_context_page(context, page, create=True)
                                 page.reload(wait_until="domcontentloaded", timeout=min(timeout_ms, 30_000))
                             except Exception:
+                                page = _live_context_page(context, None, create=True)
                                 _goto_with_retries(page, page_url, timeout=timeout_ms, log_fn=log_fn)
-                            page.wait_for_timeout(1800)
+                            time.sleep(1.8)
                             continue
                         break
-                    if not _is_freebeat_page_url(page.url):
-                        last_action = {"stage": "external_origin", "page_url": page_url, "current_url": page.url}
+                    page = _live_context_page(context, page, create=True)
+                    current_page_url = _safe_page_url(page)
+                    if not _is_freebeat_page_url(current_page_url):
+                        last_action = {"stage": "external_origin", "page_url": page_url, "current_url": current_page_url}
                         break
                     try:
                         _dismiss_popups(page)
@@ -1494,7 +1576,7 @@ def send_email_verify_code_in_browser(
                             for _ in range(8):
                                 if response_record:
                                     break
-                                page.wait_for_timeout(500)
+                                time.sleep(0.5)
                             if response_record and _is_send_code_verification_failed(response_record.get("body")):
                                 last_action["verification_failed_response"] = {
                                     "status": response_record.get("status"),
@@ -1559,7 +1641,7 @@ def send_email_verify_code_in_browser(
                                             )
                                             solved_token = str(
                                                 turnstile_solver(
-                                                    page.url,
+                                                    _safe_page_url(page),
                                                     render["sitekey"],
                                                     action=render.get("action") or "",
                                                     cdata=render.get("cdata") or "",
@@ -1660,10 +1742,12 @@ def send_email_verify_code_in_browser(
                                         f"retrying challenge {verification_retry_count}/{max_verification_retries}"
                                     )
                                     try:
+                                        page = _live_context_page(context, page, create=True)
                                         page.reload(wait_until="domcontentloaded", timeout=min(timeout_ms, 30_000))
                                     except Exception:
+                                        page = _live_context_page(context, None, create=True)
                                         _goto_with_retries(page, page_url, timeout=timeout_ms, log_fn=log_fn)
-                                    page.wait_for_timeout(1800)
+                                    time.sleep(1.8)
                                     continue
                                 request_record.update(
                                     {
@@ -1711,7 +1795,7 @@ def send_email_verify_code_in_browser(
                             if no_login_entry_count >= 3:
                                 last_action["stage"] = "login_entry_not_found"
                                 break
-                    page.wait_for_timeout(2500)
+                    time.sleep(2.5)
                 if response_record:
                     break
                 if last_action.get("cf_verification_failed"):
@@ -1720,9 +1804,10 @@ def send_email_verify_code_in_browser(
                     break
 
             if not response_record:
+                page = _live_context_page(context, page, create=False)
                 title = ""
                 try:
-                    title = page.title()
+                    title = page.title() if page is not None else ""
                 except Exception:
                     pass
                 raise RuntimeError(
@@ -1735,7 +1820,7 @@ def send_email_verify_code_in_browser(
                     f"humanize={'on' if humanize else 'off'} profile={'on' if str(user_data_dir or '').strip() else 'off'} "
                     f"turnstile_click={'on' if turnstile_click_enabled else 'off'} solver={'on' if turnstile_solver else 'off'} "
                     f"locale={context_options.get('locale')} timezone={context_options.get('timezone_id')} "
-                    f"tried={attempted_urls} page={page.url} "
+                    f"tried={attempted_urls} page={_safe_page_url(page)} "
                     f"title={title!r} action={last_action}"
                 )
             if int(response_record.get("status") or 0) != 200:
@@ -1745,12 +1830,21 @@ def send_email_verify_code_in_browser(
                 )
             payload = response_record.get("body") if isinstance(response_record.get("body"), dict) else {}
             payload = _api_response_ok(payload)
-            cookies = context.cookies()
+            try:
+                cookies = context.cookies()
+            except Exception:
+                cookies = []
             cookie_header = _cookies_to_header(cookies)
             request_body = request_record.get("body") if isinstance(request_record.get("body"), dict) else {}
-            turnstile_state = page.evaluate("() => window.__freebeatTurnstile || {}")
+            if not cookie_header:
+                cookie_header = str((request_record.get("headers") or {}).get("cookie") or "").strip()
+            page = _live_context_page(context, page, create=False)
             try:
-                deployment_id = _deployment_id_from_html(page.content())
+                turnstile_state = page.evaluate("() => window.__freebeatTurnstile || {}") if page is not None else {}
+            except Exception:
+                turnstile_state = {}
+            try:
+                deployment_id = _deployment_id_from_html(page.content()) if page is not None else ""
             except Exception:
                 deployment_id = ""
             return {
@@ -1766,7 +1860,8 @@ def send_email_verify_code_in_browser(
                 "turnstile_token": str(request_body.get("turnstileToken") or "").strip(),
                 "turnstile": turnstile_state,
                 "deployment_id": deployment_id,
-                "page_url": page.url,
+                "next_action_id": next_action_record.get("id", ""),
+                "page_url": _safe_page_url(page),
                 "browser_engine": resolved_browser_engine,
                 "browser_channel": channel,
                 "browser_cdp_url": cdp_url,

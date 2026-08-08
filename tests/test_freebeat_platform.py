@@ -23,6 +23,8 @@ from platforms.freebeat.core import (
     FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE,
     FREEBEAT_ROOT_NEXT_ROUTER_STATE_TREE,
     FreebeatClient,
+    _extract_login_action_id,
+    _next_chunk_urls,
     _total_credits_from_state,
     _extract_login_payload,
 )
@@ -31,6 +33,8 @@ from platforms.freebeat.browser_email import (
     _deployment_id_from_html,
     _is_freebeat_page_url,
     _launch_cdp_browser_session,
+    _live_context_page,
+    _is_transient_navigation_error,
     _post_json,
 )
 from platforms.freebeat.plugin import FreebeatPlatform
@@ -66,7 +70,7 @@ def test_freebeat_next_action_login_parser_accepts_rsc_prefix():
 
 
 def test_freebeat_latest_har_action_and_router_state_match_tw_flow():
-    assert FREEBEAT_DEFAULT_NEXT_ACTION == "40c1adaebe2a1e7c344df818336407ce0f9b109d10"
+    assert FREEBEAT_DEFAULT_NEXT_ACTION == "40a25925cc12f5632437f61f804ab32eeb53bb0253"
     assert json.loads(unquote(FREEBEAT_DEFAULT_NEXT_ROUTER_STATE_TREE)) == [
         "",
         {
@@ -381,6 +385,70 @@ def test_freebeat_warmup_refreshes_stale_deployment_id_from_current_frontend():
 
     assert calls[0]["url"] == "https://freebeat.ai/tw"
     assert client._deployment_id == "dpl_current"
+
+
+def test_freebeat_warmup_discovers_login_action_from_current_next_chunk():
+    calls: list[str] = []
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, text: str):
+            self.text = text
+
+    client = FreebeatClient(log_fn=lambda message: None)
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        if "/_next/static/chunks/login-current.js" in url:
+            return Response(
+                'let login=(0,r.createServerReference)("40abcdeabcdeabcdeabcdeabcdeabcdeabcdeabcde",'
+                'r.callServer,void 0,r.findSourceMapURL,"loginWithCode");'
+            )
+        return Response('<script src="/_next/static/chunks/login-current.js?dpl=dpl_current"></script> dpl_current')
+
+    client.s.get = fake_get
+    client._warmup_frontend_session()
+
+    assert client._next_action_id == "40abcdeabcdeabcdeabcdeabcdeabcdeabcdeabcde"
+    assert calls == [
+        "https://freebeat.ai/tw",
+        "https://freebeat.ai/_next/static/chunks/login-current.js?dpl=dpl_current",
+    ]
+
+
+def test_freebeat_login_action_parser_matches_current_bundle_shape():
+    source = (
+        'let a=(0,r.createServerReference)("40a25925cc12f5632437f61f804ab32eeb53bb0253",'
+        'r.callServer,void 0,r.findSourceMapURL,"loginWithCode");'
+    )
+    assert _extract_login_action_id(source) == FREEBEAT_DEFAULT_NEXT_ACTION
+    assert _next_chunk_urls(
+        '<script src="/_next/static/chunks/a.js"></script><script src="https://other.test/b.js"></script>',
+        "https://freebeat.ai/tw",
+    ) == ["https://freebeat.ai/_next/static/chunks/a.js"]
+
+
+def test_freebeat_browser_page_lifecycle_reuses_live_launcher_page():
+    class Page:
+        url = "https://freebeat.ai/tw"
+
+        def is_closed(self):
+            return False
+
+    class Context:
+        def __init__(self):
+            self.pages = [Page()]
+            self.created = 0
+
+        def new_page(self):
+            self.created += 1
+            return Page()
+
+    context = Context()
+    assert _live_context_page(context) is context.pages[0]
+    assert context.created == 0
+    assert _is_transient_navigation_error(RuntimeError("Target page, context or browser has been closed"))
 
 
 def test_freebeat_send_code_includes_turnstile_token_when_provided():
@@ -835,6 +903,9 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
             self.deployment_id = deployment_id
             calls.append(("deployment", deployment_id))
 
+        def update_next_action_id(self, action_id):
+            calls.append(("next_action", action_id))
+
         def send_email_verify_code(self, email, *, verify_source):
             raise AssertionError("protocol send should not be used when browser send succeeds")
 
@@ -872,6 +943,7 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
             "browser_sent": True,
             "cookie_header": "fb_session=sess_123",
             "deployment_id": "dpl_browser_current",
+            "next_action_id": FREEBEAT_DEFAULT_NEXT_ACTION,
             "turnstile_token": "turnstile-token-123",
             "response": {"code": 0, "data": True},
         }
@@ -928,6 +1000,7 @@ def test_freebeat_protocol_mailbox_worker_browser_sends_code_and_merges_cookies(
     assert calls[0][1]["user_agent"] == "native"
     assert ("merge_cookie", "fb_session=sess_123") in calls
     assert ("deployment", "dpl_browser_current") in calls
+    assert ("next_action", FREEBEAT_DEFAULT_NEXT_ACTION) in calls
     assert ("login_cookie", "fb_session=sess_123") in calls
 
 

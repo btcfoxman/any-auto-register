@@ -180,6 +180,13 @@ class FreebeatProtocolMailboxWorker:
                         update_deployment_id(deployment_id)
                     else:
                         setattr(self.client, "_deployment_id", deployment_id)
+                next_action_id = str(result.get("next_action_id") or "").strip()
+                if next_action_id:
+                    update_next_action_id = getattr(self.client, "update_next_action_id", None)
+                    if callable(update_next_action_id):
+                        update_next_action_id(next_action_id)
+                    else:
+                        setattr(self.client, "_next_action_id", next_action_id)
                 token = str(result.get("turnstile_token") or "").strip()
                 self.log(f"Freebeat browser sent email code; turnstile_token={'yes' if token else 'unknown'}")
                 return result

@@ -8,6 +8,7 @@ import time
 from http.cookiejar import Cookie
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urljoin
 
 from curl_cffi.requests import Session
 
@@ -24,8 +25,9 @@ FREEBEAT_LEGACY_FRONTEND_PATH = FREEBEAT_DEFAULT_FRONTEND_PATH
 FREEBEAT_REGISTER_REFERER = f"{FREEBEAT_BASE}{FREEBEAT_DEFAULT_FRONTEND_PATH}"
 FREEBEAT_SEND_CODE_PATH = "/api/proxy/v1/user/com/sendEmailVerifyCodeV2"
 FREEBEAT_DEFAULT_VERIFY_SOURCE = "WEB_SHOPIFY_LOGIN"
-FREEBEAT_DEFAULT_NEXT_ACTION = "40c1adaebe2a1e7c344df818336407ce0f9b109d10"
+FREEBEAT_DEFAULT_NEXT_ACTION = "40a25925cc12f5632437f61f804ab32eeb53bb0253"
 FREEBEAT_FALLBACK_NEXT_ACTIONS = (
+    "40c1adaebe2a1e7c344df818336407ce0f9b109d10",
     "407a6b1d1fe3baa68ae8e8623af1ca43e66a5a5d21",
     "404332890f476afd4eb2bcd3390fcbdec519c94140",
     "40fc8fc4444d87d8d54a31ebf3953a579839f75c07",
@@ -229,6 +231,31 @@ def _is_server_action_not_found(response: Any) -> bool:
     if getattr(response, "status_code", None) != 404:
         return False
     return "server action not found" in _response_text(response).lower()
+
+
+def _extract_login_action_id(value: Any) -> str:
+    text = str(value or "")
+    patterns = (
+        r"createServerReference\)?\s*\(\s*['\"]([0-9a-f]{40,64})['\"][^)]{0,1200}?loginWithCode",
+        r"['\"]([0-9a-f]{40,64})['\"][^\n]{0,1200}?['\"]loginWithCode['\"]",
+        r"['\"]loginWithCode['\"][^\n]{0,1200}?['\"]([0-9a-f]{40,64})['\"]",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).lower()
+    return ""
+
+
+def _next_chunk_urls(html: Any, page_url: str) -> list[str]:
+    sources = re.findall(r"<script\b[^>]*\bsrc=['\"]([^'\"]+)['\"]", str(html or ""), flags=re.IGNORECASE)
+    urls = []
+    for source in reversed(sources):
+        source = source.replace("&amp;", "&")
+        if "/_next/static/chunks/" not in source:
+            continue
+        urls.append(urljoin(page_url, source))
+    return list(dict.fromkeys(urls))
 
 
 def _router_state_for_frontend_path(path: str) -> str:
@@ -495,6 +522,7 @@ class FreebeatClient:
         self.frontend_path = _normalize_frontend_path(frontend_path)
         self.frontend_url = self._url(self.frontend_path)
         self._deployment_id = str(deployment_id or "").strip()
+        self._next_action_id = ""
         proxies = {"http": proxy, "https": proxy} if proxy else None
         self.s = Session(impersonate="chrome", proxies=proxies, timeout=30)
         self.s.headers.update(
@@ -551,6 +579,12 @@ class FreebeatClient:
         if re.fullmatch(r"dpl_[A-Za-z0-9]+", value):
             self._deployment_id = value
         return self._deployment_id
+
+    def update_next_action_id(self, action_id: Any) -> str:
+        value = str(action_id or "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{40,64}", value):
+            self._next_action_id = value
+        return self._next_action_id
 
     def auth_state(self) -> dict[str, Any]:
         cookie_header = self.cookie_header()
@@ -625,6 +659,26 @@ class FreebeatClient:
                 if self._deployment_id and self._deployment_id != discovered_deployment_id:
                     self.log("Freebeat frontend deployment changed; using the current deployment id")
                 self.update_deployment_id(discovered_deployment_id)
+            discovered_action_id = _extract_login_action_id(text)
+            if not discovered_action_id:
+                headers = self._frontend_headers(
+                    accept="*/*",
+                    include_cookie=True,
+                    include_fetch_headers=False,
+                )
+                for chunk_url in _next_chunk_urls(text, self.frontend_url)[:48]:
+                    try:
+                        chunk_response = self.s.get(chunk_url, headers=headers)
+                    except Exception:
+                        continue
+                    if getattr(chunk_response, "status_code", 0) != 200:
+                        continue
+                    discovered_action_id = _extract_login_action_id(_response_text(chunk_response))
+                    if discovered_action_id:
+                        break
+            if discovered_action_id:
+                self.update_next_action_id(discovered_action_id)
+                self.log("Freebeat login action discovered from current frontend bundle")
             self.log(f"GET {_display_path(self.frontend_path)} warmup -> {response.status_code}")
         except Exception as exc:
             self.log(f"Freebeat frontend warmup failed: {exc}")
@@ -713,7 +767,7 @@ class FreebeatClient:
 
         self._warmup_frontend_session()
         explicit_action_id = str(next_action or "").strip()
-        primary_action_id = explicit_action_id or FREEBEAT_DEFAULT_NEXT_ACTION
+        primary_action_id = explicit_action_id or self._next_action_id or FREEBEAT_DEFAULT_NEXT_ACTION
         action_ids = [primary_action_id]
         if not explicit_action_id:
             action_ids.extend(
