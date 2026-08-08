@@ -30,12 +30,15 @@ from platforms.freebeat.core import (
 )
 from platforms.freebeat.browser_email import (
     _candidate_page_urls,
+    _configure_cdp_page,
     _deployment_id_from_html,
     _is_freebeat_page_url,
     _launch_cdp_browser_session,
     _live_context_page,
     _is_transient_navigation_error,
     _post_json,
+    _turnstile_wait_budget,
+    _wait_for_network_record,
 )
 from platforms.freebeat.plugin import FreebeatPlatform
 from platforms.freebeat.protocol_mailbox import FreebeatProtocolMailboxWorker
@@ -487,8 +490,8 @@ def test_freebeat_send_code_includes_turnstile_token_when_provided():
 
 def test_freebeat_browser_send_code_uses_latest_tw_page_by_default():
     assert _candidate_page_urls() == [
-        "https://freebeat.ai/tw",
         "https://freebeat.ai/tw/login?redirectTo=%2Ftw",
+        "https://freebeat.ai/tw",
     ]
 
 
@@ -499,9 +502,74 @@ def test_freebeat_browser_extracts_current_deployment_id_for_protocol_login():
 
 def test_freebeat_browser_send_code_tries_login_pages_after_root():
     assert _candidate_page_urls("/") == [
-        "https://freebeat.ai/",
         "https://freebeat.ai/login?redirectTo=%2F",
+        "https://freebeat.ai/",
     ]
+
+
+def test_freebeat_headed_cdp_turnstile_wait_uses_manual_flow_budget():
+    assert _turnstile_wait_budget(30, cdp_url="http://launcher.test", headless=False) == 75
+    assert _turnstile_wait_budget(90, cdp_url="http://launcher.test", headless=False) == 90
+    assert _turnstile_wait_budget(30, cdp_url="", headless=False) == 30
+    assert (
+        _turnstile_wait_budget(
+            30,
+            cdp_url="http://launcher.test",
+            headless=False,
+            remaining_seconds=52,
+        )
+        == 52
+    )
+
+
+def test_freebeat_cdp_page_applies_locale_timezone_and_headers():
+    calls: list[tuple[str, object]] = []
+
+    class Session:
+        def send(self, method, params):
+            calls.append((method, params))
+
+    class Context:
+        def set_extra_http_headers(self, headers):
+            calls.append(("headers", headers))
+
+        def new_cdp_session(self, page):
+            calls.append(("page", page))
+            return Session()
+
+    page = object()
+    result = _configure_cdp_page(
+        Context(),
+        page,
+        accept_language="zh-HK,zh;q=0.9",
+        locale="zh-HK",
+        timezone_id="Asia/Hong_Kong",
+    )
+
+    assert result == {"headers": True, "timezone": "Asia/Hong_Kong", "locale": "zh-HK"}
+    assert calls == [
+        ("headers", {"accept-language": "zh-HK,zh;q=0.9"}),
+        ("page", page),
+        ("Emulation.setTimezoneOverride", {"timezoneId": "Asia/Hong_Kong"}),
+        ("Emulation.setLocaleOverride", {"locale": "zh-HK"}),
+    ]
+
+
+def test_freebeat_network_wait_pumps_browser_events_until_record_arrives(monkeypatch):
+    class Page:
+        def __init__(self):
+            self.calls = 0
+
+        def wait_for_timeout(self, timeout):
+            self.calls += 1
+            if self.calls == 2:
+                record["status"] = 200
+
+    record: dict[str, object] = {}
+    page = Page()
+
+    assert _wait_for_network_record(page, record, timeout_seconds=1) is True
+    assert page.calls == 2
 
 
 def test_freebeat_cdp_launcher_http_error_keeps_json_diagnostics(monkeypatch):

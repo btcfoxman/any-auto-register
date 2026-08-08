@@ -373,6 +373,7 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
         { key: 'freebeat_send_code_browser_cdp_launcher_url', label: '发送验证码动态 CDP 启动器地址', placeholder: 'http://172.18.0.1:9321' },
         { key: 'freebeat_send_code_browser_user_agent', label: '发送验证码浏览器 UA', placeholder: 'native' },
         { key: 'freebeat_send_code_turnstile_click_enabled', label: '自动点击 CF 验证器', placeholder: 'true' },
+        { key: 'freebeat_send_code_turnstile_wait_seconds', label: 'CF 验证完成等待秒数', placeholder: '75' },
         { key: 'freebeat_send_code_browser_timeout_seconds', label: '发送验证码超时秒数', placeholder: '120' },
         { key: 'freebeat_send_code_browser_required', label: '浏览器发送失败则直接失败', placeholder: 'false' },
         { key: 'freebeat_auto_questionnaire', label: '注册后自动问卷', placeholder: 'true' },

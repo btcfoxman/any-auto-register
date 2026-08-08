@@ -376,6 +376,7 @@ class LauncherState:
             "--no-first-run",
             "--no-default-browser-check",
             "--password-store=basic",
+            "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
             "--no-sandbox",
             "--window-size=1365,768",

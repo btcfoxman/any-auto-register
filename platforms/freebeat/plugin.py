@@ -243,7 +243,7 @@ class FreebeatPlatform(BasePlatform):
                 browser_send_code_turnstile_wait_seconds=_runtime_float(
                     extra,
                     "freebeat_send_code_turnstile_wait_seconds",
-                    30,
+                    75,
                 ),
                 browser_send_code_accept_language=str(
                     _runtime_value(

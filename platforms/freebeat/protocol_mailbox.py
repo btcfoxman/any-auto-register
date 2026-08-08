@@ -104,7 +104,7 @@ class FreebeatProtocolMailboxWorker:
         browser_send_code_stealth: bool = True,
         browser_send_code_humanize: bool = True,
         browser_send_code_turnstile_click: bool = True,
-        browser_send_code_turnstile_wait_seconds: float = 30.0,
+        browser_send_code_turnstile_wait_seconds: float = 75.0,
         browser_send_code_accept_language: str = FREEBEAT_BROWSER_ACCEPT_LANGUAGE,
         browser_send_code_locale: str = FREEBEAT_BROWSER_LOCALE,
         browser_send_code_timezone: str = FREEBEAT_BROWSER_TIMEZONE,
@@ -137,7 +137,7 @@ class FreebeatProtocolMailboxWorker:
         self.browser_send_code_stealth = bool(browser_send_code_stealth)
         self.browser_send_code_humanize = bool(browser_send_code_humanize)
         self.browser_send_code_turnstile_click = bool(browser_send_code_turnstile_click)
-        self.browser_send_code_turnstile_wait_seconds = max(1.0, float(browser_send_code_turnstile_wait_seconds or 30.0))
+        self.browser_send_code_turnstile_wait_seconds = max(1.0, float(browser_send_code_turnstile_wait_seconds or 75.0))
         self.browser_send_code_accept_language = str(browser_send_code_accept_language or FREEBEAT_BROWSER_ACCEPT_LANGUAGE).strip()
         self.browser_send_code_locale = str(browser_send_code_locale or FREEBEAT_BROWSER_LOCALE).strip()
         self.browser_send_code_timezone = str(browser_send_code_timezone or FREEBEAT_BROWSER_TIMEZONE).strip()

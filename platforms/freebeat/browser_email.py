@@ -34,6 +34,7 @@ FREEBEAT_BROWSER_USER_AGENT = (
 FREEBEAT_BROWSER_TIMEOUT_SECONDS = 120
 FREEBEAT_BROWSER_ENGINE = "auto"
 FREEBEAT_CDP_LAUNCHER_TIMEOUT_SECONDS = 20
+FREEBEAT_CDP_MIN_TURNSTILE_WAIT_SECONDS = 75.0
 
 
 def _deployment_id_from_html(value: Any) -> str:
@@ -51,13 +52,12 @@ def _page_url(frontend_path: str = "") -> str:
 def _candidate_page_urls(frontend_path: str = "") -> list[str]:
     primary_url = _page_url(frontend_path)
     primary_path = urlparse(primary_url).path or "/"
-    urls = [primary_url]
     login_path = (
         "/tw/login?redirectTo=%2Ftw"
         if primary_path == "/tw" or primary_path.startswith("/tw/")
         else "/login?redirectTo=%2F"
     )
-    urls.append(f"{FREEBEAT_BASE}{login_path}")
+    urls = [f"{FREEBEAT_BASE}{login_path}", primary_url]
     return list(dict.fromkeys(urls))
 
 
@@ -831,6 +831,75 @@ def _safe_page_url(page: Any) -> str:
         return ""
 
 
+def _turnstile_wait_budget(
+    configured_seconds: float,
+    *,
+    cdp_url: str = "",
+    headless: bool = True,
+    remaining_seconds: float | None = None,
+) -> float:
+    wait_seconds = max(1.0, float(configured_seconds or 1.0))
+    if str(cdp_url or "").strip() and not headless:
+        wait_seconds = max(wait_seconds, FREEBEAT_CDP_MIN_TURNSTILE_WAIT_SECONDS)
+    if remaining_seconds is not None:
+        wait_seconds = min(wait_seconds, max(1.0, float(remaining_seconds or 1.0)))
+    return wait_seconds
+
+
+def _wait_for_network_record(page: Any, record: dict[str, Any], *, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds or 0.0))
+    while time.monotonic() < deadline:
+        if record:
+            return True
+        remaining_ms = max(1, min(250, int((deadline - time.monotonic()) * 1000)))
+        try:
+            page.wait_for_timeout(remaining_ms)
+        except Exception as exc:
+            if not _is_transient_navigation_error(exc):
+                raise
+            return bool(record)
+    return bool(record)
+
+
+def _configure_cdp_page(
+    context: Any,
+    page: Any,
+    *,
+    accept_language: str,
+    locale: str,
+    timezone_id: str,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    headers = {"accept-language": str(accept_language or FREEBEAT_BROWSER_ACCEPT_LANGUAGE)}
+    try:
+        context.set_extra_http_headers(headers)
+        result["headers"] = True
+    except Exception as exc:
+        result["headers_error"] = str(exc)
+    try:
+        session = context.new_cdp_session(page)
+    except Exception as exc:
+        result["session_error"] = str(exc)
+        return result
+    try:
+        session.send(
+            "Emulation.setTimezoneOverride",
+            {"timezoneId": str(timezone_id or FREEBEAT_BROWSER_TIMEZONE)},
+        )
+        result["timezone"] = str(timezone_id or FREEBEAT_BROWSER_TIMEZONE)
+    except Exception as exc:
+        result["timezone_error"] = str(exc)
+    try:
+        session.send(
+            "Emulation.setLocaleOverride",
+            {"locale": str(locale or FREEBEAT_BROWSER_LOCALE)},
+        )
+        result["locale"] = str(locale or FREEBEAT_BROWSER_LOCALE)
+    except Exception as exc:
+        result["locale_error"] = str(exc)
+    return result
+
+
 def _is_retryable_network_error(exc: Exception) -> bool:
     message = str(exc)
     return any(
@@ -1161,10 +1230,18 @@ def _turnstile_state(page) -> dict[str, Any]:
     )
 
 
-def _wait_for_turnstile_token(page, *, timeout_seconds: float = 18.0) -> dict[str, Any]:
+def _wait_for_turnstile_token(
+    page,
+    *,
+    timeout_seconds: float = 18.0,
+    response_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     deadline = time.monotonic() + max(1.0, float(timeout_seconds or 18.0))
     last_state: dict[str, Any] = {}
     while time.monotonic() < deadline:
+        if response_record:
+            last_state["requestCaptured"] = True
+            return last_state
         if not _is_freebeat_page_url(page.url):
             return {"token": "", "external": True, "url": page.url}
         try:
@@ -1295,7 +1372,7 @@ def send_email_verify_code_in_browser(
             cdp_launcher_session = _launch_cdp_browser_session(
                 cdp_launcher_url,
                 proxy=proxy,
-                page_url=page_urls[0],
+                page_url="about:blank",
                 headless=headless,
                 locale=locale,
                 timezone_id=timezone_id,
@@ -1370,6 +1447,19 @@ def send_email_verify_code_in_browser(
                 close_page = False
                 log_fn("Freebeat browser CDP mode reuses the launcher page and monitors the whole browser context")
                 log_fn("Freebeat browser CDP mode skips init-script stealth/capture hooks")
+                cdp_environment = _configure_cdp_page(
+                    context,
+                    page,
+                    accept_language=accept_language,
+                    locale=locale,
+                    timezone_id=timezone_id,
+                )
+                log_fn(
+                    "Freebeat browser CDP environment "
+                    f"timezone={'ok' if cdp_environment.get('timezone') else 'unavailable'} "
+                    f"locale={'ok' if cdp_environment.get('locale') else 'unavailable'} "
+                    f"headers={'ok' if cdp_environment.get('headers') else 'unavailable'}"
+                )
             elif stealth_enabled:
                 _install_stealth_evasions(
                     page,
@@ -1479,6 +1569,7 @@ def send_email_verify_code_in_browser(
             ]
             send_reject_patterns = ["forgot", "google", "accounts\\.google", "oauth", "apple", "facebook"]
             last_action: dict[str, Any] = {}
+            attempt_diagnostics: list[dict[str, Any]] = []
             attempted_urls: list[str] = []
             per_url_timeout = max(15.0, (timeout_ms / 1000) / max(1, len(page_urls)))
             verification_retry_count = 0
@@ -1573,10 +1664,7 @@ def send_email_verify_code_in_browser(
                             }
                             response_record.clear()
                         if not response_record:
-                            for _ in range(8):
-                                if response_record:
-                                    break
-                                time.sleep(0.5)
+                            _wait_for_network_record(page, response_record, timeout_seconds=4.0)
                             if response_record and _is_send_code_verification_failed(response_record.get("body")):
                                 last_action["verification_failed_response"] = {
                                     "status": response_record.get("status"),
@@ -1600,8 +1688,24 @@ def send_email_verify_code_in_browser(
                                     except Exception as exc:
                                         if not _is_transient_navigation_error(exc):
                                             last_action["turnstile_click_error"] = str(exc)
+                                remaining_for_page = per_url_timeout - (time.monotonic() - start) - 4.0
+                                effective_turnstile_wait = _turnstile_wait_budget(
+                                    turnstile_wait_seconds,
+                                    cdp_url=cdp_url,
+                                    headless=bool(headless),
+                                    remaining_seconds=remaining_for_page,
+                                )
+                                if turnstile_click.get("clicked"):
+                                    log_fn(
+                                        "Freebeat Turnstile challenge submitted; "
+                                        f"waiting up to {effective_turnstile_wait:.0f}s without resubmitting email"
+                                    )
                                 try:
-                                    token_state = _wait_for_turnstile_token(page, timeout_seconds=turnstile_wait_seconds)
+                                    token_state = _wait_for_turnstile_token(
+                                        page,
+                                        timeout_seconds=effective_turnstile_wait,
+                                        response_record=response_record,
+                                    )
                                 except Exception as exc:
                                     if not _is_transient_navigation_error(exc):
                                         raise
@@ -1688,6 +1792,19 @@ def send_email_verify_code_in_browser(
                                 ):
                                     last_action["cf_verification_failed"] = True
                                     last_action["stage"] = "cf_verification_failed"
+                                if response_record:
+                                    break
+                                if (
+                                    last_action.get("cf_verification_required")
+                                    and not str(token_state.get("token") or "").strip()
+                                ):
+                                    last_action["stage"] = "turnstile_pending_timeout"
+                                    attempt_diagnostics.append(dict(last_action))
+                                    log_fn(
+                                        "Freebeat Turnstile challenge still pending; "
+                                        "will change login route without resubmitting the same challenge"
+                                    )
+                                    break
                             if response_record:
                                 break
                             if last_action.get("cf_verification_failed"):
@@ -1802,6 +1919,8 @@ def send_email_verify_code_in_browser(
                     break
                 if last_action.get("terminal_turnstile_failure"):
                     break
+                if last_action.get("stage") == "turnstile_pending_timeout":
+                    continue
 
             if not response_record:
                 page = _live_context_page(context, page, create=False)
@@ -1821,7 +1940,7 @@ def send_email_verify_code_in_browser(
                     f"turnstile_click={'on' if turnstile_click_enabled else 'off'} solver={'on' if turnstile_solver else 'off'} "
                     f"locale={context_options.get('locale')} timezone={context_options.get('timezone_id')} "
                     f"tried={attempted_urls} page={_safe_page_url(page)} "
-                    f"title={title!r} action={last_action}"
+                    f"title={title!r} action={last_action} attempts={attempt_diagnostics[-2:]}"
                 )
             if int(response_record.get("status") or 0) != 200:
                 raise RuntimeError(
