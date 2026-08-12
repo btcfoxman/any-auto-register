@@ -64,6 +64,7 @@ LINGYA_POST_PUBLISH_QUOTA_DELAY_SECONDS = 10
 
 _task_locks: dict[str, threading.Lock] = {}
 _task_locks_guard = threading.Lock()
+_register_task_create_lock = threading.Lock()
 
 
 def _lingya_status_label(value: Any) -> str:
@@ -218,12 +219,41 @@ def create_task(
 
 def create_register_task(payload: dict[str, Any]) -> dict[str, Any]:
     count = max(int(payload.get("count", 1) or 1), 1)
-    return create_task(
-        task_type=TASK_TYPE_REGISTER,
-        platform=str(payload.get("platform", "")),
-        payload=payload,
-        progress_total=count,
-    )
+    platform = str(payload.get("platform", "")).strip()
+    deduplicate_active = _bool_config(payload.get("deduplicate_active"), False)
+
+    with _register_task_create_lock:
+        if deduplicate_active:
+            with Session(engine) as session:
+                existing = session.exec(
+                    select(TaskModel)
+                    .where(TaskModel.type == TASK_TYPE_REGISTER)
+                    .where(TaskModel.platform == platform)
+                    .where(
+                        TaskModel.status.in_(
+                            {
+                                TASK_STATUS_PENDING,
+                                TASK_STATUS_CLAIMED,
+                                TASK_STATUS_RUNNING,
+                                TASK_STATUS_CANCEL_REQUESTED,
+                            }
+                        )
+                    )
+                    .order_by(TaskModel.created_at.desc())
+                ).first()
+                if existing:
+                    task = serialize_task(existing)
+                    task["deduplicated"] = True
+                    return task
+
+        task = create_task(
+            task_type=TASK_TYPE_REGISTER,
+            platform=platform,
+            payload=payload,
+            progress_total=count,
+        )
+        task["deduplicated"] = False
+        return task
 
 
 def create_account_check_task(account_id: int) -> dict[str, Any]:
