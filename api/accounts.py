@@ -5,11 +5,17 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from application.account_exports import AccountExportsService, ExportArtifact
 from application.accounts import AccountsService
-from domain.accounts import AccountCreateCommand, AccountExportSelection, AccountQuery, AccountUpdateCommand
+from domain.accounts import (
+    AccountBatchDeleteCommand,
+    AccountCreateCommand,
+    AccountExportSelection,
+    AccountQuery,
+    AccountUpdateCommand,
+)
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 service = AccountsService()
@@ -65,6 +71,23 @@ class BatchExportRequest(BaseModel):
 class LowQuotaRangeUpdateRequest(BaseModel):
     min_exclusive: float
     max_exclusive: float
+
+
+class AccountDeleteSelector(BaseModel):
+    account_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("account_id", "source_account_id"),
+    )
+    email: str = ""
+    user_id: str = ""
+
+
+class AccountBatchDeleteRequest(BaseModel):
+    account_ids: list[int] = Field(default_factory=list, max_length=1000)
+    emails: list[str] = Field(default_factory=list, max_length=1000)
+    user_ids: list[str] = Field(default_factory=list, max_length=1000)
+    accounts: list[AccountDeleteSelector] = Field(default_factory=list, max_length=1000)
 
 
 def _stream_artifact(artifact: ExportArtifact) -> StreamingResponse:
@@ -263,6 +286,31 @@ def delete_platform_low_quota_accounts(
             platform,
             min_exclusive=min_exclusive,
             max_exclusive=max_exclusive,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/platform/{platform}/batch-delete")
+def batch_delete_platform_accounts(platform: str, body: AccountBatchDeleteRequest):
+    account_ids = list(body.account_ids)
+    emails = list(body.emails)
+    user_ids = list(body.user_ids)
+    for selector in body.accounts:
+        if selector.account_id is not None:
+            account_ids.append(selector.account_id)
+        if selector.email:
+            emails.append(selector.email)
+        if selector.user_id:
+            user_ids.append(selector.user_id)
+    try:
+        return service.batch_delete_accounts(
+            AccountBatchDeleteCommand(
+                platform=platform,
+                account_ids=account_ids,
+                emails=emails,
+                user_ids=user_ids,
+            )
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

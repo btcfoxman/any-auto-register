@@ -89,6 +89,92 @@ def test_delete_account(client):
     assert get_resp.status_code == 404
 
 
+def test_downstream_batch_delete_accounts_is_platform_scoped(client):
+    by_email = _create_account(
+        client,
+        platform="freebeat",
+        email="delete-by-email@example.com",
+        user_id="freebeat-email-user",
+        credentials={"access_token": "secret"},
+    ).json()
+    by_id = _create_account(
+        client,
+        platform="freebeat",
+        email="delete-by-id@example.com",
+        user_id="freebeat-id-user",
+    ).json()
+    by_user_id = _create_account(
+        client,
+        platform="freebeat",
+        email="delete-by-user@example.com",
+        user_id="freebeat-user-id",
+    ).json()
+    other_platform = _create_account(
+        client,
+        platform="chatgpt",
+        email="delete-by-email@example.com",
+        user_id="freebeat-user-id",
+    ).json()
+
+    resp = client.post(
+        "/api/accounts/platform/freebeat/batch-delete",
+        json={
+            "account_ids": [by_id["id"]],
+            "emails": ["DELETE-BY-EMAIL@example.com", "missing@example.com"],
+            "accounts": [{"user_id": "freebeat-user-id"}],
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["platform"] == "freebeat"
+    assert data["matched"] == 3
+    assert data["deleted"] == 3
+    assert {item["id"] for item in data["deleted_accounts"]} == {
+        by_email["id"],
+        by_id["id"],
+        by_user_id["id"],
+    }
+    assert data["not_found"] == {
+        "account_ids": [],
+        "emails": ["missing@example.com"],
+        "user_ids": [],
+    }
+    assert client.get(f"/api/accounts/{by_email['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{by_id['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{by_user_id['id']}").status_code == 404
+    assert client.get(f"/api/accounts/{other_platform['id']}").status_code == 200
+
+
+def test_downstream_batch_delete_rejects_empty_selector(client):
+    account = _create_account(client, platform="freebeat", email="keep@example.com").json()
+
+    resp = client.post("/api/accounts/platform/freebeat/batch-delete", json={})
+
+    assert resp.status_code == 400
+    assert "at least one" in resp.json()["detail"]
+    assert client.get(f"/api/accounts/{account['id']}").status_code == 200
+
+
+def test_downstream_batch_delete_accepts_bearer_app_password(client, monkeypatch):
+    monkeypatch.delenv("APP_PASSWORD", raising=False)
+    account = _create_account(client, platform="freebeat", email="protected@example.com").json()
+    monkeypatch.setenv("APP_PASSWORD", "callback-secret")
+    body = {"accounts": [{"source_account_id": account["id"]}]}
+
+    unauthorized = client.post("/api/accounts/platform/freebeat/batch-delete", json=body)
+    authorized = client.post(
+        "/api/accounts/platform/freebeat/batch-delete",
+        json=body,
+        headers={"Authorization": "Bearer callback-secret"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    assert authorized.json()["deleted"] == 1
+
+
 def test_delete_platform_low_quota_accounts_uses_configurable_range(client):
     low = _create_account(
         client,

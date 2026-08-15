@@ -5,6 +5,7 @@ import io
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from core.datetime_utils import serialize_datetime
@@ -319,6 +320,72 @@ class AccountsRepository:
             session.delete(model)
             session.commit()
             return True
+
+    def delete_accounts_by_identifiers(
+        self,
+        platform: str,
+        *,
+        account_ids: list[int],
+        emails: list[str],
+        user_ids: list[str],
+    ) -> dict:
+        platform = str(platform or "").strip().lower()
+        id_set = set(account_ids)
+        email_set = set(emails)
+        user_id_set = set(user_ids)
+        clauses = []
+        if id_set:
+            clauses.append(AccountModel.id.in_(id_set))
+        if email_set:
+            clauses.append(func.lower(AccountModel.email).in_(email_set))
+        if user_id_set:
+            clauses.append(AccountModel.user_id.in_(user_id_set))
+        if not platform or not clauses:
+            raise ValueError("platform and at least one account identifier are required")
+
+        with Session(engine) as session:
+            models = session.exec(
+                select(AccountModel)
+                .where(AccountModel.platform == platform)
+                .where(or_(*clauses))
+                .order_by(AccountModel.id)
+            ).all()
+            matched_ids: set[int] = set()
+            matched_emails: set[str] = set()
+            matched_user_ids: set[str] = set()
+            deleted: list[dict] = []
+            for model in models:
+                account_id = int(model.id or 0)
+                email = str(model.email or "").strip()
+                email_key = email.lower()
+                user_id = str(model.user_id or "").strip()
+                if account_id in id_set:
+                    matched_ids.add(account_id)
+                if email_key in email_set:
+                    matched_emails.add(email_key)
+                if user_id in user_id_set:
+                    matched_user_ids.add(user_id)
+                purge_account_graph(session, account_id)
+                session.delete(model)
+                deleted.append({"id": account_id, "email": email, "user_id": user_id})
+            session.commit()
+        return {
+            "ok": True,
+            "platform": platform,
+            "requested": {
+                "account_ids": len(account_ids),
+                "emails": len(emails),
+                "user_ids": len(user_ids),
+            },
+            "matched": len(deleted),
+            "deleted": len(deleted),
+            "deleted_accounts": deleted,
+            "not_found": {
+                "account_ids": [value for value in account_ids if value not in matched_ids],
+                "emails": [value for value in emails if value not in matched_emails],
+                "user_ids": [value for value in user_ids if value not in matched_user_ids],
+            },
+        }
 
     def delete_accounts_by_quota_range(self, platform: str, *, min_exclusive: int | float, max_exclusive: int | float) -> dict:
         platform = str(platform or "").strip()

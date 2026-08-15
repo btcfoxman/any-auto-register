@@ -10,6 +10,7 @@ from typing import TypeAlias
 from core.datetime_utils import serialize_datetime
 from core.config_store import config_store
 from domain.accounts import (
+    AccountBatchDeleteCommand,
     AccountCreateCommand,
     AccountImportLine,
     AccountQuery,
@@ -137,6 +138,35 @@ class AccountsService:
 
     def delete_account(self, account_id: int) -> dict:
         return {"ok": self.repository.delete(account_id)}
+
+    def batch_delete_accounts(self, command: AccountBatchDeleteCommand) -> dict:
+        platform = str(command.platform or "").strip().lower()
+        if not platform:
+            raise ValueError("platform is required")
+
+        account_ids = list(dict.fromkeys(int(value) for value in command.account_ids if int(value) > 0))
+        emails = list(
+            dict.fromkeys(
+                text.lower()
+                for value in command.emails
+                if (text := str(value or "").strip())
+            )
+        )
+        user_ids = list(
+            dict.fromkeys(
+                text
+                for value in command.user_ids
+                if (text := str(value or "").strip())
+            )
+        )
+        if not account_ids and not emails and not user_ids:
+            raise ValueError("at least one account_id, email, or user_id is required")
+        return self.repository.delete_accounts_by_identifiers(
+            platform,
+            account_ids=account_ids,
+            emails=emails,
+            user_ids=user_ids,
+        )
 
     def get_low_quota_delete_ranges(self) -> dict:
         defaults = _default_low_quota_ranges()

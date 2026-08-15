@@ -73,6 +73,14 @@ class AccountUpdateCommand:
 
 
 @dataclass(slots=True)
+class AccountBatchDeleteCommand:
+    platform: str
+    account_ids: list[int] = field(default_factory=list)
+    emails: list[str] = field(default_factory=list)
+    user_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class AccountImportLine:
     email: str
     password: str
