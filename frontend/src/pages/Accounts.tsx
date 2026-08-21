@@ -491,6 +491,11 @@ function RegisterModal({
   }, [selection.identityProvider, selection.oauthProvider, selection.executorType, supportedExecutors, reusableBrowser])
 
   const defaultMailboxProvider = (configOptions.mailbox_settings || []).find(item => item.is_default) || configOptions.mailbox_settings?.[0] || null
+  const platformMailboxProviderKey = String(config?.[`${platform}_mail_provider`] || '').trim()
+  const platformMailboxProvider = (configOptions.mailbox_settings || []).find(
+    item => item.enabled && item.provider_key === platformMailboxProviderKey,
+  ) || null
+  const effectiveMailboxProvider = platformMailboxProvider || defaultMailboxProvider
   const defaultSmsProvider = (configOptions.sms_settings || []).find(item => item.is_default) || configOptions.sms_settings?.[0] || null
   const defaultSmsDefinition = defaultSmsProvider
     ? (configOptions.sms_providers || []).find(item => item.value === defaultSmsProvider.provider_key)
@@ -528,10 +533,10 @@ function RegisterModal({
         chrome_cdp_url: cfg.chrome_cdp_url,
       }
       if (selection.identityProvider === 'mailbox') {
-        if (!defaultMailboxProvider?.provider_key) {
+        if (!effectiveMailboxProvider?.provider_key) {
           throw new Error('未配置默认邮箱 provider，请先到设置页启用一个邮箱 provider')
         }
-        extra.mail_provider = defaultMailboxProvider.provider_key
+        extra.mail_provider = effectiveMailboxProvider.provider_key
       }
       if (selection.identityProvider === 'manual_phone') {
         if (!defaultSmsProvider?.provider_key) {

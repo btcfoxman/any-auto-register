@@ -41,6 +41,7 @@ class ConfigRepository:
         "freebeat_retire_low_credit_enabled", "freebeat_retire_credit_threshold",
         "freebeat_retire_after_hours",
         "freebeat_auto_questionnaire",
+        "freebeat_mail_provider",
         "freebeat_send_code_browser_enabled", "freebeat_send_code_browser_headless",
         "freebeat_send_code_browser_required", "freebeat_send_code_browser_timeout_seconds",
         "freebeat_send_code_browser_cdp_url", "freebeat_send_code_browser_cdp_launcher_url",

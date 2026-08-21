@@ -47,6 +47,7 @@ function getDefaultProviderKey(settings: ProviderSetting[] = []) {
 
 export default function Register() {
   const [form, setForm] = useState<Record<string, any>>(DEFAULT_FORM)
+  const [runtimeConfig, setRuntimeConfig] = useState<Record<string, string>>({})
   const [platforms, setPlatforms] = useState<any[]>([])
   const [configOptions, setConfigOptions] = useState<ConfigOptionsResponse>({
     mailbox_providers: [],
@@ -91,6 +92,7 @@ export default function Register() {
       getPlatforms().catch(() => []),
       getConfigOptions().catch(() => null),
     ]).then(([cfg, ps, options]) => {
+      setRuntimeConfig(cfg || {})
       setPlatforms(ps || [])
       if (options) {
         setConfigOptions(options)
@@ -178,6 +180,17 @@ export default function Register() {
       set('mail_provider', defaultProviderKey)
     }
   }, [form.identity_provider, form.mail_provider, configOptions.mailbox_settings])
+
+  useEffect(() => {
+    const providerKey = String(runtimeConfig[`${form.platform}_mail_provider`] || '').trim()
+    const providerEnabled = (configOptions.mailbox_settings || []).some(
+      item => item.enabled && item.provider_key === providerKey,
+    )
+    if (!providerKey || !providerEnabled) return
+    setForm(current => current.mail_provider === providerKey
+      ? current
+      : { ...current, mail_provider: providerKey })
+  }, [form.platform, runtimeConfig, configOptions.mailbox_settings])
 
   useEffect(() => {
     if (!currentMailboxProvider) return

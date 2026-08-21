@@ -102,6 +102,10 @@ def test_freebeat_retire_settings_are_configurable():
     }.issubset(allowed)
 
 
+def test_freebeat_mail_provider_is_configurable():
+    assert "freebeat_mail_provider" in ConfigRepository().get_allowed_keys()
+
+
 def test_freebeat_daily_signin_targets_only_due_active_accounts():
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     eligible_id = _create_freebeat_account("eligible@example.com")

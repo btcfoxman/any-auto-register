@@ -693,6 +693,21 @@ def _task_config_value(extra: dict[str, Any], key: str, default: Any = "") -> An
         return default
 
 
+def _resolve_mailbox_provider_for_task(platform_name: str, extra: dict[str, Any]) -> str:
+    explicit_provider = str(extra.get("mail_provider") or "").strip()
+    if explicit_provider:
+        return explicit_provider
+
+    platform_key = f"{str(platform_name or '').strip().lower()}_mail_provider"
+    platform_provider = str(_task_config_value(extra, platform_key, "") or "").strip()
+    if platform_provider:
+        return platform_provider
+
+    from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+    return str(ProviderSettingsRepository().get_default_provider_key("mailbox") or "").strip()
+
+
 def _merge_lingya_followup_data(account, data: dict[str, Any]) -> None:
     extra = dict(getattr(account, "extra", {}) or {})
     overview = dict(extra.get("account_overview") or {})
@@ -995,10 +1010,7 @@ def _build_platform_instance(platform_name: str, payload: dict[str, Any], logger
     identity_provider = normalize_identity_provider(extra.get("identity_provider", "mailbox"))
     mailbox = shared_mailbox
     if mailbox is None and identity_provider == "mailbox":
-        if not extra.get("mail_provider"):
-            from infrastructure.provider_settings_repository import ProviderSettingsRepository
-
-            extra["mail_provider"] = ProviderSettingsRepository().get_default_provider_key("mailbox")
+        extra["mail_provider"] = _resolve_mailbox_provider_for_task(platform_name, extra)
         mailbox = create_mailbox(
             provider=extra.get("mail_provider", ""),
             extra=extra,
@@ -1122,6 +1134,8 @@ def _looks_like_proxy_network_error(error: Any) -> bool:
     text = str(error or "").strip().lower()
     if not text:
         return False
+    if _looks_like_mailbox_delivery_error(text):
+        return False
     markers = (
         "curl: (5)",
         "curl: (6)",
@@ -1136,6 +1150,23 @@ def _looks_like_proxy_network_error(error: Any) -> bool:
         "timed out",
     )
     return any(marker in text for marker in markers)
+
+
+def _looks_like_mailbox_delivery_error(error: Any) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "cloud mail verification code wait timed out",
+            "cloud mail verification link wait timed out",
+            "获取 freebeat 邮箱验证码超时",
+            "获取 quickframe 邮箱验证码超时",
+            "邮箱验证码等待超时",
+            "邮箱验证码超时",
+        )
+    )
 
 
 def _looks_like_higg_risk_error(error: Any) -> bool:
@@ -1249,6 +1280,7 @@ def _auto_followup_windsurf_payment(
 
 
 def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
+    from core.base_identity import normalize_identity_provider
     from core.proxy_pool import proxy_pool
 
     count = max(int(payload.get("count", 1) or 1), 1)
@@ -1257,6 +1289,10 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     email = payload.get("email") or None
     password = payload.get("password") or None
     extra = dict(payload.get("extra") or {})
+    identity_provider = normalize_identity_provider(extra.get("identity_provider", "mailbox"))
+    if identity_provider == "mailbox":
+        extra["mail_provider"] = _resolve_mailbox_provider_for_task(platform_name, extra)
+        payload = {**payload, "extra": extra}
     proxy = _normalize_proxy_url(payload.get("proxy")) or None
     use_proxy_pool = _bool_config(
         payload.get("use_proxy_pool")
@@ -1316,14 +1352,9 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
     # multiple provider accounts simultaneously).
     shared_mailbox = None
     try:
-        from core.base_identity import normalize_identity_provider
         from core.base_mailbox import create_mailbox
 
-        identity_provider = normalize_identity_provider(extra.get("identity_provider", "mailbox"))
         if identity_provider == "mailbox":
-            if not extra.get("mail_provider"):
-                from infrastructure.provider_settings_repository import ProviderSettingsRepository
-                extra["mail_provider"] = ProviderSettingsRepository().get_default_provider_key("mailbox")
             shared_mailbox = create_mailbox(
                 provider=extra.get("mail_provider", ""),
                 extra=extra,
@@ -1510,10 +1541,17 @@ def _execute_register_task(payload: dict[str, Any], logger: TaskLogger) -> None:
                     logger.add_cashier_url(cashier_url)
                 return True
             except Exception as exc:
-                if resolved_proxy:
+                raw_error = str(exc)
+                mailbox_delivery_error = _looks_like_mailbox_delivery_error(raw_error)
+                if resolved_proxy and not mailbox_delivery_error:
                     proxy_pool.report_fail(resolved_proxy)
-                error = str(exc)
+                error = f"邮箱投递失败: {raw_error}" if mailbox_delivery_error else raw_error
                 last_error = error
+                if mailbox_delivery_error:
+                    logger.record_error(error)
+                    logger.log(f"✗ 注册失败: {error}", level="error")
+                    _save_task_log(platform_name, email or "", "failed", error=error)
+                    return error
                 can_retry_proxy = bool(resolved_proxy and use_proxy_pool and attempt < proxy_retry_attempts)
                 can_retry_direct = bool(resolved_proxy and proxy_direct_fallback)
                 can_retry_fixed = bool(attempts)

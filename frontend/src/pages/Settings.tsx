@@ -367,6 +367,7 @@ const TABS: { id: string; label: string; icon: any; sections?: any[] }[] = [
       section: '注册后自动化',
       desc: 'Freebeat 邮箱验证码注册/登录完成后的自动领取动作。',
       items: [
+        { key: 'freebeat_mail_provider', label: '注册邮箱 Provider' },
         { key: 'freebeat_send_code_browser_enabled', label: '通过浏览器发送邮箱验证码', placeholder: 'true' },
         { key: 'freebeat_send_code_browser_headless', label: '发送验证码浏览器无头模式', placeholder: 'true' },
         { key: 'freebeat_send_code_browser_cdp_url', label: '发送验证码外部浏览器 CDP 地址', placeholder: 'http://127.0.0.1:9222' },
@@ -1064,6 +1065,17 @@ export default function Settings({ embedded, defaultTab }: { embedded?: boolean;
   const getSelectOptions = (key: string) => {
     if (key === 'default_executor') return configOptions.executor_options || []
     if (key === 'default_identity_provider') return configOptions.identity_mode_options || []
+    if (key.endsWith('_mail_provider')) {
+      return [
+        { label: '跟随任务选择或全局默认邮箱', value: '' },
+        ...((configOptions.mailbox_settings || [])
+          .filter(item => item.enabled)
+          .map(item => ({
+            label: item.display_name || item.catalog_label || item.provider_key,
+            value: item.provider_key,
+          }))),
+      ]
+    }
     if (key === 'default_oauth_provider') {
       return [
         { label: '不预选，由当前页面选择', value: '' },

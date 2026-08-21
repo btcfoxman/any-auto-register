@@ -470,3 +470,88 @@ def test_freebeat_register_falls_back_direct_after_proxy_network_failure(monkeyp
     assert saved[0].extra.get("proxy_url") in (None, "")
     assert ("fail", "socks5://xray:20005") in events
     assert not any(event[0] == "success" for event in events)
+
+
+def test_mailbox_delivery_timeout_is_not_a_proxy_network_error():
+    error = "Cloud Mail verification code wait timed out (120s)"
+
+    assert tasks._looks_like_mailbox_delivery_error(error) is True
+    assert tasks._looks_like_proxy_network_error(error) is False
+    assert tasks._looks_like_proxy_network_error(
+        "Failed to perform, curl: (28) Connection timed out after 8000 milliseconds"
+    ) is True
+
+
+def test_freebeat_mailbox_timeout_does_not_rotate_or_penalize_proxy(monkeypatch):
+    resolved: list[str | None] = []
+    events: list[tuple[str, str]] = []
+
+    class FakePlatform:
+        def register(self, email=None, password=None):
+            raise TimeoutError("Cloud Mail verification code wait timed out (120s)")
+
+    monkeypatch.setattr(tasks, "get", lambda platform_name: object())
+    monkeypatch.setattr(tasks, "_resolve_sms_provider_for_task", lambda extra: ("", {}))
+    monkeypatch.setattr(tasks, "_preflight_platform_proxy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tasks, "_save_task_log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "core.proxy_pool.proxy_pool.acquire",
+        lambda **kwargs: "socks5://xray:20005",
+    )
+    monkeypatch.setattr("core.proxy_pool.proxy_pool.release", lambda url: None)
+    monkeypatch.setattr(
+        "core.proxy_pool.proxy_pool.report_fail",
+        lambda url: events.append(("fail", url)),
+    )
+
+    def fake_build_platform_instance(
+        platform_name,
+        payload,
+        logger,
+        resolved_proxy=None,
+        shared_mailbox=None,
+    ):
+        resolved.append(resolved_proxy)
+        return FakePlatform()
+
+    monkeypatch.setattr(tasks, "_build_platform_instance", fake_build_platform_instance)
+
+    logger = _Logger()
+    tasks._execute_register_task(
+        {
+            "platform": "freebeat",
+            "count": 1,
+            "concurrency": 1,
+            "executor_type": "protocol",
+            "use_proxy_pool": True,
+            "proxy_retry_attempts": 4,
+            "extra": {"identity_provider": "manual_phone"},
+        },
+        logger,
+    )
+
+    assert logger.finished == tasks.TASK_STATUS_FAILED
+    assert resolved == ["socks5://xray:20005"]
+    assert events == []
+    assert any("邮箱投递失败" in message for message in logger.messages)
+
+
+def test_mailbox_provider_resolution_prefers_task_then_platform_then_default(monkeypatch):
+    platform_provider = {"value": "cloud_mail_aiid"}
+    monkeypatch.setattr(
+        tasks,
+        "_task_config_value",
+        lambda extra, key, default="": platform_provider["value"] if key == "freebeat_mail_provider" else default,
+    )
+    monkeypatch.setattr(
+        "infrastructure.provider_settings_repository.ProviderSettingsRepository.get_default_provider_key",
+        lambda self, provider_type: "cloud_mail_default",
+    )
+
+    assert tasks._resolve_mailbox_provider_for_task(
+        "freebeat",
+        {"mail_provider": "cloud_mail_task"},
+    ) == "cloud_mail_task"
+    assert tasks._resolve_mailbox_provider_for_task("freebeat", {}) == "cloud_mail_aiid"
+    platform_provider["value"] = ""
+    assert tasks._resolve_mailbox_provider_for_task("freebeat", {}) == "cloud_mail_default"
