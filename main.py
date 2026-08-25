@@ -69,6 +69,9 @@ from providers.registry import load_all as load_providers
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    from infrastructure.provider_bootstrap import configure_mail_center_pool_from_env
+    if configure_mail_center_pool_from_env():
+        print("[OK] Mail Center 动态邮箱池已由部署环境装配")
     load_all()
     load_providers()
     print("[OK] 数据库初始化完成")

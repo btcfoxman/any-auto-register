@@ -5,7 +5,7 @@ import html
 import logging
 import re
 import requests
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +231,17 @@ def _create_cloud_mail(extra: dict, proxy: str | None) -> 'BaseMailbox':
     )
 
 
+def _create_mail_center_pool(extra: dict, proxy: str | None) -> 'BaseMailbox':
+    return MailCenterPoolMailbox(
+        api_url=extra.get("mail_center_api_url", ""),
+        integration_token=extra.get("mail_center_integration_token", ""),
+        strategy=extra.get("mail_center_domain_strategy", "round_robin"),
+        domain=extra.get("mail_center_domain", ""),
+        prefix=extra.get("mail_center_prefix", ""),
+        proxy=proxy,
+    )
+
+
 def _create_testmail(extra: dict, proxy: str | None) -> 'BaseMailbox':
     return TestmailMailbox(
         api_url=extra.get("testmail_api_url", ""),
@@ -282,6 +293,7 @@ MAILBOX_FACTORY_REGISTRY = {
     "moemail_api": _create_moemail,
     "cfworker_admin_api": _create_cfworker,
     "cloud_mail_api": _create_cloud_mail,
+    "mail_center_pool_api": _create_mail_center_pool,
     "testmail_api": _create_testmail,
     "local_ms_pool": _create_local_ms_pool,
     "laoudo_api": _create_laoudo,
@@ -294,6 +306,7 @@ MAILBOX_FACTORY_REGISTRY = {
     "moemail": _create_moemail,
     "cfworker": _create_cfworker,
     "cloud_mail": _create_cloud_mail,
+    "mail_center_pool": _create_mail_center_pool,
     "testmail": _create_testmail,
     "local_ms": _create_local_ms_pool,
     "laoudo": _create_laoudo,
@@ -1464,6 +1477,154 @@ class CloudMailMailbox(BaseMailbox):
             time.sleep(3)
 
         raise TimeoutError(f"Cloud Mail verification link wait timed out ({timeout}s)")
+
+
+class MailCenterPoolMailbox(CloudMailMailbox):
+    """Mail Center central multi-domain pool with policy-based domain selection."""
+
+    STRATEGIES = {"round_robin", "random", "least_used"}
+
+    def __init__(
+        self,
+        api_url: str,
+        integration_token: str,
+        strategy: str = "round_robin",
+        domain: str = "",
+        prefix: str = "",
+        proxy: str = None,
+    ):
+        self.api = _normalize_api_base_url(api_url, default="", label="Mail Center API URL")
+        self.integration_token = str(integration_token or "").strip()
+        requested_strategy = str(strategy or "round_robin").strip().lower()
+        self.strategy = requested_strategy if requested_strategy in self.STRATEGIES else "round_robin"
+        self.domain = str(domain or "").strip().lstrip("@").lower()
+        self.prefix = re.sub(r"[^a-z0-9._-]+", "", str(prefix or "").strip().lower()).strip(".")
+        self.proxy = {"http": proxy, "https": proxy} if proxy else None
+
+    @classmethod
+    def from_config(cls, config: dict) -> 'MailCenterPoolMailbox':
+        return cls(
+            api_url=config.get("mail_center_api_url", ""),
+            integration_token=config.get("mail_center_integration_token", ""),
+            strategy=config.get("mail_center_domain_strategy", "round_robin"),
+            domain=config.get("mail_center_domain", ""),
+            prefix=config.get("mail_center_prefix", ""),
+        )
+
+    def _assert_ready(self) -> None:
+        if not self.integration_token:
+            raise RuntimeError("Mail Center integration token is not configured")
+
+    def _headers(self) -> dict:
+        return {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "authorization": f"Bearer {self.integration_token}",
+        }
+
+    def _post_json(self, path: str, body: dict, *, operation: str) -> object:
+        self._assert_ready()
+        with suppress_insecure_request_warning():
+            resp = requests.post(
+                f"{self.api.rstrip('/')}{path}",
+                json=body,
+                headers=self._headers(),
+                proxies=self.proxy,
+                timeout=15,
+            )
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            message = str(getattr(resp, "text", ""))[:300]
+            raise RuntimeError(f"Mail Center {operation} returned non-JSON response: {message}") from exc
+        if resp.status_code >= 400:
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                message = error.get("message") if isinstance(error, dict) else payload.get("message")
+            else:
+                message = str(payload)
+            raise RuntimeError(f"Mail Center {operation} failed: {message or f'HTTP {resp.status_code}'}")
+        if isinstance(payload, dict) and "ok" in payload:
+            if not payload.get("ok"):
+                error = payload.get("error") or {}
+                raise RuntimeError(f"Mail Center {operation} failed: {error.get('message') or payload}")
+            return payload.get("data")
+        if isinstance(payload, dict) and "code" in payload:
+            if int(payload.get("code") or 0) != 200:
+                raise RuntimeError(f"Mail Center {operation} failed: {payload.get('message') or payload}")
+            return payload.get("data")
+        return payload
+
+    def get_email(self) -> MailboxAccount:
+        body = {"strategy": self.strategy}
+        if self.prefix:
+            body["prefix"] = self.prefix
+        if self.domain:
+            body["domain"] = self.domain
+        data = self._post_json("/api/v1/integrations/mailboxes", body, operation="allocate")
+        if not isinstance(data, dict):
+            raise RuntimeError("Mail Center allocate returned an invalid response")
+        email = str(data.get("email") or "").strip().lower()
+        mailbox_id = str(data.get("mailboxId") or "").strip()
+        domain = str(data.get("domain") or "").strip().lower()
+        if not email or not mailbox_id or "@" not in email:
+            raise RuntimeError("Mail Center allocate did not return a mailbox")
+        print(f"[MailCenter] allocated pooled mailbox: {email}")
+        metadata = {
+            "api_url": self.api,
+            "domain": domain,
+            "mailbox_id": mailbox_id,
+            "strategy": str(data.get("strategy") or self.strategy),
+        }
+        return MailboxAccount(
+            email=email,
+            account_id=mailbox_id,
+            extra={
+                "provider_account": {
+                    "provider_type": "mailbox",
+                    "provider_name": "mail_center_pool",
+                    "login_identifier": email,
+                    "display_name": email,
+                    "credentials": {},
+                    "metadata": metadata,
+                },
+                "provider_resource": {
+                    "provider_type": "mailbox",
+                    "provider_name": "mail_center_pool",
+                    "resource_type": "mailbox",
+                    "resource_identifier": mailbox_id,
+                    "handle": email,
+                    "display_name": email,
+                    "metadata": {"email": email, **metadata},
+                },
+            },
+        )
+
+    @staticmethod
+    def _mailbox_id(account: MailboxAccount) -> str:
+        if account.account_id:
+            return str(account.account_id)
+        extra = dict(account.extra or {})
+        resource = dict(extra.get("provider_resource") or {})
+        metadata = dict(resource.get("metadata") or {})
+        return str(metadata.get("mailbox_id") or resource.get("resource_identifier") or "")
+
+    def _query_emails(self, account: MailboxAccount, *, limit: int = 20) -> list[dict]:
+        mailbox_id = self._mailbox_id(account)
+        if not mailbox_id:
+            raise RuntimeError("Mail Center mailbox allocation ID is missing")
+        data = self._post_json(
+            f"/api/v1/integrations/mailboxes/{quote(mailbox_id, safe='')}/messages",
+            {"type": 0, "isDel": 0, "size": limit, "num": 1, "timeSort": "desc"},
+            operation="messages",
+        )
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            items = data.get("list") or data.get("items") or data.get("data") or []
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
 
 
 class MoeMailMailbox(BaseMailbox):

@@ -9,6 +9,12 @@ services:
     environment:
       - DISPLAY=:99
       - ACCOUNT_MANAGER_DATABASE_URL=sqlite:////app/data/account_manager.db
+      - MAIL_CENTER_API_URL=${MAIL_CENTER_API_URL:-}
+      - MAIL_CENTER_INTEGRATION_TOKEN=${MAIL_CENTER_INTEGRATION_TOKEN:-}
+      - MAIL_CENTER_DOMAIN_STRATEGY=${MAIL_CENTER_DOMAIN_STRATEGY:-least_used}
+      - MAIL_CENTER_DOMAIN=${MAIL_CENTER_DOMAIN:-}
+      - MAIL_CENTER_PREFIX=${MAIL_CENTER_PREFIX:-}
+      - MAIL_CENTER_PROVIDER_DEFAULT=${MAIL_CENTER_PROVIDER_DEFAULT:-true}
       # 可选：设置访问密码，不设置则无密码保护
       # - APP_PASSWORD=changeme
       # 可选：设置 VNC 密码

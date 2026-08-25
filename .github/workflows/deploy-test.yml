@@ -78,6 +78,12 @@ jobs:
     needs: build-image
     runs-on: [self-hosted, linux, x64, any-auto-register]
     env:
+      MAIL_CENTER_API_URL: ${{ vars.MAIL_CENTER_API_URL || 'https://mail-center.aiid.qzz.io' }}
+      MAIL_CENTER_INTEGRATION_TOKEN: ${{ secrets.MAIL_CENTER_INTEGRATION_TOKEN }}
+      MAIL_CENTER_DOMAIN_STRATEGY: ${{ vars.MAIL_CENTER_DOMAIN_STRATEGY || 'least_used' }}
+      MAIL_CENTER_DOMAIN: ${{ vars.MAIL_CENTER_DOMAIN || '' }}
+      MAIL_CENTER_PREFIX: ${{ vars.MAIL_CENTER_PREFIX || '' }}
+      MAIL_CENTER_PROVIDER_DEFAULT: ${{ vars.MAIL_CENTER_PROVIDER_DEFAULT || 'true' }}
       LAN_HTTP_PROXY: http://127.0.0.1:10809
       LAN_SOCKS_PROXY: socks5://127.0.0.1:10808
       LAN_NO_PROXY: localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12
@@ -88,6 +94,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate Mail Center deploy configuration
+        run: |
+          test -n "${MAIL_CENTER_INTEGRATION_TOKEN}" || {
+            echo "::error::MAIL_CENTER_INTEGRATION_TOKEN secret is required"
+            exit 1
+          }
 
       - name: Log in to GHCR
         run: |
@@ -146,6 +159,13 @@ jobs:
             app:
               volumes:
                 - /tmp/.X11-unix:/tmp/.X11-unix
+              environment:
+                MAIL_CENTER_API_URL: ${MAIL_CENTER_API_URL:-https://mail-center.aiid.qzz.io}
+                MAIL_CENTER_INTEGRATION_TOKEN: ${MAIL_CENTER_INTEGRATION_TOKEN:-}
+                MAIL_CENTER_DOMAIN_STRATEGY: ${MAIL_CENTER_DOMAIN_STRATEGY:-least_used}
+                MAIL_CENTER_DOMAIN: ${MAIL_CENTER_DOMAIN:-}
+                MAIL_CENTER_PREFIX: ${MAIL_CENTER_PREFIX:-}
+                MAIL_CENTER_PROVIDER_DEFAULT: ${MAIL_CENTER_PROVIDER_DEFAULT:-true}
           EOF
           if [ "${{ steps.pull_image.outputs.pulled }}" != "true" ]; then
             echo "docker compose pull failed after retries; loading image artifact"
@@ -160,6 +180,46 @@ jobs:
             -f "${cdp_override}" \
             up -d "${DEPLOY_SERVICE}"
           docker image prune -f
+
+      - name: Verify Mail Center mailbox provider
+        run: |
+          set -euo pipefail
+          cd "${DEPLOY_PATH}"
+          cdp_override="${DEPLOY_PATH}/host-tools/freebeat-cdp/docker-compose.override.yml"
+          container_id="$(
+            docker compose \
+              -f docker-compose.yml \
+              -f "${cdp_override}" \
+              ps -q "${DEPLOY_SERVICE}"
+          )"
+          test -n "${container_id}"
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 2 "http://127.0.0.1:8000/api/health" >/dev/null; then
+              break
+            fi
+            if [ "${attempt}" = "30" ]; then
+              docker logs --tail 150 "${container_id}" || true
+              echo "::error::AAR health endpoint did not become ready"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker exec -i "${container_id}" python - <<'PY'
+          from core.base_mailbox import create_mailbox
+          from infrastructure.provider_settings_repository import ProviderSettingsRepository
+
+          item = ProviderSettingsRepository().get_by_key("mailbox", "mail_center_pool_api")
+          assert item is not None, "Mail Center provider was not bootstrapped"
+          assert item.enabled, "Mail Center provider is disabled"
+          assert item.is_default, "Mail Center provider is not the default"
+          assert item.get_auth().get("mail_center_integration_token"), "Integration Token is missing"
+          account = create_mailbox("mail_center_pool_api").get_email()
+          assert (account.extra or {}).get("mailbox_provider_key") == "mail_center_pool_api"
+          assert account.account_id, "Mail Center did not return a mailbox allocation ID"
+          print("Mail Center provider ready:", account.email)
+          PY
 
       - name: Verify Higgsfield browser runtime
         run: |

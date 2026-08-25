@@ -333,6 +333,33 @@ docker compose down
 | 域名 | 收件邮箱的域名，如 `your-domain.com`（需配置 MX 记录指向 Cloudflare）|
 | Fingerprint | 可选，Worker 开启 fingerprint 验证时填写 |
 
+### Mail Center 动态多域邮箱池
+
+适用于本项目配套的 Mail Center 中央邮箱服务。只需配置一个中央 Integration Token，即可自动从当前及未来激活的邮箱域名中分配地址，无需为每个新域名单独新增 Provider。
+
+| 参数 | 说明 |
+|------|------|
+| 中央 API 地址 | Mail Center 控制面地址，如 `https://mail-center.aiid.qzz.io` |
+| Integration Token | 在 Mail Center 中央控制台“邮箱集成”中创建的 `mci_live_...` Token |
+| 域名策略 | 顺序轮询、随机分配或最少使用 |
+| 指定域名 | 可选；填写后覆盖策略，但仍受中央白名单/黑名单限制 |
+| 邮箱前缀 | 可选；不填时只生成随机本地名，填写 `aar` 时生成 `aar.随机串@域名` |
+
+域名白名单和黑名单在 Mail Center 中央控制台管理。白名单为空表示允许所有当前及未来激活域名；黑名单优先级最高。
+
+Docker/Workflow 部署可通过环境变量自动装配该 Provider。`MAIL_CENTER_INTEGRATION_TOKEN` 必须使用 GitHub Secret，不能写入仓库或镜像；其余参数可使用 GitHub Variables：
+
+| 名称 | 类型 | 默认值 |
+|------|------|--------|
+| `MAIL_CENTER_INTEGRATION_TOKEN` | Secret | 必填 |
+| `MAIL_CENTER_API_URL` | Variable | `https://mail-center.aiid.qzz.io` |
+| `MAIL_CENTER_DOMAIN_STRATEGY` | Variable | `least_used` |
+| `MAIL_CENTER_DOMAIN` | Variable | 留空，按策略动态选择 |
+| `MAIL_CENTER_PREFIX` | Variable | 留空，生成纯随机邮箱名前缀 |
+| `MAIL_CENTER_PROVIDER_DEFAULT` | Variable | `true` |
+
+启动时只有检测到 `MAIL_CENTER_INTEGRATION_TOKEN` 才会写入或更新默认 Provider；未提供时不会覆盖现有配置。
+
 ### DuckMail
 
 公共临时邮箱服务，无需配置，直接使用。部分地区需要代理。
